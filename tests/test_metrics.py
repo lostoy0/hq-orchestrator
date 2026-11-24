@@ -1,0 +1,122 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT = os.path.join(ROOT, "skills", "hq", "scripts", "metrics.py")
+FIX = os.path.join(ROOT, "tests", "fixtures")
+
+
+def run(*args):
+    p = subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True)
+    return p
+
+
+def rep(*args):
+    p = run(*args, "--format", "json")
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def grp(groups, key):
+    return next(g for g in groups if g["key"] == key)
+
+
+class MetricsTest(unittest.TestCase):
+    def test_overview_and_corrupt(self):
+        o = rep(FIX)["overview"]
+        self.assertEqual((o["runs"], o["tasks"], o["corrupt_lines"]), (3, 11, 3))
+        self.assertEqual(o["time_from"], "2026-01-01T10:00:00Z")
+        self.assertEqual(o["time_to"], "2026-01-03T08:00:00Z")
+
+    def test_directory_recursive_equals_files(self):
+        files = [os.path.join(FIX, "a.jsonl"), os.path.join(FIX, "b.jsonl"), os.path.join(FIX, "sub", "c.jsonl")]
+        self.assertEqual(rep(FIX), rep(*files))
+        self.assertEqual(rep(os.path.join(FIX, "sub"))["overview"]["runs"], 1)
+
+    def test_quality(self):
+        q = rep(FIX)["quality"]
+        self.assertAlmostEqual(q["overall"]["drift_rate"], 3 / 11)
+        self.assertAlmostEqual(q["overall"]["verify_rate"], 7 / 11)
+        self.assertEqual(q["overall"]["major_issues"], 1)
+        self.assertAlmostEqual(q["overall"]["rework_rate"], 2 / 11)
+        self.assertAlmostEqual(q["overall"]["integration_pass_rate"], 0.5)
+        per = {r["run_id"]: r for r in q["per_run"]}
+        self.assertAlmostEqual(per["r1"]["drift_rate"], 0.2)
+        self.assertAlmostEqual(per["r2"]["drift_rate"], 2 / 3)
+
+    def test_groups(self):
+        r = rep(FIX)
+        t2 = grp(r["by_tier"], "T2")
+        self.assertEqual(t2["n"], 3)
+        self.assertAlmostEqual(t2["first_pass_rate"], 1 / 3)
+        self.assertAlmostEqual(t2["escalation_rate"], 1 / 3)
+        self.assertAlmostEqual(t2["handoff_rate"], 1 / 3)
+        self.assertAlmostEqual(t2["avg_cost_usd"], 0.4)
+        self.assertAlmostEqual(t2["ratio_median"], 2.0)
+        self.assertFalse(t2["insufficient"])
+        self.assertTrue(grp(r["by_tier"], "T3")["insufficient"])
+        self.assertEqual(grp(r["by_tier"], "unknown")["n"], 2)
+        self.assertEqual(grp(r["by_model"], "sonnet/low")["n"], 5)
+
+    def test_efficiency_and_autonomy(self):
+        r = rep(FIX)
+        e = {x["run_id"]: x for x in r["efficiency"]}
+        self.assertAlmostEqual(e["r1"]["speedup"], 2.0)
+        self.assertAlmostEqual(e["r1"]["wall_over_critical"], 1.5)
+        self.assertAlmostEqual(e["r3"]["speedup"], 0.75)
+        self.assertIsNone(e["r3"]["wall_over_critical"])
+        self.assertEqual(r["autonomy"], {"autonomy_stops": 1, "decisions": 3, "user_corrections": 3})
+
+    def test_signals(self):
+        s = [(x["scope"], x["message"], x["n"]) for x in rep(FIX)["signals"]]
+        has = lambda scope, frag: any(a == scope and frag in m for a, m, _ in s)
+        self.assertTrue(has("tier T1", "降档"))
+        self.assertTrue(has("tier T2", "一次通过率 33%"))
+        self.assertTrue(has("tier T2", ">1.5"))
+        self.assertTrue(has("run r3", "并行加速比"))
+        self.assertFalse(has("run r1", "并行加速比"))
+        self.assertFalse(has("tier T3", ""))
+        self.assertTrue(all(n >= 3 for _, _, n in s))
+
+    def test_last_and_project(self):
+        self.assertEqual(rep(FIX, "--last", "1")["overview"]["runs"], 1)
+        self.assertEqual(rep(FIX, "--last", "1")["efficiency"][0]["run_id"], "r3")
+        self.assertEqual([e["run_id"] for e in rep(FIX, "--last", "2")["efficiency"]], ["r2", "r3"])
+        self.assertEqual(rep(FIX, "--project", "p2")["overview"]["tasks"], 3)
+        p1 = rep(FIX, "--project", "p1")["overview"]
+        self.assertEqual((p1["runs"], p1["tasks"]), (2, 8))
+        self.assertEqual(rep(FIX, "--project", "p1", "--last", "1")["overview"]["runs"], 1)
+        self.assertEqual(rep(FIX, "--project", "nope")["overview"]["runs"], 0)
+
+    def test_last_without_started_at_keeps_file_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "x.jsonl"), "w") as fh:
+                for rid in ("z", "a", "m"):
+                    fh.write(json.dumps({"type": "task", "run_id": rid, "task_id": "t"}) + "\n")
+            r = rep(d, "--last", "2")
+            self.assertEqual([e["run_id"] for e in r["efficiency"]], ["a", "m"])
+
+    def test_md_output(self):
+        p = run(FIX)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 7. 信号", "样本不足"):
+            self.assertIn(h, p.stdout)
+
+    def test_garbage_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "g.jsonl"), "wb") as fh:
+                fh.write(b'\xff\xfe\n{"type":"task","issues":"x","tier_changes":5,"est_min":"a","tokens":true}\n"str"\nnull\n')
+            r = rep(d)
+            self.assertEqual(r["overview"]["corrupt_lines"], 3)
+            self.assertEqual(r["overview"]["tasks"], 1)
+
+    def test_missing_path_errors(self):
+        self.assertNotEqual(run("/no/such/path").returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

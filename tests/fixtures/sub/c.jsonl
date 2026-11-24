@@ -1,0 +1,4 @@
+{"type": "task", "run_id": "r3", "task_id": "c1", "tier": "T3", "model": "opus", "effort": "high", "kind": "review", "est_min": 5, "actual_min": 5, "attempts": 1, "review_outcome": "pass", "tokens": null, "cost_usd": null, "future_field": 123, "project": "p1"}
+{"type": "task", "run_id": "r3", "task_id": "c2", "tier": null, "est_min": null, "actual_min": 5, "issues": null, "tier_changes": null, "drift": null}
+{"type": "task", "run_id": "r3", "task_id": "c3", "actual_min": 5}
+{"type": "run", "run_id": "r3", "project": "p1", "started_at": "2026-01-03T08:00:00Z", "ended_at": null, "wall_min": 20, "critical_path_min": null, "tasks": null, "max_concurrency": null, "integration_pass": null, "mystery": [1]}
