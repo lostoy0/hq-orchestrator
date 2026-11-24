@@ -90,12 +90,15 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：拆解�
 
 - 任务说明必须让子会话不依赖主会话的上下文也能独立完成。模板见 `references/brief-template.md`，必填项不能省。
 - 分支：每个改代码的任务用独立分支 `hq/<任务id>`。通道 A 用 `isolation:"worktree"`；通道 B 用 `outcome_branch`，基于已推送的基线分支。
+- **派 worktree 任务前**：先确认 `.claude/worktrees/` 已被 git 忽略（`git check-ignore -q .claude/worktrees/x`）。没有被忽略时，把它写进 `.git/info/exclude`（只在本地生效，不用提交）。否则子代理的临时目录会显示成未跟踪文件，可能触发“提交未跟踪文件”之类的 hook，甚至被误提交。合并后，用 `git worktree remove` 清理 worktree，并删除它的临时分支。
 - 每次派发后，立即在台账记下：通道、模型、思考深度、会话或代理 id、分支、开始时间。
 
 ## 第 6 步：监控
 
 - **通道 A**：后台运行的子代理完成后会自动通知，不要轮询。
-- **通道 B**：子会话失败会推送事件过来，但正常完成不一定会通知。所以用 `send_later` 给自己设巡检提醒（运行中的任务每 10 到 20 分钟一次），巡检时用 `list_sessions`（`children:true`）、`get_session`（看 `status_bucket`）、`list_events`（`kinds:["result"]`）。
+- **通道 B**：子会话失败会推送事件过来，但正常完成不一定会通知。所以任务说明里要求子会话完成后用 `send_message` 主动回报，主会话再用 `send_later` 设兜底巡检。巡检时用 `list_sessions`（`children:true`）、`get_session`（看 `status_bucket`）、`list_events`（`kinds:["result"]`）。
+  - **巡检间隔按预计时长定**：间隔约为预计时长的 1 到 1.5 倍，最短 3 分钟，最长 30 分钟。T0 和 T1 的小任务通常几分钟就能做完，设 3 到 5 分钟；T3 和 T4 的大任务设 15 到 30 分钟。如果巡检时任务还在正常运行，下次间隔取剩余预计时长。
+  - 子会话的回报一到，就进入审核，并用 `delete_trigger` 取消还没触发的巡检，避免空跑。
 - 状态是 `blocked` 或子会话来提问时：能根据已有信息回答的，用 `send_message` 回复；需要用户拍板的，汇总后一次性问用户。
 - 子会话跑偏（偏离归属文件、陷入循环、明显超时，超过预计时长 2 倍算超时）：先用 `send_message` 纠正；无效就 `interrupt_session` 或 `TaskStop`，改说明后重派。
 - 用户问进度时，从台账给出一张简表。不要编造还没返回的结果。
