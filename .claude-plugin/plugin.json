@@ -1,0 +1,6 @@
+{
+  "name": "hq-orchestrator",
+  "version": "0.1.0",
+  "description": "司令部模式：主会话统筹规划，按难度给子会话配模型与思考深度，按需求选远程/本地执行，按系统资源动态控制并发，监控、审核并归并结果。",
+  "keywords": ["orchestration", "multi-agent", "subagents", "projects"]
+}

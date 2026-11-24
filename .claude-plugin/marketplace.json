@@ -1,0 +1,11 @@
+{
+  "name": "hq-orchestrator-marketplace",
+  "owner": { "name": "hq-orchestrator" },
+  "plugins": [
+    {
+      "name": "hq-orchestrator",
+      "source": "./",
+      "description": "司令部模式：主会话统筹、子会话执行的多任务编排技能。"
+    }
+  ]
+}
