@@ -54,8 +54,12 @@ def collect_files(paths):
 
 
 def load(files):
-    """Return (runs, corrupt). runs: ordered dict run_id -> {'run': dict|None, 'tasks': [..]}"""
-    runs, corrupt = {}, 0
+    """Return (runs, corrupt). runs: ordered dict run_id -> {'run': dict|None, 'tasks': [..]}
+
+    A task with the same (run_id, task_id) seen again (e.g. the same run read from both
+    .hq/runs and ~/.claude/hq/runs) replaces the earlier record instead of being counted twice.
+    """
+    runs, corrupt, seen = {}, 0, {}
     for f in files:
         stem = os.path.splitext(os.path.basename(f))[0]
         with open(f, encoding="utf-8", errors="replace") as fh:
@@ -78,7 +82,14 @@ def load(files):
                 r = runs.setdefault(rid, {"run": None, "tasks": []})
                 if t == "run":
                     r["run"] = rec
+                    continue
+                tid = rec.get("task_id")
+                key = (rid, tid) if isinstance(tid, str) and tid else None
+                if key in seen:
+                    r["tasks"][seen[key]] = rec
                 else:
+                    if key:
+                        seen[key] = len(r["tasks"])
                     r["tasks"].append(rec)
     return runs, corrupt
 
@@ -179,12 +190,26 @@ def efficiency(rid, r):
     run, ts = r["run"] or {}, r["tasks"]
     wall, crit = num(run.get("wall_min")), num(run.get("critical_path_min"))
     acts = [num(t.get("actual_min")) for t in ts if num(t.get("actual_min")) is not None]
+    declared = num(run.get("tasks"))
     return {
         "run_id": rid, "tasks": len(ts),
+        "missing_records": max(0, declared - len(ts)) if declared is not None else None,
         "wall_over_critical": wall / crit if wall is not None and crit else None,
         "speedup": sum(acts) / wall if acts and wall else None,
         "max_concurrency": num(run.get("max_concurrency")),
         "throttle_events": num(run.get("throttle_events")),
+    }
+
+
+def adjust(tasks):
+    esc = [t for t in tasks if isinstance(t.get("tier_changes"), list) and t["tier_changes"]]
+    return {
+        "escalated": len(esc),
+        "escalated_after_checkpoint_rate": rate(sum(1 for t in esc if cnt(t.get("checkpoints")) > 0), len(esc)),
+        "checkpoints": sum(cnt(t.get("checkpoints")) for t in tasks),
+        "handoffs": sum(cnt(t.get("handoffs")) for t in tasks),
+        "derived_tasks": sum(cnt(t.get("derived_tasks")) for t in tasks),
+        "user_manual_adjust": sum(1 for t in tasks if t.get("user_manual_adjust") is True),
     }
 
 
@@ -226,14 +251,17 @@ def build(runs, corrupt):
                                                t["effort"] if isinstance(t.get("effort"), str) else "unknown"))
     effs = [efficiency(i, runs[i]) for i in ids]
     rs = [ratio(t) for t in tasks if ratio(t) is not None]
+    miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
     return {
         "overview": {"runs": len(ids), "tasks": len(tasks), "corrupt_lines": corrupt,
+                     "missing_task_records": sum(miss) if miss else None,
                      "time_from": min(stamps)[1] if stamps else None, "time_to": max(stamps)[1] if stamps else None},
         "quality": {"overall": quality(tasks, rr),
                     "per_run": [dict(quality(runs[i]["tasks"], [runs[i]["run"] or {}]), run_id=i) for i in ids]},
         "by_tier": tiers, "by_model": models,
         "efficiency": effs,
         "cost": cost_by_kind(tasks),
+        "adjust": adjust(tasks),
         "autonomy": {"autonomy_stops": sum(cnt(r.get("autonomy_stops")) for r in rr),
                      "decisions": sum(cnt(r.get("decisions")) for r in rr),
                      "user_corrections": sum(cnt(t.get("user_corrections")) for t in tasks)},
@@ -262,8 +290,9 @@ def table(head, rows):
 def render_md(rep):
     o = rep["overview"]
     L = ["# HQ 指标报告 (schema v1)", "", "## 1. 总览", ""]
-    L += table(["run 数", "task 数", "损坏行数", "时间范围"],
-               [[o["runs"], o["tasks"], o["corrupt_lines"], "%s ~ %s" % (o["time_from"] or "-", o["time_to"] or "-")]])
+    L += table(["run 数", "task 数", "损坏行数", "缺记录任务数", "时间范围"],
+               [[o["runs"], o["tasks"], o["corrupt_lines"], f(o["missing_task_records"], "d"),
+                 "%s ~ %s" % (o["time_from"] or "-", o["time_to"] or "-")]])
     L += ["", "## 2. 质量门槛", ""]
     qh = ["范围", "n", "漂移率", "验证到位率", "问题/任务 review", "integration", "user", "major 数", "返工率", "合并通过率", "备注"]
     def qrow(name, q):
@@ -288,6 +317,11 @@ def render_md(rep):
     a = rep["autonomy"]
     L += ["", "## 6. 自主性", ""] + table(["autonomy_stops", "decisions", "user_corrections"],
                                           [[f(a["autonomy_stops"], "d"), f(a["decisions"], "d"), f(a["user_corrections"], "d")]])
+    d = rep["adjust"]
+    L += ["", "## 6b. 调档与检查点", ""] + table(
+        ["升档任务数", "其中有检查点的比例", "checkpoints", "handoffs", "derived_tasks", "user_manual_adjust"],
+        [[d["escalated"], f(d["escalated_after_checkpoint_rate"], "p"), d["checkpoints"], d["handoffs"],
+          d["derived_tasks"], d["user_manual_adjust"]]])
     L += ["", "## 7. 信号", ""]
     L += ["- [%s] %s（n=%d）" % (s["scope"], s["message"], s["n"]) for s in rep["signals"]] or ["- 无"]
     return "\n".join(L) + "\n"

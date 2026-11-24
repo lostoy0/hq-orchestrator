@@ -16,7 +16,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 ## 路径约定
 
 - 运行数据：目标项目的 `.hq/runs/*.jsonl`；本地运行时还有 `~/.claude/hq/runs/*.jsonl`。
-- 脚本：`skills/hq/scripts/metrics.py`；难度分档：`skills/hq/calibration.md`；数据格式：`skills/hq/references/metrics-schema.md`。
+- 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后用 Glob 找 `**/hq/scripts/metrics.py`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
 - 项目经验：`.hq/PLAYBOOK.md`（模板 `skills/hq/references/playbook-template.md`）。
 - 改动历史：插件仓库的 `CHANGELOG.md`。找不到就在报告里写明，当作“没有上次改动”。
 - 这些文件都只读，复盘本身不修改它们（PLAYBOOK 除外，见第 7 步）。
@@ -25,7 +25,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 
 ### 1. 收集数据
 
-1. 运行 `python3 <metrics.py 路径> .hq/runs ~/.claude/hq/runs --last 10`（目录不存在就省略）。用户指定了项目或次数，就加 `--project NAME` 或改 `--last`。
+1. 运行 `python3 <metrics.py 路径> .hq/runs ~/.claude/hq/runs --last 10`（目录不存在就省略；两处都有的同一次运行只算一次）。用户指定了项目或次数，就加 `--project NAME` 或改 `--last`。
 2. 读 `CHANGELOG.md` 最近几条改动和当时的假设。
 3. 读 `calibration.md` 和目标项目的 `.hq/PLAYBOOK.md`。
 4. 原始 jsonl **只在需要查证某条信号时**才读，读哪条记哪条。
@@ -54,11 +54,11 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 1. **选档**：各档位的一次通过率、升档率；有没有降档空间（某档连续通过且返工为 0）；有没有该升未升。
 2. **估时**：预计用时与实际用时之比；偏差大的任务类型。
 3. **并行效率**：加速比、wall/关键路径；哪些任务本可以打包（太碎），哪些本可以拆开（拖长关键路径）。
-4. **任务说明质量**：漂移率、子会话提问次数、检查点次数。
+4. **任务说明质量与调档**：漂移率、检查点次数、派生任务数、升档任务中有检查点的比例、用户手动调档次数。
 5. **验证**：验证到位率；有没有该验证没验证；有没有多余的重复验证。
-6. **监控开销**：巡检次数、空转巡检占比。
+6. **监控与记录**：wall/关键路径（巡检不及时、收尾慢会拉高它）；缺记录任务数。
 7. **自主性**：停下来找用户的次数、用户纠正次数，哪些本可以自己决定。
-8. **token 开销**：开销最大的任务类型，是否值得。
+8. **成本**：以 `cost_usd` 为主、`tokens`（不含缓存读取）为辅；开销最大的任务类型，是否值得。
 
 ### 5. 证据门槛
 

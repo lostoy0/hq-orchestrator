@@ -15,7 +15,7 @@ Agent(
 ```
 - 完成后会自动通知，不要轮询。中途需要补充信息时，用 `SendMessage` 发给它的 id。
 - 停止任务用 `TaskStop`；查看正在运行的任务用 `TaskList`。
-- **用量**：从子代理的返回结果读取 `subagent_tokens` 和 duration，写进 task 记录的 `tokens`、`actual_min`；`cost_usd` 拿不到就填 `null`。
+- **用量**：从子代理的返回结果读取 duration 写进 `actual_min`。`subagent_tokens` 是总数、分不出缓存读取时，`tokens` 填 `null`，原值记进 `notes`（口径见 `metrics-schema.md`“用量口径”）；`cost_usd` 拿不到就填 `null`。
 - 检查点：子代理没有回信通道，遇到检查点情况就提前返回，主会话处理后再派新的子代理接着做。
 - 子代理和主会话在同一台机器上，构建和测试会争用 CPU 和内存，派发前必须过一遍 `resources.sh`。
 - worktree 只有在仓库是 git 仓库时才能用；不是 git 仓库时，只能串行做写操作。
@@ -41,7 +41,7 @@ create_session(
 - 看结果：`list_events(session_id, kinds=["result","assistant"], limit=100)`。
 - 纠偏：`send_message(session_id, ...)`，或者 `interrupt_session`；完成后用 `archive_session`。
 - 巡检提醒：`send_later(delay_minutes=15, message="HQ 巡检：读取 .hq/LEDGER.md，检查 RUNNING 任务")`。任务全部完成后，用 `delete_trigger` 取消还没触发的提醒。
-- **用量**：`get_session(id)` 返回里的 `usage`，读 `usage.cost_usd` 和 tokens 字段，写进 task 记录；字段缺失就填 `null`，不要估算。
+- **用量**：`get_session(id)` 返回里的 `usage`：`usage.cost_usd` 写进 `cost_usd`（主要成本指标）；`tokens` 取 input + output + cache_write 之和，**不加 cache_read**（口径见 `metrics-schema.md`“用量口径”）。字段缺失就填 `null`，不要估算。
 - 子会话默认继承主会话的云环境。需要别的网络或密钥时，用 `list_environments` 查到对应环境，再传 `environment_id`。
 - 子会话只能看到已推送的代码。派发前确认基线已推送；还没推送时，推到 `hq/*` 分支（如 `hq/base`）作基线，这默认自动；推送其他分支需要授权。
 

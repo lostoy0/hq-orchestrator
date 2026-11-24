@@ -100,10 +100,41 @@ class MetricsTest(unittest.TestCase):
             r = rep(d, "--last", "2")
             self.assertEqual([e["run_id"] for e in r["efficiency"]], ["a", "m"])
 
+    def test_adjust_section(self):
+        a = rep(FIX)["adjust"]
+        self.assertEqual(a, {"escalated": 1, "escalated_after_checkpoint_rate": 0.0, "checkpoints": 0,
+                             "handoffs": 1, "derived_tasks": 0, "user_manual_adjust": 0})
+        self.assertEqual(rep(FIX)["overview"]["missing_task_records"], 0)
+
+    def test_duplicate_task_records_and_missing(self):
+        t = {"type": "task", "run_id": "d", "task_id": "t1", "attempts": 1, "review_outcome": "rework",
+             "tier_changes": [{"from": "T1", "to": "T2"}], "checkpoints": 1, "user_manual_adjust": True}
+        with tempfile.TemporaryDirectory() as d:
+            for sub in ("proj", "home"):
+                os.makedirs(os.path.join(d, sub))
+                with open(os.path.join(d, sub, "d.jsonl"), "w") as fh:
+                    fh.write(json.dumps(t) + "\n")
+                    fh.write(json.dumps(dict(t, review_outcome="pass")) + "\n")
+                    fh.write(json.dumps({"type": "task", "run_id": "d"}) + "\n")
+                    fh.write(json.dumps({"type": "run", "run_id": "d", "tasks": 4}) + "\n")
+            r = rep(d)
+            self.assertEqual(r["overview"]["tasks"], 3)  # t1 once (last wins) + 2 records without task_id
+            self.assertEqual(r["quality"]["overall"]["rework_rate"], 0)
+            self.assertEqual(r["overview"]["missing_task_records"], 1)
+            a = r["adjust"]
+            self.assertEqual((a["escalated"], a["escalated_after_checkpoint_rate"], a["user_manual_adjust"]), (1, 1.0, 1))
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "n.jsonl"), "w") as fh:
+                fh.write('{"type":"task","run_id":"n","task_id":"x","checkpoints":null,"derived_tasks":"a","tier_changes":[1]}\n')
+                fh.write('{"type":"run","run_id":"n","tasks":null}\n')
+            r = rep(d)
+            self.assertIsNone(r["overview"]["missing_task_records"])
+            self.assertEqual(r["adjust"]["escalated_after_checkpoint_rate"], 0.0)
+
     def test_md_output(self):
         p = run(FIX)
         self.assertEqual(p.returncode, 0, p.stderr)
-        for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 7. 信号", "样本不足"):
+        for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 6b. 调档与检查点", "## 7. 信号", "样本不足"):
             self.assertIn(h, p.stdout)
 
     def test_garbage_does_not_crash(self):

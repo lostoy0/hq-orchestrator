@@ -49,7 +49,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - **文件归属**：并行任务不能改同一个文件。共享接口、类型、配置先单独拆成前置任务。
 - 每个任务记录：id、标题、依赖、归属文件、验收标准、验证级别和命令、重任务还是轻任务、预计时长。
 - 调研类任务（只读）优先派出去，它们的结论决定后面怎么拆。
-- 计划写进台账后，作为通知发给用户（任务表、档位、位置、并发、预计用时和消耗），**不等确认**，直接进入派发。
+- 计划写进台账后，作为通知发给用户（任务表、档位、位置、并发、预计用时和消耗），**不等确认**，直接进入派发（PLAYBOOK 设了 `autonomy: confirm-plan` 时才等）。
 
 ## 第 3 步：选档（模型和思考深度）
 
@@ -124,7 +124,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 步骤：
 1. **看报告**：必须按模板交付，缺验证证据的视为没完成。
-2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才亲自复跑验收命令。
+2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才由主会话逐个复跑验收命令。
 3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
 4. **归并**：按 DAG 拓扑顺序合进 `hq/integration`，然后主会话统一跑一次全量测试（有 e2e 的也在这时跑）。小冲突自己解决，大冲突派子任务。
 5. **收尾**：通过的标 `DONE`，B 用 `archive_session` 归档，A 的 worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
@@ -133,10 +133,10 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 ## 第 9 步：记录数据与小结
 
-- **每个任务结束时**往 `.hq/runs/<run_id>.jsonl` 追加一行 `type:"task"`，**整批结束时**追加一行 `type:"run"`。只用手头已有的信息，**不为记录数据额外派子会话**。字段定义以 `references/metrics-schema.md` 为准，可用 `scripts/metrics.py` 追加和校验。要点：
+- **每个任务结束时**往 `.hq/runs/<run_id>.jsonl` 追加一行 `type:"task"`，**整批结束时**追加一行 `type:"run"`。只用手头已有的信息，**不为记录数据额外派子会话**。字段定义以 `references/metrics-schema.md` 为准，主会话直接追加；`scripts/metrics.py` 只读取汇总，写完可运行一次确认能读、损坏行数为 0。要点：
   - task：run_id、task_id、kind、risk、tier_score、tier、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
   - run：wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
-  - 用量来源：B 用 `get_session` 的 `usage.cost_usd` 和 tokens；A 用返回结果里的 `subagent_tokens` 和 duration。拿不到就填 `null`，不要猜。
+  - 用量：`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。B 读 `get_session` 的 `usage`；A 读返回结果的 duration，`subagent_tokens` 分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。
 - 本地运行时，同时追加一份到 `~/.claude/hq/runs/`，用于跨项目累积；云端容器是临时的，不需要。
 - **小结**：每批结束后在台账“小结”区写 3 到 5 行要点，并把本项目特有的经验更新进 `.hq/PLAYBOOK.md`（模板 `references/playbook-template.md`；最多 30 条，每条附证据，新的替换旧的）。
 - 累计约 5 次运行或 20 个任务时，在汇报里提示用户运行 `/hq-retro` 做复盘校准。
@@ -163,7 +163,8 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 **授权配置**（写在 `.hq/PLAYBOOK.md` 的“授权”区）：
 - `merge_default: auto-if-gates-pass | ask`（默认 `ask`）：质量门槛通过后是否自动合入默认分支。
 - `open_pr: auto | ask`（默认 `ask`）。
-- `budget_usd: <数额>`：总花费上限，超出按停止条件 2 处理。
+- `budget_usd: <数额>`：单次运行的花费上限，超出前按停止条件 2 处理。
+- `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 
 ## 台账格式（`.hq/LEDGER.md`）
 
