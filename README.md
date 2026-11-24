@@ -1,5 +1,7 @@
 # hq-orchestrator：司令部模式
 
+中文 | [English](README.en.md)
+
 在普通会话里（本地 CLI 或云端会话都可以）实现类似 Projects 的工作方式：主会话负责统筹，子会话负责执行。
 
 ## 包含什么
