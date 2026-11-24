@@ -4,7 +4,7 @@
 #   重任务(构建/测试/跑服务): 1500 1
 #   轻任务(只读写代码、不跑重命令): 400 0.25
 # 支持 Linux(含 cgroup v2 容器限制) 与 macOS。只读，不改动系统。
-# 参数必须是非负数(核数可为小数，内存与硬上限为整数)，否则向 stderr 报用法并以退出码 2 退出。
+# 参数必须是非负数(核数可为小数，每任务内存为正整数，硬上限为整数)，否则向 stderr 报用法并以退出码 2 退出。
 # 测试用模拟读数(设置后覆盖真实测量值，不设置则行为不变):
 #   HQ_FAKE_CORES HQ_FAKE_LOAD1 HQ_FAKE_MEM_TOTAL_MB HQ_FAKE_MEM_AVAIL_MB
 #   HQ_FAKE_SWAP_TOTAL_MB HQ_FAKE_SWAP_USED_MB HQ_FAKE_DISK_FREE_MB
@@ -14,11 +14,11 @@ PER_CPU=${2:-1}
 CAP=${3:-6}
 
 usage() {
-  echo "用法: resources.sh [每任务内存MB(非负整数)=1500] [每任务CPU核(非负数,可小数)=1] [硬上限(非负整数)=6]" >&2
+  echo "用法: resources.sh [每任务内存MB(正整数)=1500] [每任务CPU核(非负数,可小数)=1] [硬上限(非负整数)=6]" >&2
   exit 2
 }
 [ $# -le 3 ] || usage
-[[ $PER_MEM =~ ^[0-9]+$ ]] || usage
+[[ $PER_MEM =~ ^[1-9][0-9]*$ ]] || usage
 [[ $PER_CPU =~ ^[0-9]+(\.[0-9]+)?$ || $PER_CPU =~ ^\.[0-9]+$ ]] || usage
 [[ $CAP =~ ^[0-9]+$ ]] || usage
 

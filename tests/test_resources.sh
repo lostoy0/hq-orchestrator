@@ -88,6 +88,7 @@ check_bad "non-numeric cpu" 1500 x 6
 check_bad "negative cap" 1500 1 -1
 check_bad "decimal cap" 1500 1 2.5
 check_bad "too many args" 1 1 1 1
+check_bad "zero mem" 0 1 6
 if bash "$SCRIPT" 400 0.25 6 >/dev/null 2>&1; then ok "decimal cpu accepted"; else bad "decimal cpu accepted" "rejected"; fi
 
 echo "----"

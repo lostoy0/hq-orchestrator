@@ -37,6 +37,13 @@ mkdir -p .claude/skills && cp -r <this directory>/skills/hq .claude/skills/hq &&
 ```
 After committing, cloud sessions started from this repository can use `/hq`. You can also install via the marketplace from Option 2 inside a cloud session.
 
+## Self-test
+After changing `resources.sh`, run:
+```bash
+bash tests/test_resources.sh
+```
+The script accepts `HQ_FAKE_CORES`, `HQ_FAKE_LOAD1`, `HQ_FAKE_MEM_TOTAL_MB` and similar environment variables to inject simulated readings, covering the GREEN/YELLOW/RED cases.
+
 ## Usage example
 ```
 /hq Add CSV export to the api service, with tests and docs; frontend changes must be run end-to-end on my machine

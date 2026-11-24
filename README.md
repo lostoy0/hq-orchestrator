@@ -37,6 +37,13 @@ mkdir -p .claude/skills && cp -r <本目录>/skills/hq .claude/skills/hq && git 
 ```
 提交后，基于这个仓库新开的云端会话都能用 `/hq`。也可以在云端会话里用方式 2 的 marketplace 安装。
 
+## 自测
+修改 `resources.sh` 后运行：
+```bash
+bash tests/test_resources.sh
+```
+脚本支持 `HQ_FAKE_CORES`、`HQ_FAKE_LOAD1`、`HQ_FAKE_MEM_TOTAL_MB` 等环境变量注入模拟读数，用来覆盖 GREEN/YELLOW/RED 各种情况。
+
 ## 使用示例
 ```
 /hq 给 api 服务加上导出 CSV 功能，并补齐测试和文档；前端改动要在我本机跑 e2e
