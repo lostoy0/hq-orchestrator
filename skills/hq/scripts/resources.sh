@@ -4,10 +4,23 @@
 #   重任务(构建/测试/跑服务): 1500 1
 #   轻任务(只读写代码、不跑重命令): 400 0.25
 # 支持 Linux(含 cgroup v2 容器限制) 与 macOS。只读，不改动系统。
+# 参数必须是非负数(核数可为小数，内存与硬上限为整数)，否则向 stderr 报用法并以退出码 2 退出。
+# 测试用模拟读数(设置后覆盖真实测量值，不设置则行为不变):
+#   HQ_FAKE_CORES HQ_FAKE_LOAD1 HQ_FAKE_MEM_TOTAL_MB HQ_FAKE_MEM_AVAIL_MB
+#   HQ_FAKE_SWAP_TOTAL_MB HQ_FAKE_SWAP_USED_MB HQ_FAKE_DISK_FREE_MB
 set -u
 PER_MEM=${1:-1500}
 PER_CPU=${2:-1}
 CAP=${3:-6}
+
+usage() {
+  echo "用法: resources.sh [每任务内存MB(非负整数)=1500] [每任务CPU核(非负数,可小数)=1] [硬上限(非负整数)=6]" >&2
+  exit 2
+}
+[ $# -le 3 ] || usage
+[[ $PER_MEM =~ ^[0-9]+$ ]] || usage
+[[ $PER_CPU =~ ^[0-9]+(\.[0-9]+)?$ || $PER_CPU =~ ^\.[0-9]+$ ]] || usage
+[[ $CAP =~ ^[0-9]+$ ]] || usage
 
 os=$(uname -s)
 cores=1; load1=0; mem_total=0; mem_avail=0; swap_total=0; swap_used=0
@@ -53,6 +66,15 @@ elif [ "$os" = "Darwin" ]; then
 fi
 
 disk_free=$(df -Pk . 2>/dev/null | awk 'NR==2{print int($4/1024)}')
+
+# 模拟读数覆盖(仅测试用)
+cores=${HQ_FAKE_CORES:-$cores}
+load1=${HQ_FAKE_LOAD1:-$load1}
+mem_total=${HQ_FAKE_MEM_TOTAL_MB:-$mem_total}
+mem_avail=${HQ_FAKE_MEM_AVAIL_MB:-$mem_avail}
+swap_total=${HQ_FAKE_SWAP_TOTAL_MB:-$swap_total}
+swap_used=${HQ_FAKE_SWAP_USED_MB:-$swap_used}
+disk_free=${HQ_FAKE_DISK_FREE_MB:-$disk_free}
 
 awk -v cores="$cores" -v load1="$load1" -v mt="$mem_total" -v ma="$mem_avail" \
     -v st="${swap_total:-0}" -v su="${swap_used:-0}" -v disk="${disk_free:-0}" \
