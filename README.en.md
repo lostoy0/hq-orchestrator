@@ -6,6 +6,20 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 
 **Optimization goal**: first pass the quality gate (no drift + adequate verification + few issues), then minimize total wall time, then minimize cost.
 
+## Quick start
+
+**What it solves**: handing a big goal to a single session tends to drift, run serially and fill the context. `/hq` keeps the main session to coordination only: decide whether splitting is worth it, break the goal into a task graph, give each sub-session a model and thinking depth that fit its difficulty, throttle concurrency by system resources, then review and merge. Every run's usage and outcome is recorded, and `/hq-retro` reviews that data.
+
+In Claude Code, install and go:
+```
+/plugin marketplace add lostoy0/hq-orchestrator
+/plugin install hq-orchestrator@hq-orchestrator-marketplace
+/hq Add CSV export to the api service, with tests and docs
+```
+For Codex, OpenCode, Gemini CLI, Cursor and dsh use the one-line script; see [Installation](#installation).
+
+**Maturity**: Claude Code is the primary host and has been used for real; the other hosts' adapters follow official docs and most have not been run on a real host yet. See [Known limitations](#known-limitations).
+
 ## Supported hosts (v0.4)
 
 `SKILL.md` only uses abstract capabilities (spawn_worker, monitor, ...); each host's concrete calls live under `skills/hq/references/hosts/`.

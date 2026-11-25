@@ -6,6 +6,20 @@
 
 **优化目标**：先过质量门槛（不漂移 + 验证到位 + 问题少），再求总用时最短，最后求成本最低。
 
+## 快速开始
+
+**解决什么**：大目标丢给单个会话，容易跑偏、只能串行、上下文被撑爆。`/hq` 让主会话只做统筹：先判断值不值得拆，再拆成任务图，按难度给每个子会话配模型和思考深度，按系统资源控制并发，最后审核归并。每次运行的用量和结果都会记录，`/hq-retro` 用这些数据复盘。
+
+Claude Code 里装好后直接用：
+```
+/plugin marketplace add lostoy0/hq-orchestrator
+/plugin install hq-orchestrator@hq-orchestrator-marketplace
+/hq 给 api 服务加上导出 CSV 功能，并补齐测试和文档
+```
+Codex、OpenCode、Gemini CLI、Cursor、dsh 用一行脚本安装，见[安装](#安装)。
+
+**成熟度**：Claude Code 是主要宿主，实际用过；其他宿主的适配按官方文档完成，多数还没实机运行，见[已知限制](#已知限制)。
+
 ## 支持的宿主（v0.4）
 
 `SKILL.md` 只用抽象能力（spawn_worker、monitor 等），每个宿主的具体做法写在 `skills/hq/references/hosts/` 下。
