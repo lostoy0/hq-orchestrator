@@ -2,7 +2,7 @@
 
 ## 1. 概述与核实状态
 
-Kimi 在 hq 里**不是宿主**，而是**辅助执行者**：主宿主（如 Claude Code）按 `calibration.md` 规则 10 把需求明确的 T0–T2 任务交给它，经 W 通道（`scripts/cli-worker.sh`）在独立 worktree 里执行，产出由主宿主审核。
+Kimi 在 hq 里**不是宿主**，而是**辅助执行者**：主宿主（运行 hq 的宿主，如 Claude Code、Codex）按 `calibration.md` 规则 10 把需求明确的 T0–T2 任务交给它，经 W 通道（`scripts/cli-worker.sh`）在独立 worktree 里执行，产出由主宿主审核。
 
 核实状态（2026-11-25）：**只按公开资料整理，未实机运行。** 接口地址、模型名、计费口径都标“待核实”，首次使用后把实际值写进项目 `.hq/PLAYBOOK.md`，并在 CHANGELOG 里更新核实状态。
 

@@ -20,6 +20,13 @@
 
 ## 未发布
 
+### 辅助执行者：不可用或屡次失败就停用，主宿主不再假定是 Claude
+- **改动**：`calibration.md` 规则 10 写明“主宿主”是运行本插件的宿主和模型（不一定是 Claude），profile 与主宿主相同（如 Codex 宿主上的 `codex`）时跳过；新增“停用（熔断）”：不可用（预检不过、worker 起不来、认证失败、限流、额度用完）立即停用，连续失败 2 次或累计失败达到 `assist.max_failures`（默认 2）停用，并定义了“失败”；全部停用时本次剩余任务全部由主宿主执行、按主宿主映射重新选档、不停下问用户，台账头部记 `assist: off（熔断：…）`；常驻模式停用持续到会话结束。`SKILL.md` 辅助执行者一节和第 1 步预检、`playbook-template.md` 新增 `max_failures`、`metrics-schema.md` run 记录新增可选字段 `assist_disabled`、`hosts/codex.md` §5 新增第 9 条、`hosts/kimi.md`、README 中英文、`PROMPT.md` 同步。
+- **原因/假设**：用户要求（2026-11-25）：辅助模型不可用、频繁或连续失败时，放弃辅助、全部由主模型执行；插件也会运行在 Codex 等宿主上，不能假定主模型是 Claude。原规则只写“累计失败 2 次跳过”，没写全部停用后怎么办，文案里多处写“主宿主（如 Claude）”，在 Codex 宿主上还可能把 `codex` 当成自己的辅助。假设：熔断后不再反复派给坏掉的辅助，回收浪费下降，总用时不因辅助拖长。
+- **验收指标**：开启 `assist` 的运行里，同一 profile 在被停用后仍被派发的任务数 = 0；单次运行里辅助失败任务数 ≤ `max_failures`（不可用导致的除外）；非 Claude Code 宿主上 `assist_skip:*:same_as_host` 之外，没有把主宿主自己的 CLI 当辅助派发的记录。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
 ### 拿不准难度时所有宿主都往上选一步
 - **改动**：`calibration.md` 规则 9 从“只对低成本宿主上调一档”改为所有宿主都上调一步：`cost_weight: low` 上调一整档；`high`（如 Claude Code）默认只把思考深度上调一级、模型不变，模糊度 ≥1 或风险 2 时上调一整档；上限一步，不动用 `xhigh`/`max`；notes 标记改为 `bias:+1(tier)` / `bias:+1(effort)`（旧 `bias:+1(cost_low)` 等同 `tier`）。规则 1 补一句指向规则 9。`SKILL.md` 第 3 步、`hosts/codex.md`、`dsh.md`、`deepseek.md`、`generic.md`、`playbook-template.md` 的 `cost_weight` 注释、README 中英文、PROMPT.md 同步。
 - **原因/假设**：用户偏好（2026-11-25）：难度评估不太确定时，尽量提高一档模型或思考深度。原规则在 Claude Code 上拿不准仍选最低档，失败重来的代价（重新熟悉项目、交接丢上下文）通常大于差价。假设：高成本宿主只上调思考深度就能拿到大部分收益，花费增幅小于换模型。
