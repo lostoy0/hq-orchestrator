@@ -28,9 +28,10 @@
 | risk | `low`/`med`/`high` | 风险等级 | 规划完成时 |
 | tier_score | 整数 0–10 | 难度评估总分 | 难度评估时 |
 | tier | `T0`–`T4` | 最终使用的档位 | 难度评估时；升降档后更新为最终值 |
-| model | 字符串 | 最终使用的模型 | 派发时（升降档后更新） |
+| host | `claude-code`/`codex`/`other`（可选） | 主会话所在宿主 | 派发时 |
+| model | 字符串 | 最终使用的模型；跨厂商（非宿主自带模型）写成 `<cli>:<模型名>`，如 `codex:<模型名>` | 派发时（升降档后更新） |
 | effort | 字符串 | 思考深度（low/medium/high/xhigh…） | 派发时（升降档后更新） |
-| channel | `A`/`B`/`C`/`D`/`main` | 派发通道，`main` 表示主会话自己做 | 派发时 |
+| channel | `A`/`B`/`C`/`D`/`W`/`main` | 派发通道。`W` 是 CLI 子进程 worker（`cli-worker.sh`）；`main` 表示主会话自己做（含降级模式） | 派发时 |
 | est_min | 数字 | 预计用时（分钟） | 派发前 |
 | actual_min | 数字 | 实际用时（分钟） | 审核归并后 |
 | tokens | 整数或 null | 消耗 token，口径见下方“用量口径” | 子会话交付后，拿不到写 null |
@@ -67,6 +68,7 @@
 | type | `"run"` | 记录类型 |
 | run_id | 字符串 | run id，与文件名一致 |
 | project | 字符串 | 项目名 |
+| host | `claude-code`/`codex`/`other`（可选） | 主会话所在宿主 |
 | goal | 字符串 | 用户目标 |
 | started_at / ended_at | ISO8601 字符串 | 开始 / 结束时间 |
 | wall_min | 数字 | 总耗时（墙钟分钟） |
@@ -89,7 +91,10 @@
 
 - **`cost_usd` 是主要成本指标**：它已经按各类 token 的不同单价折算，跨模型、跨通道可比。比较开销、写验收指标时优先用它。
 - **`tokens` = input + output + cache_write（创建缓存）**，**不含 cache_read（读取缓存）**。缓存读取单价很低、数量却很大，算进去会让 tokens 虚高，看不出真实工作量。
+  - 以下 A、B 是 Claude Code 宿主的取法（详见 `hosts/claude-code.md`）。
   - B 通道：从 `get_session` 的 `usage` 里按上式相加；拿不到分项就写 null。
+  - W 通道：`cli-worker.sh usage <id>` 输出的 JSON，按同一口径取值。
+  - 其他宿主：按宿主文档的 worker_usage 一行取值。
   - A 通道：返回结果里的 `subagent_tokens` 只是总数、分不出缓存读取时，`tokens` 写 null，把原始总数记进 `notes`（如 `subagent_tokens=73000`），避免两种口径混在一起。
 - 主会话自己的消耗不计入任何 task 记录。
 
