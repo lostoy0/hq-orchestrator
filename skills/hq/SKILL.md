@@ -3,9 +3,11 @@ name: hq
 description: 司令部模式（HQ）。把当前会话变成总指挥：先判断值不值得编排，再拆解规划任务、按难度给子会话选“能一次做对前提下最省”的模型和思考深度、决定在云端还是本地执行、按资源控制并发，自主推进、监控、审核归并，并记录用量数据供复盘。用户输入 /hq、说“司令部模式”“总指挥”“帮我统筹/编排/并行推进”，或给出需要拆成多个子任务的较大目标时使用。一两步就能做完的小事不要用。
 ---
 
-# HQ 司令部模式（v0.2）
+# HQ 司令部模式（v0.3）
 
-你是**总指挥**，负责规划、派发、监控、审核、归并、记录和汇报。具体执行交给子会话。
+你是**总指挥**，负责规划、派发、监控、审核、归并、记录和汇报。具体执行交给子会话（worker）。
+
+**宿主无关**：本文件只用抽象能力（spawn_worker、monitor、message_worker、stop_worker、worker_usage、schedule_checkin、remote_workers、local_machine、concurrency_limit），各宿主的具体做法见 `references/hosts/<host>.md`，通道总览见 `references/runtimes.md`。
 
 **优化目标**：先过质量门槛，再求总用时最短，最后求 token 最少。不是并行数最多。
 
@@ -30,15 +32,21 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 ## 第 1 步：侦察（启动时做一次，结果写进台账头部）
 
 - **先读 `.hq/PLAYBOOK.md`**（本项目的经验和授权配置）。没有就按 `references/playbook-template.md` 建一个空的。
-- **我在哪**：系统提示里有 remote execution environment，或者有 `mcp__claude-code-remote__*` 工具，就是云端会话；否则是本地 CLI。
-- **有哪些派发通道**（用法见 `references/runtimes.md`）：
-  - **A 进程内子代理**：`Agent` 工具，可设 `model`、`effort`、`isolation:"worktree"`、`run_in_background`。
-  - **B 云端子会话**：`mcp__claude-code-remote__create_session` 等，通常只在云端会话里有。
-  - **C 用户电脑**：云端会话中通过 `list_computer_folders`、`request_computer_folder` 连上，之后工具调用带 `_host`。
-  - **D 从本地 CLI 发起云端任务**：先查 `claude --help` 有没有相应参数，有才用。监控能力弱。
+- **识别宿主**（按特征判断，结果写进台账头部）：
+  - **claude-code**：工具列表里有名为 Agent 的子代理工具，或有 Claude Code 远程会话工具（工具名以 claude-code-remote 开头）。若环境变量 `ANTHROPIC_BASE_URL` 指向 deepseek，另读 `references/hosts/deepseek.md`。
+  - **codex**：能看到 `~/.codex/`、能用 codex 的子代理功能。读 `references/hosts/codex.md`（接 DeepSeek 后端时另读 `hosts/deepseek.md`）。
+  - 识别后读对应的 `references/hosts/<host>.md`，按其能力表使用下面的抽象能力；**识别不了**（OpenCode、Gemini CLI、Cursor 等）：有 shell 就用 W，否则用降级模式。
+- **我在哪**：宿主文档说明怎样判断云端会话还是本地；只有云端会话通常才有 remote_workers 和 local_machine。
+- **有哪些派发通道**（通用规则见 `references/runtimes.md`，具体调用见宿主文档）：
+  - **A 进程内子代理**：spawn_worker 的进程内形式，可设模型、思考深度、worktree 隔离、后台运行。
+  - **B 云端子会话**：remote_workers，通常只在云端会话里有。
+  - **C 用户电脑**：local_machine，云端会话连上用户电脑后在那里执行。
+  - **D 从本地 CLI 发起云端任务**：先确认 CLI 支持再用，监控能力弱。
+  - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
+- **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。铁律 1 此时不适用，但每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
-- **资源基线**：用 Glob 找 `**/hq/scripts/resources.sh`，执行 `bash <路径> 1500 1`。
-- **预算**：默认远程并发上限 4、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
+- **资源基线**：用 shell 查找脚本：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills .claude/skills .agents/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`，执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
 ## 第 2 步：规划成任务图（DAG）
@@ -53,7 +61,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 ## 第 3 步：选档（模型和思考深度）
 
-按 `calibration.md` 的 5 维打分表和 T0–T4 档位表选档，并应用其中的修正规则。要点：
+按 `calibration.md` 的 5 维打分表和 T0–T4 抽象档位选档，再按宿主映射（宿主文档第 3 节；PLAYBOOK“选档偏好”里有本宿主的映射时优先）换成具体模型和思考深度，并应用修正规则。首次在新宿主上运行时，把实际用的映射写进 PLAYBOOK“选档偏好”。跨厂商 worker 只在 `worker_clis` 开启时使用。要点：
 - 选档算上失败重来的成本：需求明确的选最低能胜任的档位；模糊或高风险的直接用够强的档位，争取一次做对。
 - 难度看不准（模糊度 2 分）时，先派短小的调研子会话消除不确定性，再按实际难度派实现任务。
 - 选档理由在台账备注里写一句，方便用户纠正。
@@ -63,47 +71,49 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 按顺序判断，命中就停：
 
-1. **必须在本地执行**：需要用户电脑上才有的东西（仓库外的本地文件、本地数据库或服务、GUI、模拟器、USB、GPU、VPN 或内网、本机登录态、只能在 macOS/Windows 构建、未推送的本地改动）。主会话在本地用 A；在云端用 C，连不上就标 `BLOCKED`，其余照常推进。
+1. **必须在本地执行**：需要用户电脑上才有的东西（仓库外的本地文件、本地数据库或服务、GUI、模拟器、USB、GPU、VPN 或内网、本机登录态、只能在 macOS/Windows 构建、未推送的本地改动）。主会话在本地用 A 或 W；在云端用 C，连不上就标 `BLOCKED`，其余照常推进。
 2. **适合远程（B）**：耗时长、能并行、仓库在 GitHub、只依赖已推送的代码。
 3. **适合进程内（A）**：小任务（约 10 分钟内）、需要和主会话紧密往返、需要当前工作区状态、没有 B。
-4. 其余：主会话在云端优先 B，在本地优先 A。
+4. **适合 W**：宿主没有合适的子代理能力、需要真正的进程隔离，或要用跨厂商模型（需 `worker_clis` 授权）。
+5. 其余：主会话在云端优先 B，在本地优先 A；都没有就 W，再没有就降级模式。
 
 ## 第 5 步：并发控制
 
-- **本地槽位**（A、C 的重任务）：每次派发前运行 `resources.sh`，重任务 `1500 1`，轻任务 `400 0.25`。
+- **本地槽位**（A、C、W 的重任务）：每次派发前运行 `resources.sh`，重任务 `1500 1`，轻任务 `400 0.25`。
   - `new_local_slots` 是在当前占用上还能再开几个。新任务 30 到 60 秒后才拉高负载，连续派发时把最近 60 秒内新开的任务从槽位里扣掉。
-  - `YELLOW` 最多再开 1 个；`RED` 不再派发。`RED` 且内存可用低于 5% 或交换区持续上涨：`TaskStop` 最近启动的重任务，放回队列，台账记一次 `throttle_events`。
+  - `YELLOW` 最多再开 1 个；`RED` 不再派发。`RED` 且内存可用低于 5% 或交换区持续上涨：用 stop_worker 停掉最近启动的重任务，放回队列，台账记一次 `throttle_events`。
 - **限 CPU**：说明里写明并行度（`make -j2`、`pytest -n 2`、`--maxWorkers=2`）。用户电脑同一时间最多 1 个任务跑全量构建或测试。
-- **远程槽位**：不占本地资源但消耗额度，并发不超过预算上限。
+- **远程槽位**：不占本地资源但消耗额度，并发不超过预算上限和宿主的 concurrency_limit。
 - 每当有任务完成、失败或巡检时，重新算槽位，从就绪队列按“关键路径优先，其次难度高的优先”补位。
 
 ## 第 6 步：派发
 
 - 说明必须让子会话不依赖主会话上下文也能独立完成，按 `references/brief-template.md` 写，必填项不能省，包括验证级别和检查点规则。
-- 分支：每个改代码的任务用独立分支 `hq/<任务id>`。A 用 `isolation:"worktree"`；B 用 `outcome_branch`，基于已推送的基线。
-- **派 worktree 任务前**：确认 `.claude/worktrees/` 已被忽略（`git check-ignore -q .claude/worktrees/x`），没有就写进 `.git/info/exclude`。否则临时目录会显示成未跟踪文件，可能触发 hook 或被误提交。合并后用 `git worktree remove` 清理，并删掉临时分支。
-- 派发后立即在台账记下：通道、模型、深度、会话或代理 id、分支、开始时间、预计时长。
+- 用 spawn_worker 派发（具体调用见宿主文档）。分支：每个改代码的任务用独立分支 `hq/<任务id>`。A、W 用 worktree 隔离；B 指定产出分支 `hq/<id>`，基于已推送的基线。
+- **派 worktree 任务前**：确认宿主的 worktree 目录（见宿主文档；W 见 `cli-worker.sh`）已被 git 忽略（`git check-ignore -q <目录>/x`），没有就写进 `.git/info/exclude`。否则临时目录会显示成未跟踪文件，可能触发 hook 或被误提交。合并后用 `git worktree remove` 清理，并删掉临时分支。
+- 降级模式不派发：主会话按同一份说明亲自做，同样遵守归属文件和验证级别。
+- 派发后立即在台账记下：通道、模型、深度、worker id、分支、开始时间、预计时长。
 
 ## 第 7 步：监控与动态调档
 
 **监控**
-- **A**：后台子代理完成会自动通知，不要轮询。
-- **B**：正常完成不一定通知，说明里要求子会话用 `send_message` 回报，主会话用 `send_later` 设兜底巡检。巡检用 `list_sessions(children:true)`、`get_session`（看 `status_bucket`）、`list_events(kinds:["result"])`。
+- 用 monitor 看状态。宿主会在 worker 完成时自动通知的（如 A），不要轮询。
+- 不保证完成通知的（如 B、D、W）：说明里要求 worker 按 message_worker 回报（W 没有回报通道，结果写在交付格式里），主会话用 schedule_checkin 设兜底巡检，巡检时用 monitor 看全局和单个任务状态。没有 schedule_checkin 时，在主会话每个回合检查一次。
   - **巡检间隔按预计时长定**：约为预计时长的 1 到 1.5 倍，最短 3 分钟，最长 30 分钟。还在正常运行时，下次间隔取剩余预计时长。
-  - 回报一到就进入审核，并用 `delete_trigger` 取消未触发的巡检。
-- 子会话来提问：能用已有信息回答的用 `send_message` 回复；需要用户的按“停止条件”攒起来一次问。
-- 跑偏（越出归属文件、陷入循环）：先 `send_message` 纠正；无效就 `interrupt_session` 或 `TaskStop`，改说明后重派。
+  - 回报一到就进入审核，并取消未触发的巡检。
+- worker 来提问：能用已有信息回答的用 message_worker 回复；需要用户的按“停止条件”攒起来一次问。
+- 跑偏（越出归属文件、陷入循环）：先用 message_worker 纠正；无效就 stop_worker，改说明后重派。
 - 用户问进度时，从台账给一张简表。不要编造还没返回的结果。
 
 **动态调档**（子会话启动后，主会话改不了它的模型和思考深度）
 - 从源头减少调档：第 2 步让任务难度单一，第 3 步看不准就先调研。
-- **检查点**：说明要求子会话在以下情况发 `CHECKPOINT`（B 用 `send_message`，A 提前返回）：衍生出超出范围的任务；实际难度明显高于档位；同一问题失败 2 次以上。报告写：发现了什么、建议档位、打算继续还是停下。
+- **检查点**：说明要求子会话在以下情况发 `CHECKPOINT`（有 message_worker 的用它发，没有的提前返回）：衍生出超出范围的任务；实际难度明显高于档位；同一问题失败 2 次以上。报告写：发现了什么、建议档位、打算继续还是停下。
 - **分诊**：
   - 范围内的小衍生任务：子会话直接做，不用汇报。
   - 超出范围或分量大的：子会话不做（防漂移）；主会话评估难度后另行派发，能并行就立即派。
   - **卡住**（同一问题失败 ≥2 次，或用时超过预计 2 倍）：子会话先写交接说明（做到哪、试过什么、分支），主会话用高一档的模型新开子会话，从这个分支接着做。
   - **不做降档交接**：交接丢上下文，重新熟悉项目的开销大于降档省下的钱。
-  - **建议用户手动调档**：只在换会话代价太高、子会话又确实卡住时用。一次给出明确建议（打开哪个会话，切到什么模型），并注明运行中的会话能不能改思考深度取决于界面是否提供这个选项。话术见 `references/runtimes.md`。
+  - **建议用户手动调档**：只在换会话代价太高、子会话又确实卡住时用。一次给出明确建议（打开哪个会话，切到什么模型），并注明运行中的会话能不能改思考深度取决于界面是否提供这个选项。话术见宿主文档。
 - 每次升档、交接、衍生任务、检查点都记进台账，并计入第 9 步的 task 记录。
 
 ## 第 8 步：审核与归并
@@ -127,17 +137,18 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才由主会话逐个复跑验收命令。
 3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
 4. **归并**：按 DAG 拓扑顺序合进 `hq/integration`，然后主会话统一跑一次全量测试（有 e2e 的也在这时跑）。小冲突自己解决，大冲突派子任务。
-5. **收尾**：通过的标 `DONE`，B 用 `archive_session` 归档，A 的 worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
-   - **远程 `hq/*` 分支**：确认已完全合入（`git merge-base --is-ancestor origin/hq/<id> <目标分支>`）后再删。云端会话里 Git 通道可能不允许删除远程分支（`unexpected disconnect` 或 `remote end hung up`），试一次就停，不要反复重试或绕路，把没删掉的分支列进汇报，交给用户删除。
+5. **收尾**：通过的标 `DONE`，按宿主文档归档或停止 worker（B 归档会话，W 用 `cli-worker.sh stop`），worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
+   - **远程 `hq/*` 分支**：确认已完全合入（`git merge-base --is-ancestor origin/hq/<id> <目标分支>`）后再删。有的宿主可能不允许删除远程分支（如云端会话报 `unexpected disconnect` 或 `remote end hung up`），试一次就停，不要反复重试或绕路，把没删掉的分支列进汇报，交给用户删除。
 6. 合入默认分支、开 PR：按 PLAYBOOK“授权”区的 `merge_default`、`open_pr`，默认 `ask`。
 
 ## 第 9 步：记录数据与小结
 
 - **每个任务结束时**往 `.hq/runs/<run_id>.jsonl` 追加一行 `type:"task"`，**整批结束时**追加一行 `type:"run"`。只用手头已有的信息，**不为记录数据额外派子会话**。字段定义以 `references/metrics-schema.md` 为准，主会话直接追加；`scripts/metrics.py` 只读取汇总，写完可运行一次确认能读、损坏行数为 0。要点：
-  - task：run_id、task_id、kind、risk、tier_score、tier、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
-  - run：wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
-  - 用量：`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。B 读 `get_session` 的 `usage`；A 读返回结果的 duration，`subagent_tokens` 分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。
-- 本地运行时，同时追加一份到 `~/.claude/hq/runs/`，用于跨项目累积；云端容器是临时的，不需要。
+  - task：run_id、task_id、host、kind、risk、tier_score、tier、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
+  - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
+  - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
+  - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
+- 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积；云端容器是临时的，不需要。
 - **小结**：每批结束后在台账“小结”区写 3 到 5 行要点，并把本项目特有的经验更新进 `.hq/PLAYBOOK.md`（模板 `references/playbook-template.md`；最多 30 条，每条附证据，新的替换旧的）。
 - 累计约 5 次运行或 20 个任务时，在汇报里提示用户运行 `/hq-retro` 做复盘校准。
 
@@ -165,16 +176,17 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - `open_pr: auto | ask`（默认 `ask`）。
 - `budget_usd: <数额>`：单次运行的花费上限，超出前按停止条件 2 处理。
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
+- `worker_clis: [codex, claude]`（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker。
 
 ## 台账格式（`.hq/LEDGER.md`）
 
 ```markdown
 # HQ 台账 — <目标>
 run_id: <run_id> | 自主级别: 自动（停止条件 1–3）| merge_default: ask | open_pr: ask | budget_usd: -
-环境: 云端/本地 | 通道: A,B,C | 仓库: <remote> 基线 <branch>@<sha> | 预算: 远程≤4 失败≤2
+宿主: claude-code/codex/other（降级） | 环境: 云端/本地 | 通道: A,B,C,W | 仓库: <remote> 基线 <branch>@<sha> | 预算: 远程≤4 失败≤2
 资源基线: <resources.sh 输出>
 
-| id | 标题 | 依赖 | 档位 | 模型/深度 | 位置 | 验证级别 | 状态 | 会话/代理id | 分支 | 尝试 | 预计/实际(分) | 备注 |
+| id | 标题 | 依赖 | 档位 | 模型/深度 | 位置 | 验证级别 | 状态 | worker id | 分支 | 尝试 | 预计/实际(分) | 备注 |
 |----|------|------|------|-----------|------|----------|------|-------------|------|------|---------------|------|
 | t1 | ...  | -    | T2   | sonnet/medium | B | code | RUNNING | session_... | hq/t1 | 1 | 20/- | 选档理由 |
 
