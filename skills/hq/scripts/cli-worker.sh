@@ -101,7 +101,7 @@ do_start() {
   fi
   [ -n "$BASE" ] || BASE=HEAD
   # 先拼好命令（后端可能拒绝某些组合），再建 worktree，避免失败时留下分支
-  local -a argv; STDIN_SRC=brief; NOTES=""
+  local -a argv; STDIN_SRC=brief; NOTES=""; BE_COMMIT=0
   # shellcheck source=/dev/null
   . "$BE_DIR/$CLI.sh"
   be_argv || { echo "cli-worker: $CLI 不支持 --sandbox $SANDBOX 的组合${NOTES:+：$NOTES}" >&2; exit 2; }
@@ -127,15 +127,25 @@ do_start() {
   # runner：在 worktree 里执行 CLI，结束后写 exit_code 与 ended_at
   cat > "$d/run.sh" <<'R'
 #!/usr/bin/env bash
-d=$1; wt=$2; brief=$3; envf=$4; shift 4
+d=$1; wt=$2; brief=$3; envf=$4; commit=$5; shift 5
 # env 文件只在本进程内生效，不回显
 if [ -n "$envf" ]; then set -a; . "$envf" || { echo 126 > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"; exit 126; }; set +a; fi
 cd "$wt" || { echo 127 > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"; exit 127; }
 "$@" < "$brief" > "$d/out.jsonl" 2> "$d/log"
 ec=$?
+# 后端沙箱不能写 .git 时（BE_COMMIT=1），CLI 正常退出后在沙箱外代提交剩余改动；失败只记日志，不改退出码
+if [ "$ec" = 0 ] && [ "$commit" = 1 ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  { git add -A && git commit -q -m "$(basename "$d"): worker 交付（cli-worker 代提交）"; } >> "$d/log" 2>&1 \
+    || echo "cli-worker: 代提交失败，改动留在 worktree 未提交" >> "$d/log"
+fi
 echo "$ec" > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"
 R
-  setsid nohup bash "$d/run.sh" "$d" "$wt" "$stdin_file" "$ENV_FILE" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
+  # 新会话 + 进程组组长（stop 按进程组发信号）。macOS 没有 setsid(1)，退回 python3 的 os.setsid()+exec（pid 不变）
+  local -a detach
+  if command -v setsid >/dev/null 2>&1; then detach=(setsid)
+  else detach=(python3 -c 'import os,sys;os.setsid();os.execvp(sys.argv[1],sys.argv[1:])')
+  fi
+  nohup "${detach[@]}" bash "$d/run.sh" "$d" "$wt" "$stdin_file" "$ENV_FILE" "$BE_COMMIT" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
   echo $! > "$d/pid"
   python3 -c 'import json,sys;print(json.dumps({"id":sys.argv[1],"branch":sys.argv[2],"worktree":sys.argv[3],"pid":int(sys.argv[4]),"notes":sys.argv[5] or None,"label":sys.argv[6] or None},ensure_ascii=False))' "$ID" "$br" "$wt" "$(cat "$d/pid")" "$NOTES" "$LABEL"
 }

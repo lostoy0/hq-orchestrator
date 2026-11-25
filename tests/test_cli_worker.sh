@@ -34,6 +34,18 @@ grep -q 'do the task' .hq/workers/c1/out.jsonl && ok "brief delivered via stdin"
 u=$(W usage --id c1)
 [ "$(jget "$u" tokens)" = 650 ] && [ "$(jget "$u" cost_usd)" = null ] && ok "usage codex parsed" || bad "usage codex" "$u"
 
+# 1b codex 沙箱不能写 .git：workspace-write 正常退出后由 cli-worker 代提交；read-only、失败、无改动都不提交
+git log --oneline hq/c1 | wc -l | grep -qx ' *1' && ok "codex no changes -> no extra commit" || bad "codex no changes" "$(git log --oneline hq/c1)"
+grep -q 'cli-worker' .hq/workers/c1/notes 2>/dev/null && ok "codex workspace-write notes mention proxy commit" || bad "codex notes" "$(cat .hq/workers/c1/notes 2>/dev/null)"
+FAKE_WRITE=out.txt W start --id cw1 --cli codex --model m1 --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state cw1 done)
+[ "$s" = done ] && git show hq/cw1:out.txt >/dev/null 2>&1 && [ -z "$(git -C .hq/worktrees/cw1 status --porcelain)" ] && [ -z "$(git status --porcelain)" ] \
+  && ok "codex workspace-write changes committed on hq/<id> by cli-worker" || bad "codex proxy commit" "$s $(git log --oneline hq/cw1 | head -2)"
+FAKE_WRITE=out.txt W start --id cw2 --cli codex --model m1 --sandbox read-only --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state cw2 done); ! git show hq/cw2:out.txt >/dev/null 2>&1 && ! grep -q 'cli-worker' .hq/workers/cw2/notes 2>/dev/null && ok "codex read-only -> no proxy commit" || bad "codex read-only commit" "$s"
+FAKE_WRITE=out.txt FAKE_EXIT=3 W start --id cw3 --cli codex --model m1 --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state cw3 failed); [ "$s" = failed ] && ! git show hq/cw3:out.txt >/dev/null 2>&1 && ok "codex failure -> no proxy commit" || bad "codex failure commit" "$s"
+
 # 2 失败
 FAKE_EXIT=3 FAKE_NO_USAGE=1 W start --id f1 --cli codex --model m1 --brief "$T/brief.md" >/dev/null 2>&1
 s=$(wait_state f1 failed); [ "$s" = failed ] && [ "$(jget "$(W status --id f1)" exit_code)" = 3 ] && ok "failure -> failed" || bad "failure -> failed" "$s"
