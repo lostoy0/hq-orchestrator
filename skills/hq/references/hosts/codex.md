@@ -41,7 +41,7 @@
 ## 4. 安装与调用
 
 - 技能：复制 `skills/hq/` 到 `~/.agents/skills/hq`（个人）或仓库 `.agents/skills/hq`。
-- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），或用 `./install.sh --host codex --with-codex-agents`（按 `--scope` 自动选目录）；然后替换模型占位符，见 `adapters/codex/README.md`。
+- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），或用 `./install.sh --host codex --with-agents`（按 `--scope` 自动选目录；旧写法 `--with-codex-agents` 仍可用）；然后替换模型占位符，见 `adapters/codex/README.md`。也可以安装时直接填模型：`--with-agents --model-map 'T0=<模型>,…,T4=<模型>'`（思考深度按档位写入）。
 - W 通道：`bash skills/hq/scripts/cli-worker.sh start --id t2 --cli codex --model <m> --brief <文件>`；简报经 stdin 传入。sandbox 默认 `workspace-write`；`danger-full-access` 必须另加 `--allow-dangerous`，否则拒绝（退出码 2）。
 
 ## 5. 已知限制与待核实项

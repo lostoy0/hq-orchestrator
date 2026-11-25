@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# 假 cursor-agent（-p --output-format stream-json）：提示词是最后一个位置参数
+last="${!#}"
+echo "{\"type\":\"args\",\"argv\":\"$(echo "$*" | tr '\n"' '  ')\"}"
+echo "{\"type\":\"stdin\",\"text\":\"$(cat | tr '\n"' '  ')\"}"
+echo "{\"type\":\"prompt\",\"text\":\"$(echo "$last" | tr '\n"' '  ')\"}"
+[ "${FAKE_NO_USAGE:-0}" = 1 ] || echo '{"type":"result","subtype":"success","duration_ms":10,"usage":{"inputTokens":300,"outputTokens":40,"cacheReadTokens":5000,"cacheWriteTokens":10}}'
+sleep "${FAKE_SLEEP:-1}"
+exit "${FAKE_EXIT:-0}"

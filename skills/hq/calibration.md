@@ -35,6 +35,7 @@
 | Claude Code | haiku / low | sonnet / low | sonnet / medium | opus / medium | opus / high（必要时 xhigh） |
 | Codex | 见 `references/hosts/codex.md` 第 3 节 | | | | |
 | dsh（DeepSeek Harness，DeepSeek 推荐路径） | flash / low | flash / low | flash / medium | pro / medium | pro / high |
+| OpenCode | 见 `references/hosts/opencode.md` 第 3 节（`hq-t0…t4` 子代理，`provider/model#variant`） | | | | |
 | DeepSeek 后端（经 Claude Code / Codex） | 见 `references/hosts/deepseek.md` 第 3 节 | | | | |
 | 其他 / 降级模式 | 按“所需能力”从宿主可用模型中选 | | | | |
 
@@ -64,6 +65,7 @@
    - **记录**：上调的任务在 task 记录的 notes 写 `bias:+1(cost_low)`。复盘时对比上调和未上调的一次通过率、实际用时；如果上调没有提高一次通过率、只拉长了用时，就提出收回这条规则或缩小适用范围。
 
 ## 变更记录
+- 0.4.1（2026-11-25）：新增 OpenCode 映射行（指向宿主文档），档位数值不变。
 - 0.3.2（2026-11-25）：新增规则 9，低成本宿主（Codex、dsh、DeepSeek 后端）拿不准难度时上调一档；用户偏好，待复盘验证。
 - 0.3.1（2026-11-25）：新增 dsh 宿主映射行，档位数值不变。
 - 0.3.0（2026-11-25）：档位改为“抽象档位 + 各宿主映射”，数值不变。

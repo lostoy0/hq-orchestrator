@@ -1,0 +1,4 @@
+# 子代理模板登记表（install.sh --with-agents 读取）。列以空白分隔：
+# 格式(=宿主id)  个人范围目录                 项目范围目录       覆盖目录的环境变量(测试用)  扩展名
+codex            ~/.codex/agents              .codex/agents      CODEX_AGENTS_DIR            toml
+opencode         ~/.config/opencode/agents    .opencode/agents   OPENCODE_AGENTS_DIR         md

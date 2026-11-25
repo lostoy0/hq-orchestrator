@@ -1,0 +1,11 @@
+# 宿主登记表（install.sh 读取；新增宿主 = 加一行 + 一份 skills/hq/references/hosts/<文档>.md）。
+# 列以空白分隔，最后一列“下一步”可含空格：
+# id        级别    专属目录  会读取的目录（skill-dirs.tsv 的 key，逗号分隔）  检测命令      检测目录             下一步
+# 级别：native = 有宿主文档、档位生效；basic = 只装技能，走降级模式或 W 通道（hosts/generic.md）。
+# “会读取的目录”来自各工具官方文档（2026-11-25 检索，opencode/cursor/gemini 未实机运行）。
+claude      native  claude    claude                       claude        ~/.claude            Claude Code：重启会话后输入 /hq
+codex       native  agents    agents                       codex         ~/.codex             Codex：按 skills/hq/references/hosts/codex.md 的技能调用方式使用
+dsh         native  dsh       dsh,agents                   -             @DSH_HOME@           dsh：按 skills/hq/references/hosts/dsh.md 首次运行（先开启子代理模型选择、调用 list_subagent_models）
+opencode    native  opencode  opencode,claude,agents       opencode      ~/.config/opencode   OpenCode：按 skills/hq/references/hosts/opencode.md 首次运行；档位要生效需 --with-agents --model-map（见 adapters/opencode/README.md）
+cursor      basic   cursor    cursor,claude,codex-skills   cursor-agent  ~/.cursor            Cursor：基础支持（降级模式 + W 通道，见 hosts/generic.md）；重启 Cursor 后在 Agent 里使用 hq 技能
+gemini      basic   gemini    gemini,agents                gemini        ~/.gemini            Gemini CLI：基础支持（降级模式 + W 通道，见 hosts/generic.md）；重启 CLI，首次激活技能需要确认
