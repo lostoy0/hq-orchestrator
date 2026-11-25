@@ -18,6 +18,7 @@ share_hint: pending       # pending | shown：/hq-retro 是否已提示过“可
 assist:                   # 辅助执行者（calibration.md 规则 10），默认关闭。/hq --assist … 可在单次运行覆盖
   use: []                 # 按优先顺序，如 [codex, kimi]；空表示关闭
   max_tier: T2            # 辅助最多承接到哪一档，只能是 T0、T1 或 T2
+  max_failures: 2         # 本次运行里某个辅助累计失败几次就停用它（连续失败 2 次、不可用时都会立即停用）；全部停用后剩余任务由主宿主做
   profiles:               # 每个辅助执行者一项；模型名填你账户里实际可用的
     codex:
       cli: codex          # W 通道用哪个 CLI：codex | claude | opencode | gemini | cursor

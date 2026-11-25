@@ -177,13 +177,13 @@ cli-worker.sh list
 - `usage` computes tokens with the common definition (input + output + cache_write, excluding cache_read).
 - Using a CLI from a different vendor than the host as a worker (cross-vendor) requires `worker_clis` (e.g. `[codex, claude]`) in the Authorization section of `.hq/PLAYBOOK.md`; **it is empty by default, i.e. off**. The host's own CLI (e.g. `--cli gemini` on a Gemini CLI host) needs no authorization, and is how Cursor and Gemini CLI hosts get tiers to apply.
 
-## Assist workers: Claude takes the hard tasks, Codex / Kimi take the easier ones (v0.5.0, off by default)
+## Assist workers: the main model takes the hard tasks, Codex / Kimi take the easier ones (v0.5.0, off by default)
 
-When a large goal splits into many subtasks, the host (such as Claude) can keep the hard, important tasks and hand well-specified low- and mid-difficulty tasks to a cheaper model, then review the result itself. This saves host quota and adds parallelism.
+When a large goal splits into many subtasks, the host can keep the hard, important tasks and hand well-specified low- and mid-difficulty tasks to a cheaper model, then review the result itself. This saves host quota and adds parallelism. **The host is whatever host and model hq is running in** (Claude Code, Codex, Gemini CLI and so on), not necessarily Claude; an assist profile that is the same as the host (for example `codex` in `assist` while running inside Codex) is skipped.
 
 - **Routing** (`skills/hq/calibration.md` rule 10): a task goes to an assist worker only if its tier is ≤ `max_tier` (default T2), its risk is low, its requirements are clear, one command can tell whether it is right, and it is not a prerequisite such as a shared interface. T3/T4, architecture, security, data, concurrency, migrations, unknown root causes and all reviews stay with the host.
 - **Review**: assist output is always reviewed by the host, with no "one tier lower" discount; changes over about 150 lines also get an independent review.
-- **Failure**: after one failure the host takes over from the worker's branch one tier higher; an assist worker that fails twice in a run gets no more tasks in that run.
+- **Failure**: after one failure the host takes over from the worker's branch one tier higher. An assist worker that is **unavailable** (CLI will not start, not logged in, rate-limited, missing key) is disabled at once; one that fails **twice in a row** or reaches `max_failures` (default 2) is disabled too. Once every assist worker is disabled, **the host does all remaining tasks itself** without stopping to ask, and says so once in its report.
 - **Turning it on**:
   ```
   /hq --assist codex,kimi <goal>            # this run, in order of preference

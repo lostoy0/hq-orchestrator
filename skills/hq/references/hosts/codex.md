@@ -54,3 +54,4 @@
 6. `codex cloud` 的 model/effort 可能不生效；`xhigh` 是否支持待核实。
 7. W 通道 sandbox 默认 workspace-write。**实测沙箱不能写 `.git`**：worktree 的 git 目录在主仓库 `.git/worktrees/<id>`，`git add` 建不了 `index.lock`，worker 自己提交会失败；用 `--add-dir` 把主仓库 `.git` 加为可写目录也无效（Codex 把 `.git` 当受保护路径）。因此 `backends/codex.sh` 在 workspace-write 下让 cli-worker 在 Codex 正常退出（退出码 0）后、沙箱外把 worktree 里的改动提交到 `hq/<id>`（提交信息“<id>: worker 交付（cli-worker 代提交）”，失败只写进 `log`）。read-only 和失败的 worker 不代提交。简报里可以写“不必自己提交”，省掉一次失败的尝试。
 8. 旧名 `agents.max_threads` 与新名并存的行为待核实。
+9. **Codex 作主宿主、开启 `assist` 时**：`assist.use` 里的 `codex` 与主宿主相同，按 `calibration.md` 规则 10 跳过；想用更便宜的 Codex 模型，直接按第 3 节映射派自己的子代理。其他辅助（如经 `claude` CLI 的 Kimi）走 W 通道时，`cli-worker.sh` 是在 Codex 会话自己的沙箱里起子进程，能否联网、能否写子 CLI 的配置目录待核实；起不来就按规则 10 的“不可用”立即停用，剩余任务全部由 Codex 自己做。
