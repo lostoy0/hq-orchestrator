@@ -33,7 +33,7 @@
 | effort | 字符串 | 思考深度（low/medium/high/xhigh…） | 派发时（升降档后更新） |
 | channel | `A`/`B`/`C`/`D`/`W`/`main` | 派发通道。`W` 是 CLI 子进程 worker（`cli-worker.sh`）；`main` 表示主会话自己做（含降级模式） | 派发时 |
 | est_min | 数字 | 预计用时（分钟） | 派发前 |
-| actual_min | 数字 | 实际用时（分钟） | 审核归并后 |
+| actual_min | 数字 | 实际用时（分钟）：从派发到 worker 交付的墙钟时间，**不含**等待审核、合并的时间；重试时累加各次尝试的用时。取法见 `runtimes.md` 的 worker_usage | 审核归并后 |
 | tokens | 整数或 null | 消耗 token，口径见下方“用量口径” | 子会话交付后，拿不到写 null |
 | cost_usd | 数字或 null | 花费（美元），**主要成本指标** | 同上 |
 | attempts | 整数 | 尝试次数（首次为 1） | 每次重试时累加 |
@@ -110,7 +110,9 @@
 报告各节与字段的对应：
 - 质量门槛：漂移率（`drift` 或 `scope_violation`）、验证到位率（有 `verify_evidence` 且 `verify_pass`）、各环节问题/任务（`issues`）、major 数、返工率（`review_outcome` 为 rework/failed）、合并通过率（run 的 `integration_pass`）。
 - 按档位、按模型/深度：一次通过率（`attempts`=1 且审核通过）、升档率（`tier_changes` 非空）、交接率、平均 cost_usd 和 tokens、actual/est 中位数。
-- 效率（每个 run）：wall/关键路径、并行加速比（各任务 actual_min 之和 / wall_min）、max_concurrency、throttle_events。
+- 效率（每个 run）：wall/关键路径、并行加速比（各任务 actual_min 之和 / wall_min，即平均同时在跑几个任务）、加速比上限（actual_min 之和 / critical_path_min，任务图允许的最好情况）、max_concurrency、throttle_events。
+  - **数据矛盾**：加速比 > max_concurrency × 1.1，或某个任务的 actual_min > wall_min，说明 actual_min 口径不对（常见原因是把等审核、合并的时间也算了进去）。备注列标“数据矛盾”，该 run 不产生加速比信号，改为提示核对口径。
+  - “加速比偏低”信号只在加速比 < 1.3、且加速比上限 ≥ 1.3（任务图本来允许并行）时给出；没记 critical_path_min 的 run 不判断。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
 

@@ -20,7 +20,7 @@
 | monitor | 查看 worker 状态和交付结果 |
 | message_worker | 主会话与 worker 双向发消息（纠偏、回答提问、接收 CHECKPOINT） |
 | stop_worker | 中断或停止 worker |
-| worker_usage | 读取 worker 用量：`cost_usd` 优先；tokens = input + output + cache_write，不含 cache_read；拿不到填 null |
+| worker_usage | 读取 worker 用量：`cost_usd` 优先；tokens = input + output + cache_write，不含 cache_read；拿不到填 null。`actual_min` = 从派发到 worker 交付的墙钟分钟，不含等审核、合并的时间（W 通道取 `cli-worker.sh status` 的 `minutes`） |
 | schedule_checkin | 定时唤醒主会话做兜底巡检 |
 | remote_workers | 在云端独立环境运行 worker |
 | local_machine | 在用户电脑上执行（主会话在云端时） |
