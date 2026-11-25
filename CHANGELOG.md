@@ -18,6 +18,26 @@
 
 ---
 
+## v0.4.6（2026-11-25）
+
+运行记录可以保存进项目仓库，云端跨会话也能复盘；可以手动导出脱敏数据分享给插件作者。
+
+### 运行记录保存进仓库
+- **改动**：新增 `skills/hq/scripts/runs-persist.sh`：`save branch` 用 git 底层命令把 `.hq/runs/*.jsonl` 写进专用分支 `hq/runs` 的 `runs/` 下并推送（不碰工作区和当前分支；只追加；别的会话同时推送时重新拉取再试，最多 3 次；推不上退出码 3）；`save commit` 只把记录文件提交到当前分支；`fetch` 取回到 `.hq/runs-archive/`。`SKILL.md` 第 9 步删去“云端不需要保存”，按 PLAYBOOK 新项 `runs_persist: off|branch|commit` 保存，`branch` 推不上就降级为 `commit` 并改写 PLAYBOOK；云端没写这项时在第一次汇报里问一次。授权配置、`playbook-template.md` 加 `runs_persist`。`hq-retro` 第 1 步先 `fetch` 再把 `.hq/runs-archive` 一起汇总。新增 `tests/test_runs_persist.sh`（26 项）。README 中英文加“运行记录与数据分享”一节。
+- **原因/假设**：云端容器回收后 `.hq/runs/` 丢失（2026-11-25 云端实测 `/hq-retro` 只看到本会话数据），主要在云端使用的项目永远凑不够复盘门槛。存进项目仓库后数据和代码在同一信任范围，不涉及第三方。
+- **验收指标**：开了 `runs_persist: branch` 的云端项目，`/hq-retro` 的 run 数等于实际运行过的批次数（缺失 = 0）；`runs-persist.sh` 推送失败后降级为 `commit` 的次数单独记进 notes，比例不应超过 50%（超过说明云端默认应改为 `commit`）；保存步骤导致的 `autonomy_stops` 只有云端首次那一次。
+- **状态**：待验证（本地用 bare 仓库测过并发、降级和取回；2026-11-25 云端会话实测 `save branch` 推送 `hq/runs` 成功、`fetch` 取回成功，但云端删不掉远程分支，测试分支需手动删除）
+- **复盘报告**：无（人工改动）
+
+### 手动导出脱敏数据
+- **改动**：`metrics.py` 加 `--export-anon [--raw]`：先按白名单裁剪每条记录再汇总，只保留枚举、数字、布尔字段，删掉 `title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和未知字段，`run_id` 哈希、`task_id` 换序号、时间只留日期、`verify_evidence` 只留有无；非法枚举和不合规的 model/effort 写 `other`。`hq-retro` 加 `/hq-retro --export`：完整显示导出内容并存到 `.hq/retro/export-<日期>.json`，由用户自己用新增的 `.github/ISSUE_TEMPLATE/retro-data.md` 开 issue，绝不自动上传；复盘报告末尾只提示一次（PLAYBOOK `share_hint`）。`metrics-schema.md` 写明白名单。`tests/test_metrics.py` 加 3 个测试（导出后指标不变、自由文本和未知字段不泄露、`--raw` 必须配 `--export-anon`）。
+- **原因/假设**：插件作者只能看到自己的运行数据，选档校准缺少别的宿主、项目的样本。自动上传无处可传（其他用户没有仓库写权限，PR 和 issue 公开，自建服务要运维且会被云端代理拦），靠模型脱敏也不可靠；改为确定性白名单加用户主动分享，用户每次都能看到传出的完整内容。
+- **验收指标**：收到的 retro-data issue 中，含任何自由文本或项目名的 = 0；`share_hint` 提示后用户反馈“被打扰”= 0；出现来自至少 2 个不同宿主的分享后，`calibration.md` 至少有 1 条改动的依据来自分享数据。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.4.5（2026-11-25）
 
 新增常驻模式：同一个会话一批接一批地当总指挥，并支持接管已有会话。

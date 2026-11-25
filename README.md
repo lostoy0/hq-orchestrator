@@ -24,7 +24,7 @@
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.5）
+.claude-plugin/plugin.json             plugin 清单（v0.4.6）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
@@ -34,7 +34,8 @@ skills/hq/references/brief-template.md 子会话任务说明模板（含验证�
 skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用量口径
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
 skills/hq/scripts/resources.sh         资源探测（Linux/cgroup/macOS），输出还能新开几个本地任务
-skills/hq/scripts/metrics.py           把运行数据汇总成指标报告（只读）
+skills/hq/scripts/metrics.py           把运行数据汇总成指标报告（只读）；--export-anon 按白名单脱敏导出
+skills/hq/scripts/runs-persist.sh      把运行记录保存进仓库（专用分支 hq/runs 或当前分支）并取回
 skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后台运行 codex / claude / opencode / gemini / cursor 的命令行
 skills/hq/scripts/backends/*.sh        W 通道各 CLI 的参数拼装和用量解析（新增 CLI 加一个文件）
 skills/hq-retro/SKILL.md               /hq-retro 复盘：验证上次改动、出有证据的建议、生成改插件的提示词
@@ -52,16 +53,17 @@ adapters/hosts.tsv                     宿主登记表：每个工具读哪些�
 adapters/skill-dirs.tsv                技能目录登记表：个人/项目范围路径
 install.sh                             一键安装：自动检测工具、按最小目录集合复制技能，支持 --list/--update/--uninstall，不改任何配置
 docs/design-more-hosts.md              支持更多宿主的设计草案与路线（v0.4.x）
-tests/                                 resources.sh、cli-worker.sh、install.sh、metrics.py 的自测
+tests/                                 resources.sh、cli-worker.sh、install.sh、runs-persist.sh、metrics.py 的自测
+.github/ISSUE_TEMPLATE/retro-data.md   分享脱敏运行数据用的 issue 模板
 ```
 
 ## 安装
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.5` 标签下载到 `~/.hq-orchestrator/v0.4.5`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.4.6` 标签下载到 `~/.hq-orchestrator/v0.4.6`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -89,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/inst
 
 **方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 命令）
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.5
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.6
 ```
 扩展只含技能和命令，不含子代理模板（同一个仓库也是 Claude Code 插件，根目录放 `agents/` 会被 Claude Code 当成自己的子代理）。要让档位生效，再运行 `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'` 安装模板；与扩展同时装了技能时，Gemini CLI 优先用用户目录的副本，安装脚本会提示。更新：`gemini extensions update hq-orchestrator`。
 
@@ -124,7 +126,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 ```
 提交 `.claude/skills/` 后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`，辅助脚本（如 `scripts/resources.sh`）也能正常运行。好处是不依赖网络和 marketplace，还能锁定版本；坏处是每个项目一份副本，要逐个升级。
 
-注意：`.hq/`（台账、`.hq/runs/` 运行记录、`.hq/retro/` 复盘报告）默认不提交，云端容器回收后就没了，`~/.claude/hq/runs/` 在云端也不保留。所以在云端跑 `/hq-retro` 只能看到本会话产生的数据；想跨会话复盘，需要自己把 `.hq/runs/` 保存下来（例如复制到本地再复盘）。
+注意：`.hq/`（台账、运行记录、复盘报告）默认不提交，云端容器回收后就没了。要在云端跨会话复盘，在 `.hq/PLAYBOOK.md` 里设 `runs_persist: branch`（云端第一次运行结束时 `/hq` 也会问你一次）：每批结束后运行记录写进专用分支 `hq/runs`，不碰你的工作区和 main，`/hq-retro` 会自动取回。推不上这个分支时会自动改为 `commit`，跟本批改动一起提交。详见下文“运行记录与数据分享”。
 
 *另一种做法：账号或组织级插件。* 想让所有云端会话都能用，可以在 claude.ai 的插件目录里给账号或组织启用它（前提是插件已在组织目录中，可能需要管理员上架）。
 
@@ -143,11 +145,11 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 
 ## 升级
 
-先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.5` 为例，换成要升级到的版本即可。
+先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.6` 为例，换成要升级到的版本即可。
 
 | 安装方式 | 升级方法 |
 |---|---|
-| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh \| bash -s -- --update` |
+| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh \| bash -s -- --update` |
 | 方式 0（已 clone 仓库） | `git pull` 后运行 `./install.sh --update`；项目范围加 `--scope project --project-dir <路径>` |
 | 方式 0a（Gemini 扩展） | `gemini extensions update hq-orchestrator` |
 | 方式 0b（`npx skills add`） | 重新运行一次同样的 `npx skills add` 命令覆盖 |
@@ -220,12 +222,33 @@ open_pr: ask              # ask | auto
 budget_usd: 20            # 单次运行的花费上限，超出前停下来问
 autonomy: auto            # auto | confirm-plan：confirm-plan 时计划要等你确认再派发
 worker_clis: []           # 跨厂商 worker，可选 codex/claude/opencode/gemini/cursor；默认空即关闭
+runs_persist: off         # off | branch | commit：运行记录是否保存进仓库；云端没写时问一次
 ```
 
 ## 进化闭环：记录 → 复盘 → 改插件
 1. **记录**：每个任务结束、每次运行结束，主会话往 `.hq/runs/<run_id>.jsonl` 追加一行（格式见 `metrics-schema.md`，记录 `host`；本地运行时另存一份到 `~/.claude/hq/runs/`，Codex 宿主也用这个目录）。成本以 `cost_usd` 为主，`tokens` 不含缓存读取。
 2. **复盘**：累计约 5 次运行或 20 个任务时，主会话会提示你运行 `/hq-retro`。它用 `metrics.py` 出指标报告，先按 `CHANGELOG.md` 的验收指标核对上次改动，再交给独立子代理出有证据的建议（至少 3 个任务或 2 次运行出现才算）。只与本项目有关的经验直接写进 `.hq/PLAYBOOK.md`。
 3. **改插件**：涉及插件本身的建议由你把关。报告最后附一段提示词，你复制到 hq-orchestrator 仓库的会话里执行，它会改文件、跑测试、在 `CHANGELOG.md` 记一条“待验证”并升补丁版本号。下一次复盘再验证它，没达标就撤回。
+
+## 运行记录与数据分享
+
+**保存运行记录**（PLAYBOOK `runs_persist`）
+
+| 取值 | 做法 | 适合 |
+|---|---|---|
+| `off` | 只写本地 `.hq/runs/`（本地运行另存 `~/.claude/hq/runs/`） | 只在本地用 |
+| `branch` | 每批结束后 `runs-persist.sh save branch`：把记录写进专用分支 `hq/runs` 的 `runs/` 下并推送；只追加，多个会话同时写不冲突，不碰工作区和当前分支 | 云端（推荐） |
+| `commit` | `runs-persist.sh save commit`：只把记录文件提交到当前分支，随本批改动一起推 | 推不上 `hq/runs` 时自动降级到这里 |
+
+`/hq-retro` 会先运行 `runs-persist.sh fetch` 把 `hq/runs` 上的记录取到 `.hq/runs-archive/`，再和本地记录一起汇总（同一次运行只算一次）。`hq/runs` 是独立的历史分支，不要合并进别的分支。
+
+**分享数据，帮助改进插件**（完全自愿，不会自动上传）
+
+1. 运行 `/hq-retro --export`。它用 `metrics.py --export-anon` 按白名单导出：只保留档位、模型、通道、用时、成本、通过率这类枚举和数字字段，删掉所有自由文本（任务标题、目标、备注、验证输出）和项目名，run_id 做哈希，时间只留日期。白名单见 `metrics-schema.md`。
+2. 导出内容会完整显示给你，并保存到 `.hq/retro/export-<日期>.json`。
+3. 愿意分享的话，用 [retro-data 模板](https://github.com/lostoy0/hq-orchestrator/issues/new?template=retro-data.md) 新建 issue 并贴上。issue 是公开的，贴之前请再看一遍。
+
+`/hq-retro` 只会在第一次复盘的报告末尾提示一次这件事（记在 PLAYBOOK 的 `share_hint`），之后不再提。
 
 ## 设计要点
 - **要不要编排**：编排有固定开销，小任务不开子会话。
@@ -239,7 +262,7 @@ worker_clis: []           # 跨厂商 worker，可选 codex/claude/opencode/gemi
 
 ## 自测
 ```bash
-for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh; do echo "$t: $(bash $t | tail -1)"; done
+for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh tests/test_runs_persist.sh; do echo "$t: $(bash $t | tail -1)"; done
 python3 -m unittest discover tests
 ```
 `test_cli_worker.sh` 用 `tests/fixtures/fake-cli/` 下的假 `codex`、`claude`、`opencode`、`gemini`、`cursor-agent` 测参数拼接和用量解析，不调用真实 CLI。

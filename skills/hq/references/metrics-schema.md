@@ -113,3 +113,11 @@
 - 效率（每个 run）：wall/关键路径、并行加速比（各任务 actual_min 之和 / wall_min）、max_concurrency、throttle_events。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
+
+## 保存进仓库与脱敏导出
+
+- **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id` 去重。
+- **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
+  - 保留：task 的 `kind`、`risk`、`tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`。
+  - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。
+  - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和所有未知字段。

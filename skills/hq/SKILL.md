@@ -194,7 +194,8 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
   - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
-- 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积；云端容器是临时的，不需要。
+- 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积。
+- **保存进仓库**（PLAYBOOK `runs_persist`）：`branch` 时整批结束后运行同目录的 `scripts/runs-persist.sh save branch`（写进专用分支 `hq/runs` 并推送，不碰工作区）；退出码 3（推不上去）就改用 `save commit`，并把 PLAYBOOK 改成 `runs_persist: commit`。`commit` 时直接 `save commit`（提交到当前分支，随本批改动一起推）。云端运行且 PLAYBOOK 没写这项时，第一次汇报里问用户一次（推荐 `branch`），答案写进 PLAYBOOK，不再问；本地没写就是 `off`。
 - **小结**：每批结束后在台账“小结”区写 3 到 5 行要点，并把本项目特有的经验更新进 `.hq/PLAYBOOK.md`（模板 `references/playbook-template.md`；最多 30 条，每条附证据，新的替换旧的）。
 - 累计约 5 次运行或 20 个任务时，在汇报里提示用户运行 `/hq-retro` 做复盘校准。
 
@@ -223,6 +224,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - `budget_usd: <数额>`：单次运行的花费上限，超出前按停止条件 2 处理。
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 - `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
+- `runs_persist: off | branch | commit`（本地默认 `off`，云端没写时问一次）：运行记录是否保存进仓库，见第 9 步。
 
 ## 台账格式（`.hq/LEDGER.md`）
 
