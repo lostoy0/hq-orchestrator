@@ -24,7 +24,7 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.4.4)
+.claude-plugin/plugin.json             plugin manifest (v0.4.5)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -59,9 +59,9 @@ tests/                                 self-tests for resources.sh, cli-worker.s
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.4.4` tag to `~/.hq-orchestrator/v0.4.4`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.4.5` tag to `~/.hq-orchestrator/v0.4.5`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -89,7 +89,7 @@ When not run from inside the repository, the script first uses git to download t
 
 **Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq` and `/hq-retro` commands)
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.4
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.5
 ```
 The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so. Update with `gemini extensions update hq-orchestrator`.
 
@@ -122,11 +122,11 @@ After committing, cloud sessions started from this repository can use `/hq` and 
 
 ## Upgrading
 
-First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.4`; substitute the version you are upgrading to.
+First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.5`; substitute the version you are upgrading to.
 
 | Install method | How to upgrade |
 |---|---|
-| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh \| bash -s -- --update` |
+| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh \| bash -s -- --update` |
 | Option 0 (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
 | Option 0a (Gemini extension) | `gemini extensions update hq-orchestrator` |
 | Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |
@@ -159,6 +159,29 @@ cli-worker.sh list
 /hq Add CSV export to the api service, with tests and docs; frontend changes must be run end-to-end on my machine
 ```
 The main session first decides whether orchestration is worth it (work expected to take under about 30 minutes, or that is tightly coupled, is done directly). It then sends you the plan (task table, tier and model for each task, run location, concurrency, estimated time) as a notification and **starts dispatching without waiting for confirmation**. You can check progress at any time by asking, or by reading `.hq/LEDGER.md` directly.
+
+## Standing mode: keep one session as the coordinator
+
+By default `/hq <goal>` handles one batch. To keep going batch after batch in the same session (for example, when the session already holds a lot of context and you don't want to start over), use standing mode:
+```
+/hq --stay Finish the CSV export first
+```
+If you type just `/hq --stay` with no goal, it first explores the project (ledger, roadmap, TODOs, open issues, recent commits, test status and so on; for a large project it sends a read-only sub-task to look) and gives numbered recommendations with their sources, then waits for you: reply "do 1 and 3" to run only those, "go with the recommendation" to run all of them, or state your own goal. On entry it always waits for your choice and never starts on its own. If it finds no clear pending work, it lists what it checked and asks you for a goal.
+
+After that, just state the next goal, such as "next batch: add permission checks to the export". Each batch ends with a report whose last line says it is standing by for the next goal; asking questions in between does not exit.
+
+After each batch report it recommends the next batch (up to 5 items, each with its source, estimated tier and time). Sources are the ledger's backlog, unfinished items from the earlier conversation, and the project's roadmap, TODOs, open issues and failing tests. Reply with numbers ("do 1 and 3") to run only those, or "go with the recommendation" to run all of them. When nothing actionable is left and the overall goal is met, it says plainly that all project tasks are done and nothing more can be executed, and lists the sources it checked. It does not invent work to fill the list; things that need keys, a deploy or your own action are listed separately and do not count as actionable. To have it keep going on its recommendations without waiting, say "continue automatically with the recommendations" (budget and stop conditions still apply). Say "exit standing mode" or `/hq --stop` to end it.
+
+**Taking over a session that is already open**: a skill installed after a session started usually only shows up in `/hq` after you reopen the session. To avoid that, type this in the session (replace the path with your skill directory; `find ~/.claude ~/.agents -path '*hq/SKILL.md'` finds it):
+```
+Read ~/.claude/skills/hq/SKILL.md in full and take over this session in its standing mode: first write what we have already finished and decided into the ledger's takeover background, then wait for my goal.
+```
+In a session without file access, paste all of `PROMPT.md` and then say "standing".
+
+Notes:
+- The main session records the skill path in the `.hq/LEDGER.md` header (`skill_path`) and rereads the skill and the ledger after context compaction. If it ever starts doing the work itself instead of dispatching, say "reread SKILL.md and stay in standing mode".
+- Sub-sessions cannot see the chat, so earlier progress goes into the ledger's takeover background. Even if you later have to open a new session, it can pick up by reading SKILL.md and the ledger.
+- Each batch still starts by deciding whether orchestration is worth it, and small goals are done directly; to force dispatching, add "dispatch this batch too" to the goal.
 
 ## Autonomous execution and stop conditions
 - The main session decides technical approach, models, task split and retries on its own, and logs each decision in the ledger's "Decisions" section.

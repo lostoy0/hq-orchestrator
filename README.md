@@ -24,7 +24,7 @@
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.4）
+.claude-plugin/plugin.json             plugin 清单（v0.4.5）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
@@ -59,9 +59,9 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.4` 标签下载到 `~/.hq-orchestrator/v0.4.4`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.4.5` 标签下载到 `~/.hq-orchestrator/v0.4.5`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/inst
 
 **方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 命令）
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.4
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.5
 ```
 扩展只含技能和命令，不含子代理模板（同一个仓库也是 Claude Code 插件，根目录放 `agents/` 会被 Claude Code 当成自己的子代理）。要让档位生效，再运行 `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'` 安装模板；与扩展同时装了技能时，Gemini CLI 优先用用户目录的副本，安装脚本会提示。更新：`gemini extensions update hq-orchestrator`。
 
@@ -122,11 +122,11 @@ mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-ret
 
 ## 升级
 
-先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.4` 为例，换成要升级到的版本即可。
+先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.5` 为例，换成要升级到的版本即可。
 
 | 安装方式 | 升级方法 |
 |---|---|
-| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh \| bash -s -- --update` |
+| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh \| bash -s -- --update` |
 | 方式 0（已 clone 仓库） | `git pull` 后运行 `./install.sh --update`；项目范围加 `--scope project --project-dir <路径>` |
 | 方式 0a（Gemini 扩展） | `gemini extensions update hq-orchestrator` |
 | 方式 0b（`npx skills add`） | 重新运行一次同样的 `npx skills add` 命令覆盖 |
@@ -159,6 +159,29 @@ cli-worker.sh list
 /hq 给 api 服务加上导出 CSV 功能，并补齐测试和文档；前端改动要在我本机跑 e2e
 ```
 主会话先判断值不值得编排（预计不到约 30 分钟或高度耦合的工作直接自己做），然后把计划（任务表、各任务的档位和模型、运行位置、并发数、预计用时）作为通知发给你，**不等确认就开始派发**。进度可以随时问，也可以直接查看 `.hq/LEDGER.md`。
+
+## 常驻模式：让一个会话一直当总指挥
+
+默认 `/hq <目标>` 只管一批。想在同一个会话里一批接一批地推进（比如会话已经有很多上下文，不想换新会话），用常驻模式：
+```
+/hq --stay 先把导出 CSV 做完
+```
+不给目标、只输入 `/hq --stay` 时，它会先探索项目（台账、路线图、TODO、open issue、最近提交、测试状态等；项目大时派只读子任务去看），给出带编号和来源的推荐任务，然后等你选：回复“做 1、3”只做选中的，回复“按推荐”全部做，或者直接说你自己的目标。进入时一定等你选，不会自动开始。没找到明确的待办时，它会说明查过哪些地方，请你给目标。
+
+之后直接说下一个目标即可，例如“下一批：给导出加权限校验”。每批做完会汇报，末尾写“常驻中，等待下一个目标”；中间提问不会退出。
+
+每批汇报后会自动推荐下一批（最多 5 条，每条附来源、预计档位和用时）。来源是台账待办、之前对话里没做完的事、项目里的路线图、TODO、open issue 和失败的测试。回复编号（如“做 1、3”）只做选中的，回复“按推荐”全部做。一条可执行的都没有、总目标也已达成时，它会明确说“项目当前所有任务都已执行完毕，没有更多可执行任务了”，并列出检查过哪些来源。它不会为凑数编任务；要密钥、部署或需要你操作的事单独列出，不算可执行任务。想让它不等回复按推荐一直做下去，就说“按推荐自动继续”（仍受预算和停止条件约束）。说“退出常驻”或 `/hq --stop` 结束。
+
+**接管一个已经开着的会话**：会话启动后才装的技能，通常要重开会话才会出现在 `/hq` 里。不想重开时，在那个会话里输入下面这句（路径换成你的技能目录，可用 `find ~/.claude ~/.agents -path '*hq/SKILL.md'` 查找）：
+```
+读取 ~/.claude/skills/hq/SKILL.md 全文，按其中“常驻模式”接管本会话：先把我们之前对话里已做完的事和已定的决策写进台账“接管背景”，然后等我给目标。
+```
+没有文件访问权限的会话，把 `PROMPT.md` 整段粘进去，再说“常驻”。
+
+注意：
+- 主会话会把技能路径记在 `.hq/LEDGER.md` 头部（`skill_path`），上下文被压缩后自己重读技能和台账。万一发现它开始亲自干活、不再派子会话，说一句“重新读取 SKILL.md，继续常驻”即可。
+- 子会话看不到聊天记录，所以接管时之前的进度要写进台账“接管背景”。以后即使必须换新会话，也只要让新会话读 SKILL.md 和台账就能接上。
+- 每批仍会先判断值不值得编排，小目标会直接自己做；要强制派发就在目标里写“这批也全部派出去”。
 
 ## 自主执行与停止条件
 - 技术方案、模型、拆分、重试都由主会话自己决定，每个决策记进台账“决策”区。
