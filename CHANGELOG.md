@@ -20,6 +20,13 @@
 
 ## 未发布
 
+### 拿不准难度时所有宿主都往上选一步
+- **改动**：`calibration.md` 规则 9 从“只对低成本宿主上调一档”改为所有宿主都上调一步：`cost_weight: low` 上调一整档；`high`（如 Claude Code）默认只把思考深度上调一级、模型不变，模糊度 ≥1 或风险 2 时上调一整档；上限一步，不动用 `xhigh`/`max`；notes 标记改为 `bias:+1(tier)` / `bias:+1(effort)`（旧 `bias:+1(cost_low)` 等同 `tier`）。规则 1 补一句指向规则 9。`SKILL.md` 第 3 步、`hosts/codex.md`、`dsh.md`、`deepseek.md`、`generic.md`、`playbook-template.md` 的 `cost_weight` 注释、README 中英文、PROMPT.md 同步。
+- **原因/假设**：用户偏好（2026-11-25）：难度评估不太确定时，尽量提高一档模型或思考深度。原规则在 Claude Code 上拿不准仍选最低档，失败重来的代价（重新熟悉项目、交接丢上下文）通常大于差价。假设：高成本宿主只上调思考深度就能拿到大部分收益，花费增幅小于换模型。
+- **验收指标**：带 `bias:+1(*)` 标记的任务，一次通过率比同档未上调的任务高至少 10 个百分点（每组至少 5 个任务）；`high` 宿主上调后每任务平均 cost_usd 增幅不超过 30%；返工率不上升。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
 ### Codex 辅助执行者实机核实；修 macOS 上 W 通道起不来、Codex worker 提交不了
 - **改动**：`scripts/cli-worker.sh` 启动 runner 时，没有 `setsid`（macOS）就改用 `python3` 的 `os.setsid()` + exec；runner 新增第 5 个参数，后端设 `BE_COMMIT=1` 时，CLI 退出码为 0 且 worktree 有改动，就在沙箱外 `git add -A && git commit` 到 `hq/<id>`（失败只写 `log`）。`scripts/backends/codex.sh` 在 `workspace-write` 下设 `BE_COMMIT=1` 并写 notes，文件头改为“已实机核实”。`tests/fixtures/fake-cli/codex` 按实测事件格式补 `thread.started`、`error` 警告项、`agent_message`、`cache_write_input_tokens`，新增 `FAKE_WRITE`；`tests/test_cli_worker.sh` 新增代提交 5 项用例；`tests/test_install.sh` 的 `wc -l` 去掉 BSD 前导空格。`references/hosts/codex.md` §5 第 1、3、7 条、`references/runtimes.md` W 节 codex 行的核实状态同步更新。
 - **原因/假设**：2026-11-25 在 macOS 26.6.2 上用 codex-cli 0.172.0（模型 gpt-6.2-sol）实跑：① macOS 没有 `setsid`，`cli-worker.sh start` 后 runner 根本没起来，状态一直是 `unknown`（`test_cli_worker.sh` 27 项失败）；② Codex `workspace-write` 沙箱把 `.git` 当受保护路径，worktree 里 `git add` 建不了 `index.lock`，worker 无法提交，`--add-dir` 主仓库 `.git` 也无效。`-m`、`-c model_reasoning_effort=low|medium`、`-s read-only|workspace-write`、`--json`、`-` 都被接受（会话记录 `turn_context` 显示生效），usage 字段与 `be_usage` 一致，无需改。假设：代提交后，Codex 辅助任务在 macOS 上能按 `hq/<id>` 分支交付，主宿主照常审核。
@@ -107,7 +114,7 @@
 - **复盘报告**：无（人工改动）
 
 ### 常驻模式：推荐下一批与完工声明
-- **改动**：`SKILL.md` 常驻模式加“推荐下一批”：每批汇报后从台账（待办池、未派衍生任务、BLOCKED/FAILED、后续问题）、会话（接管背景未完成项、总目标未覆盖部分）和项目（路线图、待验证项、TODO/FIXME、open issue、失败测试）收集候选，只保留有来源的，最多 5 条并排序；回复“按推荐”开始，用户说过“按推荐自动继续”时直接开下一批。没有可执行候选且总目标已满足时明确声明“项目当前所有任务都已执行完毕，没有更多可执行任务了”，附检查过的来源。进入常驻时建“总目标”和“待办池”。内容多时派 T0/T1 只读调研，主会话不亲自读。`metrics-schema.md` run 加可选字段 `from_recommendation`、`recommended_next`。`PROMPT.md`、README 中英文同步。
+- **改动**：`SKILL.md` 常驻模式加“推荐下一批”：每批汇报后从台账（待办池、未派衍生任务、BLOCKED/FAILED、后续问题）、会话（接管背景未完成项、总目标未覆盖部分）和项目（路线图、待验证项、TODO/FIXME、open issue、失败测试）收集候选，只保留有来源的，最多 5 条并排序；回复“按推荐”开始，用户说过“按推荐自动继续”时直接开下一批。没有可执行候选且总目标已满足时明确声明“项目当前所有任务都已执行完毕，没有更多可执行任务了”，附检查过的来源。进入常驻时建“总目标”和“待办池”。内容多时派 T0/T1 只读调研，主会话不亲自读。`metrics-schema.md` run 加可选字段 `from_recommendation`、`recommended_next`。`PROMPT.md`、README 中英文、PROMPT.md 同步。
 - **原因/假设**：用户不用每批自己想下一步；有证据的推荐减少遗漏，明确的完工声明避免空转或硬编任务。
 - **补充（无目标进入）**：`/hq --stay` 不带目标时先探索项目（推荐来源之外补看 README/docs 定位、近 20 条提交、未合并分支、轻量测试和 lint、过期依赖或文档；大项目派 T1 只读调研），给出编号推荐，等用户回复编号、“按推荐”或自己的目标，进入时一律不自动开始；没找到待办时请用户给目标，不说完工。推荐统一编号，可按编号挑选。
 - **验收指标**：无目标进入时，用户选用了至少一条推荐的比例 ≥ 50%；常驻 run 中 `from_recommendation=true` 的占比 ≥ 50%（推荐有用）；来自推荐的批次质量门槛不差于用户直接给目标的批次；完工声明后用户又指出“还有没做的既有任务”的次数 = 0。

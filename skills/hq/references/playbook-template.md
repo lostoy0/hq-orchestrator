@@ -27,7 +27,7 @@ assist:                   # 辅助执行者（calibration.md 规则 10），默�
       cli: claude         # 经 claude CLI 接 Kimi 的 Anthropic 兼容接口，见 references/hosts/kimi.md
       env_file: ~/.hq/env/kimi.env   # 只写路径；文件里放 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN，chmod 600
       models: {T0: <模型>, T1: <模型>, T2: <模型>}
-cost_weight:              # 按计费方的额度成本，影响 calibration.md 规则 9（拿不准时是否上调一档）。默认如下
+cost_weight:              # 按计费方的额度成本，影响 calibration.md 规则 9（拿不准时都上调一步：low 上调一整档，high 默认只上调思考深度一级）。默认如下
   claude-code: high
   codex: low
   dsh: low
