@@ -1,6 +1,6 @@
 # 设计草案：支持更多代理工具（OpenCode、Cursor、Gemini CLI 等）与一键安装
 
-状态：v0.4.0 已实现第 4.2、4.3 节（登记表、`--host auto`、最小目录集合、`--list/--update/--uninstall`）、4.1 的引导脚本和 `npx skills add` 说明，以及通用宿主文档；v0.4.1 实现了 4.4 的模板生成器（codex、opencode 两种格式）和第 5 节的 OpenCode 原生适配；v0.4.2 实现了第 6 节的 W 后端（opencode、gemini、cursor）；其余（Gemini 扩展、Cursor/Gemini 原生子代理）为后续版本。外部工具的路径和参数来自 2026-11-25 的官方文档检索，**未实机运行**，标“待核实”的必须实机确认后才能写进宿主文档。
+状态：v0.4.0 已实现第 4.2、4.3 节（登记表、`--host auto`、最小目录集合、`--list/--update/--uninstall`）、4.1 的引导脚本和 `npx skills add` 说明，以及通用宿主文档；v0.4.1 实现了 4.4 的模板生成器（codex、opencode 两种格式）和第 5 节的 OpenCode 原生适配；v0.4.2 实现了第 6 节的 W 后端（opencode、gemini、cursor）；v0.4.3 实现了 Gemini 扩展清单和 Gemini CLI 原生宿主（扩展不带子代理，见 `adapters/gemini/README.md`）；剩下 Cursor 原生子代理，等子代理格式和模型选择核实后再做。外部工具的路径和参数来自 2026-11-25 的官方文档检索，**未实机运行**，标“待核实”的必须实机确认后才能写进宿主文档。
 
 ## 1. 现状与问题
 

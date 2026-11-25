@@ -18,12 +18,13 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 | DeepSeek backend · path 2: Claude Code with DeepSeek | `hosts/deepseek.md` | Tiers collapse to flash/pro; cloud sub-sessions (B) still use Claude models |
 | DeepSeek backend · path 3: Codex with DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | Config example from official summaries, to be tested |
 | **OpenCode (V2)** | `hosts/opencode.md` + `adapters/opencode/` | Native host since v0.4.1: `hq-t0…t4` sub-agents each carry `provider/model#variant`, so tiers apply per task; **only the official docs were read, not run on a real machine** |
-| Cursor, Gemini CLI (one-command install since v0.4) | `hosts/generic.md` | Basic support: skill directories registered from the official docs, **not run on a real machine**; with a shell, use the W channel, otherwise **degraded mode** (the main session executes serially itself with the same plan, ledger and quality gates). Native sub-agent adapters are planned in `docs/design-more-hosts.md` |
+| **Gemini CLI** | `hosts/gemini.md` + `adapters/gemini/` + `gemini-extension.json` | Native host since v0.4.3: `hq-t0…t4` sub-agents each carry a `model` (no reasoning-effort setting, tiers differ by model only); installable as a Gemini extension with `/hq` and `/hq-retro` commands; **only the official docs were read, not run on a real machine** |
+| Cursor (one-command install since v0.4) | `hosts/generic.md` | Basic support: skill directories registered from the official docs, **not run on a real machine**; with a shell, use the W channel, otherwise **degraded mode** (the main session executes serially itself with the same plan, ledger and quality gates). Native sub-agent adapters are planned in `docs/design-more-hosts.md` |
 | Other tools that support SKILL.md | `hosts/generic.md` | Same as above; installable with `npx skills add` (see Installation) |
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.4.2)
+.claude-plugin/plugin.json             plugin manifest (v0.4.3)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -44,6 +45,9 @@ adapters/render.sh                     generates each host's hq-t0…hq-t4 templ
 adapters/agent-dirs.tsv                install directories for sub-agent templates
 adapters/codex/                        Codex custom agent templates hq-t0…hq-t4 (generated, model names are placeholders)
 adapters/opencode/                     OpenCode V2 sub-agent templates hq-t0…hq-t4 (generated, no model set by default)
+adapters/gemini/                       Gemini CLI sub-agent templates hq-t0…hq-t4 (generated, no model set by default)
+gemini-extension.json                  Gemini CLI extension manifest: the whole repository installs with gemini extensions install
+commands/*.toml                        the Gemini extension's /hq and /hq-retro commands (Claude Code does not read .toml)
 adapters/hosts.tsv                     host registry: which skill directories each tool reads and how to detect it (add a line for a new host)
 adapters/skill-dirs.tsv                skill directory registry: personal and project paths
 install.sh                             one-command install: detects tools, copies the skills into the smallest covering set of directories, supports --list/--update/--uninstall; changes no config
@@ -55,9 +59,9 @@ tests/                                 self-tests for resources.sh, cli-worker.s
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.2/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.3/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.4.2` tag to `~/.hq-orchestrator/v0.4.2`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.4.3` tag to `~/.hq-orchestrator/v0.4.3`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -75,13 +79,19 @@ When not run from inside the repository, the script first uses git to download t
 | Tool-specific directory (used when installing for one tool) | `${DSH_HOME:-~/.dsh}/skills`, `~/.config/opencode/skills`, `~/.cursor/skills`, `~/.gemini/skills` (project scope: `skills/` under `.dsh/`, `.opencode/`, `.cursor/`, `.gemini/`) |
 
   OpenCode reads both of the first two, so with Claude Code and Codex both installed it sees two copies of the skill and loads one by its own rules. `--layout per-host` installs into every tool's own directory instead (the v0.3 `--host all` behavior).
-- `--with-agents`: also installs the chosen hosts' tier sub-agent templates `hq-t0…hq-t4`: Codex to `~/.codex/agents/*.toml`, OpenCode to `~/.config/opencode/agents/*.md` (project scope: `<project>/.codex/agents/`, `<project>/.opencode/agents/`). Adding `--model-map 'T0=<model>,…,T4=<model>'` generates templates with real models on the spot (one host at a time; Codex takes model names, OpenCode takes `provider/model` and gets `#low/#medium/#high` appended). Without it, Codex templates hold placeholders (must be replaced) and OpenCode templates set no model (inherit the parent session's model, so tiers do not apply). The old `--with-codex-agents` still works.
+- `--with-agents`: also installs the chosen hosts' tier sub-agent templates `hq-t0…hq-t4`: Codex to `~/.codex/agents/*.toml`, OpenCode to `~/.config/opencode/agents/*.md`, Gemini CLI to `~/.gemini/agents/*.md` (project scope: `<project>/.codex/agents/`, `<project>/.opencode/agents/`, `<project>/.gemini/agents/`). Adding `--model-map 'T0=<model>,…,T4=<model>'` generates templates with real models on the spot (one host at a time; Codex and Gemini take model names, OpenCode takes `provider/model` and gets `#low/#medium/#high` appended). Without it, Codex templates hold placeholders (must be replaced) and OpenCode and Gemini templates set no model (inherit the parent session's model, so tiers do not apply). The old `--with-codex-agents` still works.
   ```bash
   ./install.sh --host opencode --with-agents --model-map 'T0=<p/small>,T1=<p/mid>,T2=<p/mid>,T3=<p/best>,T4=<p/best>'
   ```
 - It only copies files and changes no config. Each copy gets a `.hq-install.json` (version, source, hosts); personal scope also writes `~/.hq/skill-path` so the skill can find its scripts. `--update`/`--uninstall` only touch copies with an install record (v0.3 installs have none; reinstall once with `--host … --force` to bring them in).
 - Exit codes: 0 success; 2 invalid arguments; 3 target exists (add `--force`, or use `--update`); 4 nothing to act on (no tool detected, nothing to update or remove); 5 download failed. All targets are checked first, so it never installs halfway.
-- Host notes: Codex usage in `hosts/codex.md`; dsh first-run steps in `hosts/dsh.md`; OpenCode in `hosts/opencode.md`; Cursor and Gemini CLI in `hosts/generic.md`.
+- Host notes: Codex usage in `hosts/codex.md`; dsh first-run steps in `hosts/dsh.md`; OpenCode in `hosts/opencode.md`; Gemini CLI in `hosts/gemini.md`; Cursor in `hosts/generic.md`.
+
+**Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq` and `/hq-retro` commands)
+```bash
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.3
+```
+The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so. Update with `gemini extensions update hq-orchestrator`.
 
 **Option 0b: community installer** (covers 70+ agent tools, skills only)
 ```bash
@@ -181,7 +191,8 @@ codex and dsh cannot be installed in this repository's development environment, 
 - Claude Code: the flags for starting cloud tasks from the local CLI (channel D).
 - OpenCode (native host since v0.4.1): whether the `hq-t*` sub-agents are recognized and each tier's `model#variant` resolves; how to stop a sub-agent; token/cost fields in `opencode session export`; permission prompts when several background sub-agents run at once.
 - New W backends (v0.4.2): run `start/status/usage/stop` once each with `opencode run`, `gemini -p` and `cursor-agent -p` on your machine; check the flags are accepted and `usage` returns tokens (cursor's usage field names are unknown); whether gemini can run shell commands under `auto_edit`.
-- Cursor, Gemini CLI (basic support in v0.4): after `--host auto`, whether each tool discovers and triggers the hq skill; whether Cursor also reads `~/.agents/skills`; whether `npx skills add` brings `scripts/` and `references/` along.
+- Gemini CLI (native host since v0.4.3): whether `gemini extensions install` works and `/hq` activates the skill; whether the `hq-t*` sub-agents load and their models apply; whether several sub-agent calls in one turn run in parallel; how to read sub-agent usage; after installing the Claude Code plugin, `commands/*.toml` must not show up as commands.
+- Cursor (basic support in v0.4), Gemini CLI: after `--host auto`, whether each tool discovers and triggers the hq skill; whether Cursor also reads `~/.agents/skills`; whether `npx skills add` brings `scripts/` and `references/` along.
 
 **After installing codex, run these to check the flags**:
 ```bash
@@ -206,7 +217,7 @@ Ask codex to list the available agents and confirm hq-t0…hq-t4 are recognized.
 - usage: whether tokens in `.hq/runs/*.jsonl` match the DeepSeek console bill (cost_usd is computed at Claude prices and is not reliable).
 
 ## Known limitations
-- The Codex adaptation, dsh, the DeepSeek backend and OpenCode/Cursor/Gemini CLI have no real-machine run data yet; see the previous section. Cursor/Gemini CLI only have basic support for now, so tiers do not apply; OpenCode sub-agents share the main session's working directory, so hq creates a worktree first for code-changing tasks.
+- The Codex adaptation, dsh, the DeepSeek backend and OpenCode/Cursor/Gemini CLI have no real-machine run data yet; see the previous section. Cursor only has basic support for now, so tiers do not apply; OpenCode and Gemini CLI sub-agents share the main session's working directory, so hq creates a worktree first for code-changing tasks.
 - Whether the local CLI can create cloud sub-sessions directly depends on the CLI version (see channel D in runtimes.md). Monitoring these sub-sessions is weaker. When you need strong monitoring, put the main session in the cloud and handle local tasks through "connect computer".
 - In-process sub-agents share the same machine as the main session. Resource protection can only control dispatch pacing and cannot limit processes that sub-agents start themselves. So the parallelism limits in task briefs matter.
 - In-process sub-agents only report a token total that cannot be split out from cache reads, so `tokens` is left empty for those tasks; cost comparisons rely mainly on `cost_usd` from cloud sub-sessions.

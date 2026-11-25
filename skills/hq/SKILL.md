@@ -37,7 +37,8 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **codex**：能看到 `~/.codex/`、能用 codex 的子代理功能。读 `references/hosts/codex.md`（接 DeepSeek 后端时另读 `hosts/deepseek.md`）。
   - **dsh**（DeepSeek Harness）：工具列表里有 `subagent`、`list_subagent_models`、`list_agents`，或存在 `~/.dsh/`、`$DSH_HOME`。读 `references/hosts/dsh.md`；`$DSH_HOME` 非默认时把上面 find 的 `~/.dsh/skills` 换成 `$DSH_HOME/skills`。
   - **opencode**：工具列表里有 `subagent`（参数为 agent ID、`description`、`prompt`、可选 `sessionID`，没有 `list_subagent_models`），或系统提示表明是 OpenCode，或存在 `.opencode/`、`~/.config/opencode/`。读 `references/hosts/opencode.md`（子代理和主会话共用工作目录，改代码任务要先建 worktree）。
-  - **cursor / gemini / other**（Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）：读 `references/hosts/generic.md`，按其识别表记 host；有 shell 且 `worker_clis` 允许时用 W，否则用降级模式。
+  - **gemini**：系统提示表明是 Gemini CLI，或工具列表里有 `activate_skill`、`run_shell_command`，或存在 `.gemini/`、`~/.gemini/`。读 `references/hosts/gemini.md`（子代理同步执行、与主会话共用工作区，改代码任务要先建 worktree）。
+  - **cursor / other**（Cursor 及其他支持 SKILL.md 的工具）：读 `references/hosts/generic.md`，按其识别表记 host；有 shell 且 `worker_clis` 允许时用 W，否则用降级模式。
   - 识别后读对应的 `references/hosts/<host>.md`，按其能力表使用下面的抽象能力。
 - **我在哪**：宿主文档说明怎样判断云端会话还是本地；只有云端会话通常才有 remote_workers 和 local_machine。
 - **有哪些派发通道**（通用规则见 `references/runtimes.md`，具体调用见宿主文档）：
@@ -48,7 +49,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 codex、claude、opencode、gemini 或 cursor 的命令行，任何有 shell 的宿主都能用（各 CLI 的沙箱映射见 `references/runtimes.md` W 节）。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
-- **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
 - **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 

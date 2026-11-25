@@ -18,6 +18,26 @@
 
 ---
 
+## v0.4.3（2026-11-25）
+
+本版本让整个仓库可以作为 Gemini CLI 扩展安装，并把 Gemini CLI 升级为原生宿主。依据 GitHub google-gemini/gemini-cli 的官方文档（2026-11-24 的提交：`docs/extensions/reference.md`、`docs/core/subagents.md`、`docs/cli/skills.md`、`docs/cli/custom-commands.md`），**没有实机运行**；官方把子代理标为预览功能。
+
+### Gemini 扩展
+- **改动**：仓库根目录新增 `gemini-extension.json`（name `hq-orchestrator`，不设 `contextFileName`）和 `commands/hq.toml`、`commands/hq-retro.toml`（`/hq <目标>`、`/hq-retro`，提示模型用 `activate_skill` 激活对应技能，`{{args}}` 传目标）；扩展的技能直接用现有 `skills/`。扩展**不带**子代理：根目录 `agents/` 会被 Claude Code 插件当成自己的子代理加载，所以模板放在 `adapters/gemini/agents/` 由 install.sh 安装。`install.sh` 在 `--host gemini` 且已装扩展时提示重复（用户目录的技能优先于扩展）；卸载提示包含 Gemini 模板和扩展卸载命令。版本号在 install.sh、两个 Claude 清单和 Gemini 清单四处一致（有测试）。
+- **原因/假设**：只用 Gemini CLI 的用户一条 `gemini extensions install` 就能装好，并有和 Claude Code 一致的 `/hq` 入口。
+- **验收指标**：`tests/test_install.sh` 全部通过；用户反馈“扩展装不上 / `/hq` 激活不了技能”的问题数 = 0；Claude Code 插件里不出现 `commands/*.toml` 对应的命令。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### Gemini CLI 原生宿主
+- **改动**：新增 `skills/hq/references/hosts/gemini.md`（子代理以同名工具 `hq-t0…t4` 调用、同步返回、不能续发消息；与主会话共用工作区，改代码任务先建 worktree；没有思考深度，只靠模型区分档位；用量填 null，W 通道可读；成本系数默认 low）。`adapters/render.sh` 新增 gemini 格式（`name`、`description`、`kind: local`、可选 `model`、`max_turns: 100`、`timeout_mins: 60`），生成 `adapters/gemini/agents/` 和 README；`agent-dirs.tsv` 加 `~/.gemini/agents`；`hosts.tsv` 中 gemini 改为 native。`SKILL.md` 加 gemini 识别，脚本查找路径加扩展目录；`runtimes.md`、`calibration.md`（Gemini 行、规则 9 成本系数）、`generic.md` 同步。`tests/test_install.sh` 增至 71 项。
+- **原因/假设**：Gemini CLI 子代理可在定义文件里设 `model`，档位能逐任务生效，比降级模式快。
+- **验收指标**：3c 按宿主/通道 → `gemini/A` 组有 ≥3 个任务时一次通过率 ≥ 70%；notes 含 `tier:not-applied` 的 gemini 任务占比 ≤ 20%；问题数里“子代理越界改主工作区” = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.4.2（2026-11-25）
 
 ### W 通道后端化，新增 opencode、gemini、cursor

@@ -36,6 +36,7 @@
 | Codex | 见 `references/hosts/codex.md` 第 3 节 | | | | |
 | dsh（DeepSeek Harness，DeepSeek 推荐路径） | flash / low | flash / low | flash / medium | pro / medium | pro / high |
 | OpenCode | 见 `references/hosts/opencode.md` 第 3 节（`hq-t0…t4` 子代理，`provider/model#variant`） | | | | |
+| Gemini CLI | 见 `references/hosts/gemini.md` 第 3 节（`hq-t0…t4` 子代理，只靠模型区分档位） | | | | |
 | DeepSeek 后端（经 Claude Code / Codex） | 见 `references/hosts/deepseek.md` 第 3 节 | | | | |
 | 其他 / 降级模式 | 按“所需能力”从宿主可用模型中选 | | | | |
 
@@ -58,13 +59,14 @@
 7. 账户里有其他模型（比如新出的型号）时，按它的能力和价格放进上表合适的档位，并在台账“决策”区注明理由。
 8. 用户纠正过的选档偏好，后续任务沿用，并在下次复盘时写进本文件。
 9. **按额度成本调整（用户偏好，2026-11-25）**：子会话的额度越便宜，“选高了”浪费越少，“选低了”失败重来相对越贵，所以低成本宿主拿不准时往上选。
-   - **成本系数**（默认值；项目 PLAYBOOK 的 `cost_weight` 可以覆盖）：Claude Code 为 `high`；Codex、dsh、DeepSeek 后端（经 Claude Code 或 Codex 接入、按 DeepSeek 计费）为 `low`。按**实际计费方**判断：即使宿主接的是 DeepSeek，派到 claude.ai 云端子会话（B 通道）的任务仍按 Claude 额度计，算 `high`。
+   - **成本系数**（默认值；项目 PLAYBOOK 的 `cost_weight` 可以覆盖）：Claude Code 为 `high`；Codex、dsh、Gemini CLI、DeepSeek 后端（经 Claude Code 或 Codex 接入、按 DeepSeek 计费）为 `low`。按**实际计费方**判断：即使宿主接的是 DeepSeek，派到 claude.ai 云端子会话（B 通道）的任务仍按 Claude 额度计，算 `high`。
    - **拿不准**指以下任一情况：总分离上一档分数线只差 1 分；模糊度 ≥1；你在两个档位之间犹豫。
    - `low` 宿主遇到拿不准的情况：**上调一档**（T0→T1 … T3→T4）。最多上调一档；不因此动用“必要时更高一级”或 `max` 思考深度。`high` 宿主仍按规则 1 选最低能胜任的档位。
    - **不上调的情况**：任务在关键路径上、而且高档明显更慢（例如用户在等一个小改动）；已经遇到频率限制（429 / 限流），这时回到原档并在 notes 记 `rate_limited`。
    - **记录**：上调的任务在 task 记录的 notes 写 `bias:+1(cost_low)`。复盘时对比上调和未上调的一次通过率、实际用时；如果上调没有提高一次通过率、只拉长了用时，就提出收回这条规则或缩小适用范围。
 
 ## 变更记录
+- 0.4.3（2026-11-25）：新增 Gemini CLI 映射行（指向宿主文档），档位数值不变；规则 9 的成本系数里 Gemini CLI 默认按 low。
 - 0.4.1（2026-11-25）：新增 OpenCode 映射行（指向宿主文档），档位数值不变。
 - 0.3.2（2026-11-25）：新增规则 9，低成本宿主（Codex、dsh、DeepSeek 后端）拿不准难度时上调一档；用户偏好，待复盘验证。
 - 0.3.1（2026-11-25）：新增 dsh 宿主映射行，档位数值不变。

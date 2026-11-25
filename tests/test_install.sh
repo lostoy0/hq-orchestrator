@@ -163,7 +163,7 @@ fi
 
 # 20. 版本号一致：install.sh 与 plugin.json、marketplace.json
 v=$(sed -n 's/^HQ_VERSION=//p' "$INST")
-grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/plugin.json" && grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/marketplace.json" && ok "版本号一致 ($v)" || bad "version" "install.sh=$v"
+grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/plugin.json" && grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/marketplace.json" && grep -q "\"version\": \"$v\"" "$REPO/gemini-extension.json" && ok "版本号一致 ($v)" || bad "version" "install.sh=$v"
 
 # 21. 登记表的每个宿主都有说明，读取目录都在 skill-dirs.tsv 里
 okreg=1
@@ -222,6 +222,47 @@ HOME="$T/h" OPENCODE_AGENTS_DIR="$T/ag" bash "$INST" --host opencode --with-agen
 # 29. dry-run + model-map 不写入
 fresh; HOME="$T/h" bash "$INST" --host opencode --with-agents --model-map 'T0=a/b' --dry-run >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && [ -z "$(find "$T/h" -type f)" ] && ok "dry-run + --model-map 不写入" || bad "dry map" "rc=$rc"
+
+# ---------- v0.4.3：Gemini 扩展与 Gemini 子代理 ----------
+# 30. 扩展清单与目录结构
+python3 - "$REPO" >"$T/out" 2>&1 <<'PY2'
+import json,sys,os,tomllib
+r=sys.argv[1]; errs=[]
+m=json.load(open(os.path.join(r,"gemini-extension.json")))
+if m.get("name")!="hq-orchestrator": errs.append("name")
+if not m.get("description"): errs.append("description")
+if "contextFileName" in m: errs.append("contextFileName 会把文件注入每个会话")
+if os.path.exists(os.path.join(r,"GEMINI.md")): errs.append("根目录不应有 GEMINI.md（会自动注入上下文）")
+if os.path.isdir(os.path.join(r,"agents")): errs.append("根目录不应有 agents/（Claude Code 插件会加载）")
+for s in ("hq","hq-retro"):
+    if not os.path.isfile(os.path.join(r,"skills",s,"SKILL.md")): errs.append("skills/"+s)
+for c,skill in (("hq","hq"),("hq-retro","hq-retro")):
+    t=tomllib.load(open(os.path.join(r,"commands",c+".toml"),"rb"))
+    if not t.get("description") or "{{args}}" not in t.get("prompt","") or ("技能名 "+skill) not in t["prompt"]: errs.append("commands/"+c)
+if [f for f in os.listdir(os.path.join(r,"commands")) if not f.endswith(".toml")]: errs.append("commands/ 只放 .toml")
+print("\n".join(errs)); sys.exit(1 if errs else 0)
+PY2
+[ $? = 0 ] && ok "Gemini 扩展清单、技能、命令结构正确" || bad "gemini extension" "$(cat "$T/out")"
+# 31. gemini 模板：与生成器一致；name 与文件名一致、kind local、默认不写 model
+bash "$R" --format gemini --check "$REPO/adapters/gemini/agents" >"$T/out" 2>&1 && ok "gemini 模板与 tiers.tsv 一致" || bad "gemini render check" "$(cat "$T/out")"
+bad31=""
+for f in "$REPO"/adapters/gemini/agents/hq-t*.md; do
+  fm=$(awk 'NR==1{next} /^---$/{exit} {print}' "$f"); n=$(basename "$f" .md)
+  echo "$fm" | grep -qx "name: $n" || bad31="$bad31 $n:name"
+  echo "$fm" | grep -qx 'kind: local' || bad31="$bad31 $n:kind"
+  echo "$fm" | grep -q '^model:' && bad31="$bad31 $n:model"
+  echo "$fm" | grep -qx 'timeout_mins: 60' || bad31="$bad31 $n:timeout"
+done
+[ -z "$bad31" ] && ok "gemini 模板格式（name/kind/timeout，默认无 model）" || bad "gemini fmt" "$bad31"
+rm -rf "$T/r"; bash "$R" --format gemini --out "$T/r" --model-map 'T0=g-small,T4=g-pro' >/dev/null 2>&1
+grep -qx 'model: g-small' "$T/r/hq-t0.md" && grep -qx 'model: g-pro' "$T/r/hq-t4.md" && ! grep -q '^model:' "$T/r/hq-t2.md" && ok "gemini --model-map 填模型名" || bad "gemini map" "$(grep -h '^model' "$T/r"/*.md)"
+# 32. install --host gemini --with-agents；已装扩展时提示
+fresh; HOME="$T/h" bash "$INST" --host gemini --with-agents --model-map 'T0=a,T1=b,T2=b,T3=c,T4=c' >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(ls "$T/h/.gemini/agents"/hq-t*.md 2>/dev/null | wc -l)" = 5 ] && grep -qx 'model: c' "$T/h/.gemini/agents/hq-t3.md" && [ -f "$T/h/.gemini/skills/hq/SKILL.md" ] && ok "gemini --with-agents 装到 ~/.gemini/agents" || bad "gemini agents" "rc=$rc $(tail -2 "$T/out")"
+fresh; mkdir -p "$T/h/.gemini/extensions/hq-orchestrator"; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && grep -q "已装 Gemini 扩展" "$T/out" && ok "已装 Gemini 扩展时提示重复" || bad "gemini ext notice" "rc=$rc"
+fresh; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1
+! grep -q "已装 Gemini 扩展" "$T/out" && ok "未装扩展时不提示" || bad "gemini ext no notice" "-"
 
 echo "----"
 echo "SUMMARY: $pass passed, $fail failed"

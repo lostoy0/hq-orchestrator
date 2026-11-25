@@ -1,23 +1,23 @@
-# 宿主适配：通用（Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）
+# 宿主适配：通用（Cursor 及其他支持 SKILL.md 的工具）
 
 ## 1. 概述与适用范围
 
-- 适用：还没有专门宿主文档的工具。v0.4.0 起 `install.sh` 能把技能装到 Cursor、Gemini CLI 读取的目录（见 `adapters/hosts.tsv`，级别 `basic`），这些工具在 hq 里统一按本文件运行。**OpenCode 自 v0.4.1 起有专门文档 `opencode.md`**；版本为 V1 或没装 `hq-t*` 子代理时也可按本文件降级运行。
-- 核实状态（2026-11-25）：技能目录来自各工具官方文档，**没有实机运行**。各工具的原生子代理（Cursor `.cursor/agents/`、Gemini CLI `.gemini/agents/`）**暂不使用**，等专门的宿主文档核实后再接（计划见 `docs/design-more-hosts.md`）。
+- 适用：还没有专门宿主文档的工具。v0.4.0 起 `install.sh` 能把技能装到 Cursor 等工具读取的目录（见 `adapters/hosts.tsv`，级别 `basic`），这些工具在 hq 里统一按本文件运行。**OpenCode（v0.4.1 起）和 Gemini CLI（v0.4.3 起）有专门文档 `opencode.md`、`gemini.md`**；它们没装 `hq-t*` 子代理（或 OpenCode 为 V1）时也可按本文件降级运行。
+- 核实状态（2026-11-25）：技能目录来自各工具官方文档，**没有实机运行**。各工具的原生子代理（Cursor `.cursor/agents/`）**暂不使用**，等专门的宿主文档核实后再接（计划见 `docs/design-more-hosts.md`）。
 - **识别特征**（任一即可；结果写进台账头部，`host` 记对应 id）：
 
 | host | 特征 |
 |---|---|
 | `opencode` | 见 `opencode.md`；只在它无法使用时（V1 版本、没装 `hq-t*`）按本文件降级 |
 | `cursor` | 系统提示表明是 Cursor Agent；有 `.cursor/` 或 `~/.cursor/` |
-| `gemini` | 系统提示表明是 Gemini CLI；有 `.gemini/` 或 `~/.gemini/` |
+| `gemini` | 见 `gemini.md`；只在没装 `hq-t*` 子代理时按本文件降级（W 通道用 `--cli gemini`） |
 | `other` | 都不符合 |
 
 ## 2. 能力表
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | 有 shell 时用 W 通道。**优先用宿主自己的 CLI**（不需要 `worker_clis` 授权）：Gemini CLI 宿主用 `cli-worker.sh start --cli gemini --model <m> ...`，Cursor 宿主用 `--cli cursor`；能按任务指定模型，档位因此生效。其他 CLI（codex、claude、opencode）属跨厂商，需 `worker_clis` 授权 | 降级模式：主会话按同样的计划**串行**亲自执行，channel 记 `main` |
+| spawn_worker | 有 shell 时用 W 通道。**优先用宿主自己的 CLI**（不需要 `worker_clis` 授权）：Cursor 宿主用 `cli-worker.sh start --cli cursor --model <m> ...`（Gemini CLI 降级时用 `--cli gemini`）；能按任务指定模型，档位因此生效。其他 CLI（codex、claude、opencode）属跨厂商，需 `worker_clis` 授权 | 降级模式：主会话按同样的计划**串行**亲自执行，channel 记 `main` |
 | monitor | W：`cli-worker.sh status --id <id>` / `list` | 降级模式下不需要 |
 | message_worker | 不支持 | W 任务 `stop` 后带补充信息重新 `start` |
 | stop_worker | W：`cli-worker.sh stop --id <id>` | — |
@@ -44,7 +44,7 @@
 ## 5. 已知限制与待核实项
 
 1. 只装了技能，档位不生效；大目标在降级模式下是串行的，用时会明显长于原生宿主。
-2. OpenCode 已在 v0.4.1 升级为原生宿主（见 `opencode.md`）。
+2. OpenCode（v0.4.1）、Gemini CLI（v0.4.3）已升级为原生宿主（见 `opencode.md`、`gemini.md`）。
 3. 待核实：Cursor 子代理的文件格式、能否指定模型；`agent -p` 的 `--model` 参数（团队管理员可禁用 headless）。
-4. 待核实：Gemini CLI 子代理模型只能在 `settings.json` 的 `agents.overrides` 设置；`gemini -p -m <model> --output-format json` 作为 W 后端。
+4. Gemini CLI 的子代理已确认可在定义文件里设 `model`（官方文档），见 `gemini.md`。
 5. 待核实：Cursor 是否读取 `~/.agents/skills`（登记表暂未计入，Cursor 按 `~/.claude/skills` 覆盖）。

@@ -3,7 +3,7 @@
 # 兼容 bash 3.2（macOS 自带），不使用关联数组。
 # 一行安装：curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v<版本>/install.sh | bash -s -- --host auto
 set -u
-HQ_VERSION=0.4.2
+HQ_VERSION=0.4.3
 HQ_REPO_URL_DEFAULT=https://github.com/lostoy0/hq-orchestrator.git
 
 usage() {
@@ -19,8 +19,8 @@ usage() {
            per-host 每个工具装到各自的专属目录
   目录对照见 adapters/skill-dirs.tsv、adapters/hosts.tsv。例如 ~/.agents/skills 可被 codex、dsh、opencode、gemini 读取，
   ~/.claude/skills 可被 claude、opencode、cursor 读取；所以 dsh 也会读取 ~/.agents/skills，装过 codex 的不必再装 dsh。
-  --with-agents      同时安装所选宿主的子代理档位模板 hq-t0…hq-t4（目前 codex、opencode；见 adapters/agent-dirs.tsv）
-  --model-map <映射> 生成模板时填入模型（只能配合一个宿主的模板）：codex 写模型名；opencode 写 provider/model[#variant]
+  --with-agents      同时安装所选宿主的子代理档位模板 hq-t0…hq-t4（目前 codex、opencode、gemini；见 adapters/agent-dirs.tsv）
+  --model-map <映射> 生成模板时填入模型（只能配合一个宿主的模板）：codex、gemini 写模型名；opencode 写 provider/model[#variant]
   --with-codex-agents 只装 Codex 模板（旧写法，不管 --host 是什么都装）
   不在仓库里运行时（如 curl | bash），先把 v\$HQ_VERSION（可用 HQ_REF 覆盖）下载到 ~/.hq-orchestrator/<ref> 再安装。
 退出码: 0 成功; 2 参数非法; 3 目标已存在(加 --force 覆盖); 4 没有可操作的对象; 5 下载失败
@@ -237,7 +237,7 @@ if [ "$action" = update ] || [ "$action" = uninstall ]; then
 $found
 EOF
   [ -n "$first" ] && write_skill_path "$first"
-  [ "$action" = uninstall ] && echo "完成。子代理模板（如装过）不会自动删除：~/.codex/agents/hq-t*.toml、~/.config/opencode/agents/hq-t*.md，或项目里的 .codex/agents/、.opencode/agents/。"
+  [ "$action" = uninstall ] && echo "完成。子代理模板（如装过）不会自动删除：~/.codex/agents/hq-t*.toml、~/.config/opencode/agents/hq-t*.md、~/.gemini/agents/hq-t*.md，或项目里的 .codex/agents/、.opencode/agents/、.gemini/agents/。Gemini 扩展请用 gemini extensions uninstall hq-orchestrator。"
   exit 0
 fi
 
@@ -315,6 +315,10 @@ for k in "${KEYS[@]}"; do base=$(dir_path "$k"); rd=$(readers_of "$k")
 done
 write_skill_path "$first"
 
+# 已装 Gemini 扩展时提醒：用户目录的技能优先于扩展里的同名技能
+if in_list gemini "${HOSTS[@]}" && [ -d "$HOME/.gemini/extensions/hq-orchestrator" ]; then
+  echo "注意: 已装 Gemini 扩展 hq-orchestrator；Gemini CLI 会优先用这次装到用户/项目目录的副本，扩展里的同名技能被覆盖。建议只留一种（卸载扩展: gemini extensions uninstall hq-orchestrator）。"
+fi
 # 同一工具从多个目录读到同名技能时提醒
 for h in "${HOSTS[@]}"; do n=0
   for k in "${KEYS[@]}"; do reads "$h" "$k" && n=$((n+1)); done

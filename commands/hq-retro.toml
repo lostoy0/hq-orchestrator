@@ -1,0 +1,7 @@
+# Gemini CLI 扩展命令：/hq-retro。只在 Gemini CLI 里生效。
+description = "HQ 复盘：汇总运行数据、核对上次改动、给出有证据的改进建议"
+prompt = """
+激活 hq-retro 技能（activate_skill，技能名 hq-retro），然后严格按它的流程做一次复盘。
+
+补充说明（可为空）：{{args}}
+"""
