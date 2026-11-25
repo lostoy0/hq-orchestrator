@@ -18,7 +18,7 @@
 
 ---
 
-## 未发布
+## v0.5.3（2026-11-25）
 
 加许可证（Apache-2.0 加 Commons Clause）和仓库配套文件，不改任何技能行为。
 
@@ -26,7 +26,7 @@
 - **改动**：新增 `LICENSE`（Apache-2.0 官方全文，前面加 Commons Clause v1.0 条件）；`plugin.json`、`marketplace.json` 加 `author`、`homepage`、`repository`、`license`（`SEE LICENSE IN LICENSE`，组合协议没有单一 SPDX 标识）；两个 `SKILL.md` 的 frontmatter 加 `license`（只装技能目录时也能看到许可）；中英文 README 末尾加“许可与商用”一节；新增 `CONTRIBUTING.md`（含贡献授权条款）、`SECURITY.md`、PR 模板、问题报告模板、`.github/workflows/test.yml`（ubuntu 和 macOS 上跑全部自测）。
 - **原因/假设**：任何人可以免费使用（含公司内部和商业项目），但不得把本项目打包出售或收费提供托管、咨询、支持；作者自己可以出售和收费支持。贡献条款让作者能把外部贡献放进自己出售的版本。假设：这些文件不影响技能行为，也不影响安装和测试。
 - **验收指标**：`tests/` 全部通过（与改动前一致）；CI 在 ubuntu 和 macOS 上首次运行通过。
-- **状态**：待验证（macOS 本机自测全部通过；ubuntu 的 CI 尚未运行）
+- **状态**：待验证（macOS 本机自测全部通过；PR #17 的 CI 在 ubuntu 和 macOS 上全部通过）
 - **复盘报告**：无（人工改动）
 
 ---

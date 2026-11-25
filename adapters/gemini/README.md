@@ -4,7 +4,7 @@
 
 **方式 A：Gemini 扩展（推荐给只用 Gemini CLI 的人）**
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.5.2
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.5.3
 ```
 仓库根目录的 `gemini-extension.json` 让整个仓库成为一个扩展：提供 `skills/hq`、`skills/hq-retro` 两个技能和 `commands/hq.toml`、`commands/hq-retro.toml` 两个命令（`/hq <目标>`、`/hq-retro`）。更新用 `gemini extensions update hq-orchestrator`，卸载用 `gemini extensions uninstall hq-orchestrator`。扩展**不带**子代理模板（见下），装完后可再单独装模板。
 
