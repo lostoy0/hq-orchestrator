@@ -3,7 +3,9 @@
 ## 1. 概述与适用版本
 
 - 适用：Codex CLI（目标版本 0.172.0）作为 hq 的宿主，另可用 W 通道启动 `codex exec` 子进程。
-- 核实状态：**以下内容尚未用 CLI help 核实**（2026-11-25，本环境安装 codex 被拒绝，没能看 `codex --help`）。来源是任务说明转述的、限定官方域名的搜索摘要：Codex 支持 SKILL.md；子代理在自定义 agent 的 TOML 里设 `model`、`model_reasoning_effort`，不设则继承父会话；并发上限 `agents.max_concurrent_threads_per_session`（旧名 `agents.max_threads`）；`codex exec` 有 `-m`、`-c key=value`、`-s`、`--json`；有 issue 报告 `codex cloud exec` 不支持指定 model 和 effort。以上都待核实。
+- 核实状态（2026-11-25，本环境装不了 codex，没有实机运行）：
+  - **已按官方文档核对**（限定官方域名的搜索摘要）：自定义 agent 放在 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），每个文件一个 agent，必填 `name`、`description`、`developer_instructions`，可选 `model`、`model_reasoning_effort`、`model_reasoning_summary`、`model_verbosity`；文件里的值优先，只设 model 时沿用之前解析出的 effort；`sandbox_mode`、`approval_policy`、`model_provider`、`mcp_servers` 写在 agent 文件里不覆盖父会话；缺 `developer_instructions` 的文件据报被忽略，`instructions`、`reasoning_effort` 键不生效。技能目录：个人 `~/.agents/skills/`，仓库 `.agents/skills/`。`codex exec` 不传提示词或传 `-` 时从 stdin 读到 EOF 再执行；`--json` 逐行输出 JSON 事件，`turn.completed` 带 usage（input_tokens 含 cached_input_tokens，output_tokens 含 reasoning_output_tokens，值为线程累计）。
+  - **仍待核实**：`-m`、`-c key=value`、`-s` 的确切写法；并发上限 `agents.max_concurrent_threads_per_session`（旧名 `agents.max_threads`）；`codex cloud exec` 不支持指定 model 和 effort 的 issue。
 - 本文件涉及的 claude 参数（W 通道用）已用 `claude --help`（2.1.331）核实：`-p/--print`、`--model`、`--output-format stream-json`、`--effort`、`--verbose`、`--permission-mode`。
 
 ## 2. 能力表
@@ -14,7 +16,7 @@
 | monitor | 原生子代理：用 Codex 自带的线程/子代理状态查看（具体命令待核实）。W 通道：`cli-worker.sh status --id <id>`，输出 `out.jsonl` 看进度 | 主会话定期 `cli-worker.sh list` |
 | message_worker | 原生子代理：向运行中的子代理补充信息的方式待核实。W 通道不支持 | `stop` 后带补充信息重新 `start`（新 id）|
 | stop_worker | 原生：由主线程中止子代理（待核实）。W 通道：`cli-worker.sh stop --id <id>`（TERM，10 秒后 KILL，worktree 保留）| 等它自然结束，不合并其结果 |
-| worker_usage | W 通道：`cli-worker.sh usage --id <id>`，解析 `out.jsonl` 的 usage；tokens = input + output + cache_write，不含 cache_read（codex 的 `input_tokens` 含 cached，脚本已扣除）；cost_usd 一般拿不到。原生子代理的用量取法待核实 | 拿不到填 null，不估算 |
+| worker_usage | W 通道：`cli-worker.sh usage --id <id>`，解析 `out.jsonl` 里 `turn.completed` 的 usage；tokens = input + output + cache_write，不含 cache_read（codex 的 `input_tokens` 含 cached，脚本已扣除；output 已含 reasoning，不重复加；usage 是线程累计值，单次 exec 取最后一条）；cost_usd 一般拿不到。原生子代理的用量取法待核实 | 拿不到填 null，不估算 |
 | schedule_checkin | Codex 很可能没有定时唤醒能力（待核实）| 主会话在等待期间定期运行 `cli-worker.sh list` |
 | remote_workers | `codex cloud`（待核实）。已有 issue 报告 `codex cloud exec` 不支持指定 model 和 effort，档位可能不生效 | 用 W 通道在本机跑，或主会话串行 |
 | local_machine | 不适用：Codex CLI 本来就在本地运行 | — |
@@ -37,14 +39,14 @@
 ## 4. 安装与调用
 
 - 技能：复制 `skills/hq/` 到 `~/.agents/skills/hq`（个人）或仓库 `.agents/skills/hq`。
-- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到官方规定目录（预计 `~/.codex/agents/` 或 `.codex/agents/`，待核实），并替换模型占位符，见 `adapters/codex/README.md`。
-- W 通道：`bash skills/hq/scripts/cli-worker.sh start --id t2 --cli codex --model <m> --brief <文件>`；简报经 stdin 传入。
+- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），或用 `./install.sh --host codex --with-codex-agents`（按 `--scope` 自动选目录）；然后替换模型占位符，见 `adapters/codex/README.md`。
+- W 通道：`bash skills/hq/scripts/cli-worker.sh start --id t2 --cli codex --model <m> --brief <文件>`；简报经 stdin 传入。sandbox 默认 `workspace-write`；`danger-full-access` 必须另加 `--allow-dangerous`，否则拒绝（退出码 2）。
 
 ## 5. 已知限制与待核实项
 
-1. codex 的全部参数（`exec`、`-m`、`-c model_reasoning_effort=`、`-s`、`--json`、PROMPT 为 `-` 时读 stdin）未经 help 核实，cli-worker.sh 的 codex 分支按此编写，只在假 CLI 上测过。
-2. agent TOML 的字段名和放置目录待核实。
-3. codex `--json` 事件里 usage 的字段名（脚本按 `usage.input_tokens/cached_input_tokens/output_tokens` 解析）待核实；解析不到就是 null。
+1. `codex exec` 的 `-m`、`-c model_reasoning_effort=`、`-s` 未经 `codex exec --help` 核对（`--json`、`-` 读 stdin 已按官方文档核对）；cli-worker.sh 的 codex 分支只在假 CLI 上测过。
+2. agent TOML 的字段名和放置目录已按官方文档核对，未实机运行。
+3. usage 字段名已按官方文档核对；恢复会话（`exec resume`）时 usage 是累计值，cli-worker.sh 不处理 resume，用到时需自行做差。
 4. 原生子代理的监控、补充信息、中止、用量取法待核实。
 5. 是否有定时唤醒能力待核实，暂按没有处理。
 6. `codex cloud` 的 model/effort 可能不生效；`xhigh` 是否支持待核实。

@@ -49,11 +49,25 @@ fresh
 HOME="$T/h" CODEX_AGENTS_DIR="$T/ag" bash "$T/repo/install.sh" --host codex --with-codex-agents >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && [ -f "$T/ag/hq-t0.toml" ] && ok "agent 模板复制到 CODEX_AGENTS_DIR" || bad "agents copy" "rc=$rc"
 
+# 10b. 不设 CODEX_AGENTS_DIR：个人范围 -> ~/.codex/agents，项目范围 -> <项目>/.codex/agents
+fresh
+HOME="$T/h" bash "$INST" --host codex --with-codex-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.codex/agents/hq-t2.toml" ] && [ ! -e "$T/p/.codex" ] && ok "个人范围 agent 装到 ~/.codex/agents" || bad "agents user dir" "rc=$rc"
+fresh
+HOME="$T/h" bash "$INST" --host codex --scope project --project-dir "$T/p" --with-codex-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/p/.codex/agents/hq-t2.toml" ] && [ ! -e "$T/h/.codex" ] && ok "项目范围 agent 装到 <项目>/.codex/agents" || bad "agents project dir" "rc=$rc"
+
+# 10c. agent 目标已存在 => 3，且技能也不装（不装一半）
+fresh; mkdir -p "$T/p/.codex/agents"; echo keep >"$T/p/.codex/agents/hq-t0.toml"
+HOME="$T/h" bash "$INST" --host codex --scope project --project-dir "$T/p" --with-codex-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 3 ] && [ ! -e "$T/p/.agents/skills/hq" ] && grep -q keep "$T/p/.codex/agents/hq-t0.toml" && ok "agent 已存在退出码 3 且不装一半" || bad "agents exists" "rc=$rc"
+
 # 11. 非法参数 => 2
 for args in "" "--host foo" "--host claude --scope x" "--host claude --bogus" "--host"; do
   fresh; inst $args; rc=$?
   [ $rc = 2 ] && ok "非法参数 '$args' 退出码 2" || bad "invalid '$args'" "rc=$rc"
 done
 
-echo "通过 $pass，失败 $fail"
+echo "----"
+echo "SUMMARY: $pass passed, $fail failed"
 [ $fail -eq 0 ]

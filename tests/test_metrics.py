@@ -61,6 +61,7 @@ class MetricsTest(unittest.TestCase):
         self.assertTrue(grp(r["by_tier"], "T3")["insufficient"])
         self.assertEqual(grp(r["by_tier"], "unknown")["n"], 2)
         self.assertEqual(grp(r["by_model"], "sonnet/low")["n"], 5)
+        self.assertEqual(sum(g["n"] for g in r["by_host_channel"]), r["overview"]["tasks"])
 
     def test_efficiency_and_autonomy(self):
         r = rep(FIX)

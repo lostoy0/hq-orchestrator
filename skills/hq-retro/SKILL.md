@@ -16,7 +16,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 ## 路径约定
 
 - 运行数据：目标项目的 `.hq/runs/*.jsonl`；本地运行时还有 `~/.claude/hq/runs/*.jsonl`。
-- 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills .claude/skills .agents/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
+- 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills .claude/skills .agents/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
 - 项目经验：`.hq/PLAYBOOK.md`（模板 `skills/hq/references/playbook-template.md`）。
 - 改动历史：插件仓库的 `CHANGELOG.md`。找不到就在报告里写明，当作“没有上次改动”。
 - 这些文件都只读，复盘本身不修改它们（PLAYBOOK 除外，见第 7 步）。
@@ -59,7 +59,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 6. **监控与记录**：wall/关键路径（巡检不及时、收尾慢会拉高它）；缺记录任务数。
 7. **自主性**：停下来找用户的次数、用户纠正次数，哪些本可以自己决定。
 8. **成本**：以 `cost_usd` 为主、`tokens`（不含缓存读取）为辅；开销最大的任务类型，是否值得。
-9. **跨宿主、跨厂商对比**：按 `host`、`channel`（含 W）和 model 前缀（`<cli>:`）分组比较一次通过率、返工率、cost_usd。每组至少 3 个任务才比较，不足就写“样本不足”；结论按第 7 步分层。
+9. **跨宿主、跨厂商对比**：用 metrics 报告“3c 按宿主/通道”（含 W、`main`）和“3b 按模型”（model 前缀 `<cli>:`）分组比较一次通过率、返工率、cost_usd。每组至少 3 个任务才比较，不足就写“样本不足”；结论按第 7 步分层。
 
 ### 5. 证据门槛
 

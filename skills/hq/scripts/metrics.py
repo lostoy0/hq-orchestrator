@@ -249,6 +249,8 @@ def build(runs, corrupt):
     tiers = group(tasks, lambda t: t["tier"] if isinstance(t.get("tier"), str) else "unknown")
     models = group(tasks, lambda t: "%s/%s" % (t["model"] if isinstance(t.get("model"), str) else "unknown",
                                                t["effort"] if isinstance(t.get("effort"), str) else "unknown"))
+    s_ = lambda t, k: t[k] if isinstance(t.get(k), str) else "unknown"
+    hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")))
     effs = [efficiency(i, runs[i]) for i in ids]
     rs = [ratio(t) for t in tasks if ratio(t) is not None]
     miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
@@ -258,7 +260,7 @@ def build(runs, corrupt):
                      "time_from": min(stamps)[1] if stamps else None, "time_to": max(stamps)[1] if stamps else None},
         "quality": {"overall": quality(tasks, rr),
                     "per_run": [dict(quality(runs[i]["tasks"], [runs[i]["run"] or {}]), run_id=i) for i in ids]},
-        "by_tier": tiers, "by_model": models,
+        "by_tier": tiers, "by_model": models, "by_host_channel": hosts,
         "efficiency": effs,
         "cost": cost_by_kind(tasks),
         "adjust": adjust(tasks),
@@ -306,6 +308,7 @@ def render_md(rep):
                 f(g["avg_cost_usd"]), f(g["avg_tokens"], "d"), f(g["ratio_median"]), "样本不足" if g["insufficient"] else ""]
     L += ["", "## 3a. 按档位", ""] + table(gh, [grow(g) for g in rep["by_tier"]])
     L += ["", "## 3b. 按模型/思考深度", ""] + table(gh, [grow(g) for g in rep["by_model"]])
+    L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
     L += ["", "## 4. 效率", ""]
     L += table(["run", "任务数", "wall/关键路径", "并行加速比", "max_concurrency", "throttle_events"],
                [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["max_concurrency"], "d"),

@@ -84,7 +84,7 @@
 示例：
 
 ```json
-{"type":"run","run_id":"20260101-a","project":"hq-orchestrator","goal":"增加指标汇总","started_at":"2026-01-01T10:00:00Z","ended_at":"2026-01-01T11:00:00Z","wall_min":60,"critical_path_min":40,"tasks":5,"max_concurrency":3,"throttle_events":1,"autonomy_stops":1,"decisions":2,"integration_pass":true,"plugin_version":"0.2.0"}
+{"type":"run","run_id":"20260101-a","project":"hq-orchestrator","goal":"增加指标汇总","started_at":"2026-01-01T10:00:00Z","ended_at":"2026-01-01T11:00:00Z","wall_min":60,"critical_path_min":40,"tasks":5,"max_concurrency":3,"throttle_events":1,"autonomy_stops":1,"decisions":2,"integration_pass":true,"host":"claude-code","plugin_version":"0.3.0"}
 ```
 
 ## 用量口径
@@ -93,7 +93,7 @@
 - **`tokens` = input + output + cache_write（创建缓存）**，**不含 cache_read（读取缓存）**。缓存读取单价很低、数量却很大，算进去会让 tokens 虚高，看不出真实工作量。
   - 以下 A、B 是 Claude Code 宿主的取法（详见 `hosts/claude-code.md`）。
   - B 通道：从 `get_session` 的 `usage` 里按上式相加；拿不到分项就写 null。
-  - W 通道：`cli-worker.sh usage <id>` 输出的 JSON，按同一口径取值。
+  - W 通道：`cli-worker.sh usage --id <id>` 输出的 JSON，按同一口径取值。
   - 其他宿主：按宿主文档的 worker_usage 一行取值。
   - A 通道：返回结果里的 `subagent_tokens` 只是总数、分不出缓存读取时，`tokens` 写 null，把原始总数记进 `notes`（如 `subagent_tokens=73000`），避免两种口径混在一起。
 - 主会话自己的消耗不计入任何 task 记录。

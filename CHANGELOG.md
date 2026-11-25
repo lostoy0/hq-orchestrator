@@ -18,6 +18,66 @@
 
 ---
 
+## v0.3.0（2026-11-25）
+
+本版本让插件宿主无关：能在 Claude Code、Codex 上运行，并能通过这两者接入 DeepSeek 后端；其他工具走 W 通道或降级模式。Codex 和 DeepSeek 部分**都没有实机运行过**，验证清单见 README“待核实项与本机验证清单”。验收指标都能从 `metrics.py` 报告直接读出（“小节名 → 列名”），新增“3c. 按宿主/通道”小节。
+
+### SKILL.md 宿主无关化与宿主文档
+- **改动**：`skills/hq/SKILL.md` 只用抽象能力（spawn_worker、monitor、message_worker、stop_worker、worker_usage、schedule_checkin、remote_workers、local_machine、concurrency_limit）；第 1 步按特征识别宿主；具体调用移到 `references/hosts/{claude-code,codex,deepseek}.md`，`runtimes.md` 改为能力和通道总览。
+- **原因/假设**：同一套流程能跑在多个宿主上，宿主差异集中在宿主文档里维护，SKILL.md 不再随某个宿主的工具名变化。
+- **验收指标**：3c 按宿主/通道 → 每个有 ≥3 个任务的宿主组，一次通过率 ≥ 70%；质量门槛 → Claude Code 宿主的漂移率不高于 v0.2 同类运行；缺记录任务数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### 抽象档位 + 宿主映射
+- **改动**：`skills/hq/calibration.md` 档位改为与宿主无关的 T0–T4“所需能力”，另列各宿主映射；首次在新宿主上运行时把实际映射写进 PLAYBOOK“选档偏好”。数值和修正规则不变。
+- **原因/假设**：不同宿主模型名不同，但难度分档逻辑相同；按宿主分开记录，复盘才能比较。
+- **验收指标**：3a 按档位 → 各档一次通过率 ≥ 80%（与 v0.2 相同阈值，不因换宿主下降）；PLAYBOOK 中每个用过的宿主都有映射行。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### W 通道：CLI 子进程 worker（含 sandbox 闸门）
+- **改动**：新增 `skills/hq/scripts/cli-worker.sh`（start/status/stop/usage/list），在 `.hq/worktrees/<id>` 里后台运行 `codex exec` 或 `claude -p`。sandbox 默认 `workspace-write`；`danger-full-access`（claude 为 `--dangerously-skip-permissions`）必须同时传 `--allow-dangerous`，否则退出码 2。codex 用量按 `turn.completed.usage` 计算：input 扣除 cached，output 已含 reasoning 不重复加，usage 为线程累计值。跨厂商 worker 须在 PLAYBOOK 授权区开启 `worker_clis`，默认关闭。测试 `tests/test_cli_worker.sh`（假 CLI）。
+- **原因/假设**：没有子代理能力的宿主也能并行；需要真正的进程隔离时有选择；高风险权限不能因一个参数或默认值被打开。
+- **验收指标**：3c 按宿主/通道 → `*/W` 组一次通过率 ≥ 70%、tokens 为 null 的比例 ≤ 20%；W 任务的漂移率 ≤ 10%。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### Codex 适配模板
+- **改动**：新增 `adapters/codex/agents/hq-t0…hq-t4.toml` 和说明。字段（必填 name/description/developer_instructions，可选 model/model_reasoning_effort）和目录（`~/.codex/agents/`、`<项目>/.codex/agents/`）已按官方文档核对（2026-11-25），未实机运行；模型名是占位符。
+- **原因/假设**：Codex 原生子代理按档位选 agent，比 W 通道开销小、能并行。
+- **验收指标**：3c 按宿主/通道 → `codex/*` 组一次通过率 ≥ 70%；复盘时 codex 宿主的 PLAYBOOK 有完整 T0–T4 映射。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### DeepSeek 后端两条接入路径
+- **改动**：新增 `references/hosts/deepseek.md`：路径一 Claude Code 接 DeepSeek（档位合成 flash/pro 两档，不设 `CLAUDE_CODE_SUBAGENT_MODEL`），路径二 Codex 接 DeepSeek。标注风险：官方建议的 `CLAUDE_CODE_EFFORT_LEVEL=max` 可能覆盖按档位设置的 effort（未下结论），`claude-code.md`、`calibration.md` 同步标注，task notes 记 `effort_env:max`；cost_usd 不可信，notes 记 `billing:deepseek`。
+- **原因/假设**：用户想用更便宜的后端；flash/pro 两档加思考深度能覆盖 T0–T4。
+- **验收指标**：DeepSeek 后端的 T3/T4 任务一次通过率 ≥ 70%（3a 按档位，按 notes 过滤）；带 `effort_env:max` 与不带的同档任务，平均 tokens 差异在复盘中有结论。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### 降级模式
+- **改动**：`SKILL.md` 第 1 步：宿主没有子代理能力也用不了 W 时，主会话按同样的计划、台账、质量门槛串行亲自执行，channel 记 `main`；此时暂停铁律 1（不做重活），其余铁律照常。`PROMPT.md` 同步。
+- **原因/假设**：在 OpenCode、Gemini CLI、Cursor 等工具里也能用同一套流程和数据记录。
+- **验收指标**：3c 按宿主/通道 → `*/main` 组漂移率 ≤ 10%、缺记录任务数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### install.sh
+- **改动**：新增 `install.sh --host claude|codex|both [--scope user|project] [--with-codex-agents] [--force] [--dry-run]`：技能装到 `.claude/skills` 或 `.agents/skills`；agent 模板个人范围装到 `~/.codex/agents`，项目范围装到 `<项目>/.codex/agents`。先检查全部目标（含 agent 模板），已存在退出码 3，不装一半；不改任何配置。测试 `tests/test_install.sh`。
+- **原因/假设**：多宿主的安装位置不同，手工复制容易放错。
+- **验收指标**：用户反馈的安装问题数 = 0（复盘看 user_corrections 备注）；`tests/test_install.sh` 全部通过。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### 运行数据增加宿主维度
+- **改动**：`metrics-schema.md` 的 task/run 增加可选字段 `host`；跨厂商 model 写成 `<cli>:<模型名>`；`metrics.py` 报告新增“3c. 按宿主/通道”；`/hq-retro` 复盘清单第 9 项做跨宿主、跨厂商对比（每组 ≥3 个任务才比较）。
+- **原因/假设**：没有宿主维度就无法判断哪个宿主、哪条通道更划算。
+- **验收指标**：3c 按宿主/通道 → `unknown/*` 组任务占比 ≤ 10%（新运行都应填 host）。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
 ## v0.2.0（2026-11-24）
 
 本版本是一次整体升级，下面每条都是假设，还没有数据。v0.1 没有运行数据，所以验收指标都写成绝对阈值，不和 v0.1 比；所有指标都能从 `metrics.py` 报告直接读出（“小节名 → 列名”）。

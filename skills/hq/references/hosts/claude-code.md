@@ -14,10 +14,10 @@
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
 | spawn_worker | A：`Agent(description, subagent_type="general-purpose"（只读调研用 "Explore"）, model, effort, isolation="worktree"（改代码必加）, run_in_background=True, prompt=<说明>)`。B：`mcp__claude-code-remote__create_session(title, prompt, source_url, source_revision, outcome_branch="hq/<id>", model, effort, tags=["hq:<项目>"])`，不要传 `permission_mode="plan"`。W：`bash <cli-worker.sh> start --id <id> --cli claude\|codex --model <m> [--effort <e>] --brief <文件>` | 没有 Agent 也没有 B：用 W；没有 shell：降级模式（主会话串行亲自做，channel 记 `main`） |
-| monitor | A：后台子代理完成自动通知，不要轮询；`TaskList` 看正在运行的。B：`list_sessions(children=true)` 看全局，`get_session(id)` 看 `status_bucket`（working / blocked / review_ready / completed / failed），`list_events(session_id, kinds=["result","assistant"], limit=100)` 看结果。W：`cli-worker.sh status <id>` / `list` | 等分支推送后 `git fetch` 审核 |
+| monitor | A：后台子代理完成自动通知，不要轮询；`TaskList` 看正在运行的。B：`list_sessions(children=true)` 看全局，`get_session(id)` 看 `status_bucket`（working / blocked / review_ready / completed / failed），`list_events(session_id, kinds=["result","assistant"], limit=100)` 看结果。W：`cli-worker.sh status --id <id>` / `list` | 等分支推送后 `git fetch` 审核 |
 | message_worker | A：`SendMessage` 发给子代理 id。B：`send_message(session_id, ...)`；子会话回报主会话也用它，说明里写上主会话 session_id（`get_session()` 不带参数可查自己的 id）。W：无回信通道 | 没有回信通道：worker 提前返回或写在交付格式里，主会话通过 monitor 读取 |
-| stop_worker | A：`TaskStop`。B：`interrupt_session`，收尾用 `archive_session`。W：`cli-worker.sh stop <id>` | 请用户手动停止 |
-| worker_usage | B：`get_session(id).usage`：`cost_usd` 直接用；tokens = input + output + cache_write，不加 cache_read。A：返回结果的 duration 写 `actual_min`；`subagent_tokens` 分不出缓存读取时 tokens 填 null，原值记进 notes。W：`cli-worker.sh usage <id>`（JSON） | 拿不到填 null，不估算 |
+| stop_worker | A：`TaskStop`。B：`interrupt_session`，收尾用 `archive_session`。W：`cli-worker.sh stop --id <id>` | 请用户手动停止 |
+| worker_usage | B：`get_session(id).usage`：`cost_usd` 直接用；tokens = input + output + cache_write，不加 cache_read。A：返回结果的 duration 写 `actual_min`；`subagent_tokens` 分不出缓存读取时 tokens 填 null，原值记进 notes。W：`cli-worker.sh usage --id <id>`（JSON） | 拿不到填 null，不估算 |
 | schedule_checkin | B 场景：`send_later(delay_minutes=N, message="HQ 巡检：读取 .hq/LEDGER.md，检查 RUNNING 任务")`；回报到达或任务全部完成后 `delete_trigger` 取消未触发的提醒 | A 自动通知，不需要；本地 CLI 无定时能力时在每次主会话回合检查 |
 | remote_workers | 云端会话：B（`mcp__claude-code-remote__*`），默认继承主会话云环境；需要其他网络或密钥时用 `list_environments` 查 `environment_id` 再传入。本地 CLI：D（先查 `claude --help` 有无创建云端会话的参数，如 `--remote`/`--cloud`，待核实） | 只用 A 或 W |
 | local_machine | 主会话在本地：直接执行。主会话在云端：C，`list_computer_folders`（只选 `online:true`）→ `request_computer_folder(environment_id, computer_name, folder)`（用户批准）→ 之后 Bash/Read/Edit 等工具带 `_host:"<电脑名>"`；一次只能连一台电脑的一个文件夹 | 连不上就标 BLOCKED，其余照常 |
@@ -33,7 +33,7 @@
 | T3 | opus | medium |
 | T4 | opus | high（必要时 xhigh） |
 
-`max` 只在用户明确要求时使用。W 通道跑 `claude -p` 时用同样映射；跑 `codex exec` 时见 `codex.md`，model 记为 `codex:<模型名>`。
+`max` 只在用户明确要求时使用。W 通道跑 `claude -p` 时用同样映射（sandbox 默认 workspace-write → `--permission-mode acceptEdits`；`danger-full-access` 必须另加 `--allow-dangerous`）；跑 `codex exec` 时见 `codex.md`，model 记为 `codex:<模型名>`。
 
 ## 4 安装与调用
 
@@ -61,4 +61,5 @@
 - 运行中的子会话改不了模型和思考深度。
 - A 的 `subagent_tokens` 不分缓存读取，tokens 常为 null。
 - 接 DeepSeek 后端时的模型名、档位映射、用量口径：见 `deepseek.md`。
+- **effort 风险（未下结论）**：DeepSeek 官方建议设 `CLAUDE_CODE_EFFORT_LEVEL=max`，它可能覆盖 hq 按档位传的 effort（A 通道的 `effort` 参数、W 通道的 `--effort`），使上表的思考深度列不生效，T0–T2 成本上升。是否覆盖待实测；设了该变量时，task 记录 notes 标注 `effort_env:max`，复盘时按此分组。
 - 待核实：D 通道 CLI 参数名；插件市场安装命令在各版本中的写法。

@@ -34,7 +34,19 @@ fi
 
 run() { if [ $dry -eq 1 ]; then echo "[dry-run] $*"; else "$@"; fi; }
 
-# 先检查所有目标，避免装一半
+# Codex 子代理档位模板（--with-codex-agents）：个人范围 ~/.codex/agents，项目范围 <项目>/.codex/agents
+# （已按 Codex 官方文档核对，2026-11-25，未实机运行）。CODEX_AGENTS_DIR 可显式覆盖（测试用）。
+adir=""; tpl=()
+if [ $agents -eq 1 ]; then
+  if [ -n "${CODEX_AGENTS_DIR:-}" ]; then adir=$CODEX_AGENTS_DIR
+  elif [ "$scope" = user ]; then adir="$HOME/.codex/agents"
+  else adir="$pdir/.codex/agents"; fi
+  shopt -s nullglob
+  tpl=("$ROOT"/adapters/codex/agents/*.toml)
+  shopt -u nullglob
+fi
+
+# 先检查所有目标（技能和 agent 模板），避免装一半
 targets=(); hosts=()
 [ "$host" = both ] && hosts=(claude codex) || hosts=("$host")
 for h in "${hosts[@]}"; do
@@ -48,6 +60,13 @@ for t in "${targets[@]}"; do
     echo "错误: 目标已存在: $base/$s ；如需覆盖请加 --force" >&2; exit 3
   fi
 done
+for f in "${tpl[@]}"; do
+  dst="$adir/$(basename "$f")"
+  if [ -e "$dst" ] && [ $force -eq 0 ]; then
+    echo "错误: 目标已存在: $dst ；如需覆盖请加 --force" >&2; exit 3
+  fi
+done
+
 for t in "${targets[@]}"; do
   IFS='|' read -r h base s <<<"$t"
   run mkdir -p "$base"
@@ -56,23 +75,15 @@ for t in "${targets[@]}"; do
   echo "安装 $s -> $base/$s"
 done
 
-# Codex 子代理档位模板；目标目录以 hosts/codex.md 为准
 if [ $agents -eq 1 ]; then
-  adir="${CODEX_AGENTS_DIR:-$HOME/.codex/agents}"
-  shopt -s nullglob
-  tpl=("$ROOT"/adapters/codex/agents/*.toml)
-  shopt -u nullglob
   if [ ${#tpl[@]} -eq 0 ]; then
     echo "提示: 未找到 adapters/codex/agents/*.toml 模板，跳过 --with-codex-agents"
   else
     run mkdir -p "$adir"
     for f in "${tpl[@]}"; do
       dst="$adir/$(basename "$f")"
-      if [ -e "$dst" ] && [ $force -eq 0 ]; then
-        echo "错误: 目标已存在: $dst ；如需覆盖请加 --force" >&2; exit 3
-      fi
       run cp "$f" "$dst"
-      echo "安装 agent 模板 -> $dst"
+      echo "安装 agent 模板 -> $dst（请替换其中的 model 占位符）"
     done
   fi
 fi

@@ -30,7 +30,7 @@ st=$(W status --id c1); [ "$(jget "$st" exit_code)" = 0 ] && [ "$(jget "$st" end
 grep -q 'exec -m m1' .hq/workers/c1/out.jsonl && grep -q 'model_reasoning_effort=low' .hq/workers/c1/out.jsonl && grep -q -- '-s workspace-write --json' .hq/workers/c1/out.jsonl && ok "codex args passed" || bad "codex args passed" "$(head -1 .hq/workers/c1/out.jsonl)"
 grep -q 'do the task' .hq/workers/c1/out.jsonl && ok "brief delivered via stdin" || bad "brief delivered" "no"
 
-# usage codex: (1000-400)+50=650
+# usage codex: (1000-400)+50=650（reasoning 已含在 output 里，不重复加）
 u=$(W usage --id c1)
 [ "$(jget "$u" tokens)" = 650 ] && [ "$(jget "$u" cost_usd)" = null ] && ok "usage codex parsed" || bad "usage codex" "$u"
 
@@ -54,6 +54,17 @@ if ! kill -0 "$pid" 2>/dev/null && [ "$(jget "$(W status --id s1)" state)" != ru
 # 5 分支重复
 W start --id c1 --cli codex --model m1 --brief "$T/brief.md" >/dev/null 2>&1; rc=$?
 [ $rc -ne 0 ] && [ $rc -ne 2 ] && ok "duplicate branch errors" || bad "duplicate branch errors" "rc=$rc"
+
+# 5b 默认 sandbox 与 danger-full-access 闸门
+grep -q -- '--permission-mode acceptEdits' .hq/workers/k1/out.jsonl && ! grep -q -- 'dangerously' .hq/workers/k1/out.jsonl && ok "claude default sandbox is workspace-write (acceptEdits)" || bad "claude default sandbox" "$(head -1 .hq/workers/k1/out.jsonl)"
+for c in claude codex; do
+  W start --id d-$c --cli $c --model m --brief "$T/brief.md" --sandbox danger-full-access >/dev/null 2>&1; rc=$?
+  [ $rc -eq 2 ] && [ ! -e .hq/worktrees/d-$c ] && ! git show-ref --verify --quiet refs/heads/hq/d-$c && ok "$c danger-full-access without --allow-dangerous -> exit 2, nothing created" || bad "$c danger gate" "rc=$rc"
+done
+W start --id da1 --cli claude --model m --brief "$T/brief.md" --sandbox danger-full-access --allow-dangerous >/dev/null 2>&1
+s=$(wait_state da1 done); grep -q -- '--dangerously-skip-permissions' .hq/workers/da1/out.jsonl && ok "claude danger allowed with --allow-dangerous" || bad "claude danger allowed" "$s"
+W start --id da2 --cli codex --model m --allow-dangerous --brief "$T/brief.md" --sandbox danger-full-access >/dev/null 2>&1
+s=$(wait_state da2 done); grep -q -- '-s danger-full-access' .hq/workers/da2/out.jsonl && ok "codex danger allowed with --allow-dangerous" || bad "codex danger allowed" "$s"
 
 # 6 list / unknown
 n=$(W list | wc -l); [ "$n" -ge 4 ] && ok "list shows workers" || bad "list" "$n"

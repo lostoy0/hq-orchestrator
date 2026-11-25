@@ -59,11 +59,13 @@ export ANTHROPIC_AUTH_TOKEN="<YOUR_DEEPSEEK_API_KEY>"   # 占位符，替换为�
 export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro"   # 官方示例为 deepseek-flash[1m]；改 pro 见上文，待核实
 export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-flash"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash"
-export CLAUDE_CODE_EFFORT_LEVEL="max"                   # 官方建议；hq 按档位另设 effort，是否被它覆盖待核实
+export CLAUDE_CODE_EFFORT_LEVEL="max"                   # 官方建议；可能覆盖 hq 按档位设的 effort（待实测），见下文
 # 不要设置 CLAUDE_CODE_SUBAGENT_MODEL（原因见第 3 节）
 ```
 
 变量名 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 为 Claude Code 通用写法，DeepSeek 页具体用哪个待核实。
+
+**`CLAUDE_CODE_EFFORT_LEVEL` 与档位的关系（未下结论）**：若它覆盖 A 通道的 `effort` 参数和 W 通道的 `--effort`，第 3 节的思考深度列就不生效，所有档位都按 max 跑（T0–T2 成本上升、用时变长）。设了该变量时，task 记录 notes 标注 `effort_env:max`；想让档位生效可不设它，再用小任务对比两种设置（见 README 验证清单）。`claude-code.md`、`calibration.md` 已同步标注此风险。
 
 ### 路径二配置示例（`~/.codex/config.toml`，依官方“Integrate with Codex”摘要，字段细节待核实）
 

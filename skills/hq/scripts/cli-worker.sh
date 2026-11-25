@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # HQ W 通道：在独立 git worktree 里后台启动 codex exec / claude -p 作为 worker 进程。
 # 用法:
-#   cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox workspace-write]
+#   cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>]
+#                       [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
+#   默认 sandbox 为 workspace-write。danger-full-access 必须同时加 --allow-dangerous，否则报错退出（码 2）。
 #   cli-worker.sh status|stop|usage --id <id>
 #   cli-worker.sh list
 # 状态目录 .hq/workers/<id>/: out.jsonl log cmd pid exit_code started_at ended_at meta
@@ -11,7 +13,8 @@ set -u
 usage() {
   cat >&2 <<'U'
 用法:
-  cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access]
+  cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
+  （danger-full-access 必须同时加 --allow-dangerous）
   cli-worker.sh status --id <id>
   cli-worker.sh stop --id <id>
   cli-worker.sh usage --id <id>
@@ -23,8 +26,9 @@ die() { echo "cli-worker: $*" >&2; exit 1; }
 
 [ $# -ge 1 ] || usage
 CMD=$1; shift
-ID=""; CLI=""; MODEL=""; EFFORT=""; BRIEF=""; BASE=""; SANDBOX="workspace-write"
+ID=""; CLI=""; MODEL=""; EFFORT=""; BRIEF=""; BASE=""; SANDBOX="workspace-write"; ALLOW_DANGER=0
 while [ $# -gt 0 ]; do
+  if [ "$1" = --allow-dangerous ]; then ALLOW_DANGER=1; shift; continue; fi
   [ $# -ge 2 ] || usage
   case $1 in
     --id) ID=$2;; --cli) CLI=$2;; --model) MODEL=$2;; --effort) EFFORT=$2;;
@@ -71,6 +75,11 @@ do_start() {
   [ -n "$CLI" ] && [ -n "$MODEL" ] && [ -n "$BRIEF" ] || usage
   case $CLI in codex|claude) ;; *) usage;; esac
   case $SANDBOX in read-only|workspace-write|danger-full-access) ;; *) usage;; esac
+  # 高风险：codex 的 danger-full-access 与 claude 的 --dangerously-skip-permissions 都关闭全部防护，
+  # 只能由调用方显式确认，不能靠默认值或单个参数开启
+  if [ "$SANDBOX" = danger-full-access ] && [ "$ALLOW_DANGER" != 1 ]; then
+    echo "cli-worker: --sandbox danger-full-access 需要同时传 --allow-dangerous（会关闭全部沙箱/权限防护）" >&2; exit 2
+  fi
   [ -r "$BRIEF" ] || { echo "cli-worker: brief 文件不可读: $BRIEF" >&2; exit 2; }
   BRIEF=$(cd "$(dirname "$BRIEF")" && pwd)/$(basename "$BRIEF")
   [ -n "$BASE" ] || BASE=HEAD
@@ -158,7 +167,9 @@ for line in open(f,encoding="utf-8",errors="replace"):
         u=o.get("usage")
         if not isinstance(u,dict) and isinstance(o.get("msg"),dict): u=o["msg"].get("usage") or o["msg"].get("info")
         if isinstance(u,dict):
-            # codex 的 input_tokens 含 cached_input_tokens（cache_read），按口径扣除；无 cache_write 概念
+            # codex turn.completed.usage：input_tokens 已含 cached_input_tokens（cache_read），按口径扣除；
+            # output_tokens 已含 reasoning_output_tokens，不再相加；无 cache_write 概念。
+            # usage 是整个线程的累计值：单次 exec 取最后一条即可；恢复会话（exec resume）时需与上次的值做差。
             i=n(u.get("input_tokens")); out=n(u.get("output_tokens")); cr=n(u.get("cached_input_tokens")) or 0
             if i is not None or out is not None:
                 tokens=int(max((i or 0)-cr,0)+(out or 0)); source="codex:usage"

@@ -39,6 +39,7 @@
 
 - 宿主文档第 3 节是该宿主映射的详细说明；本表的 Claude Code 行与 `hosts/claude-code.md` 保持一致，改一处同时改另一处。
 - **首次在新宿主上运行时**，主会话把实际用的映射写进项目 `.hq/PLAYBOOK.md` 的“选档偏好”（注明宿主），之后该宿主优先按 PLAYBOOK 的映射。
+- **effort 可能被环境变量覆盖（待实测，不下结论）**：Claude Code 接 DeepSeek 后端时官方建议设 `CLAUDE_CODE_EFFORT_LEVEL=max`，可能覆盖按档位设置的思考深度（见 `references/hosts/deepseek.md`）。此时本表的深度列可能不生效；复盘按 notes 的 `effort_env:max` 分组，样本不足前不据此调整档位。
 - W 通道跨厂商时，按目标 CLI 所属宿主的映射选模型，task 记录的 model 写成 `<cli>:<模型名>`。
 
 ## 修正规则

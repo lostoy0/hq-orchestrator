@@ -45,7 +45,8 @@
 
 ### W：CLI 子进程 worker
 - 由 `scripts/cli-worker.sh` 在独立 git worktree 里后台运行 `codex exec` 或 `claude -p`。任何有 shell 的宿主都能用。
-- 接口：`start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <说明文件> [--base <分支>] [--sandbox workspace-write]`；`status <id>`、`stop <id>`、`usage <id>`（输出 JSON）、`list`。状态写在 `.hq/workers/<id>/`。
+- 接口：`start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <说明文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]`；`status --id <id>`、`stop --id <id>`、`usage --id <id>`（输出 JSON）、`list`。状态写在 `.hq/workers/<id>/`。
+- sandbox 默认 `workspace-write`（claude 映射为 `--permission-mode acceptEdits`，read-only 映射为 `plan`）。`danger-full-access`（codex 原样传入；claude 映射为 `--dangerously-skip-permissions`）关闭全部防护，必须同时传 `--allow-dangerous`，否则拒绝并以退出码 2 退出；只有用户明确授权才这样用。
 - **何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；用户在 PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis: [codex, claude]`，默认关闭）。
 - 占本地资源，派发前过 `resources.sh`，按 A 的规则计槽位。
 - 没有回信通道：说明里不写宿主专有回报方式，结果写在交付格式里，主会话用 `status` / `usage` 读取。

@@ -1,5 +1,6 @@
-# 格式待核实：字段名（name / description / developer_instructions / model / model_reasoning_effort）
-# 与放置目录（~/.codex/agents/ 或仓库 .codex/agents/）来自二手搜索摘要，尚未用官方文档或 codex 实测核对。
+# 已按官方文档核对（2026-11-25），未实机运行：必填 name / description / developer_instructions，
+# 可选 model / model_reasoning_effort；放在 ~/.codex/agents/（个人）或 <项目>/.codex/agents/（项目）。
+# sandbox_mode / approval_policy 等写在这里不会覆盖父会话，不要依赖。
 # 安装前请把 model 的占位符换成你账户里 `codex` 实际可用的模型名（见 adapters/codex/README.md）。
 name = "hq-t1"
 description = "HQ 档位 T1：适合需求明确的单文件改动、给清晰函数补测试。"

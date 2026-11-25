@@ -2,29 +2,57 @@
 
 中文 | [English](README.en.md)
 
-在普通会话里（本地 CLI 或云端会话都可以）实现类似 Projects 的工作方式：主会话负责统筹，子会话负责执行。主会话记录每次运行的数据，`/hq-retro` 用这些数据复盘，让插件越用越准。
+在普通会话里（Claude Code 或 Codex，本地或云端都可以）实现类似 Projects 的工作方式：主会话负责统筹，子会话负责执行。主会话记录每次运行的数据，`/hq-retro` 用这些数据复盘，让插件越用越准。
 
 **优化目标**：先过质量门槛（不漂移 + 验证到位 + 问题少），再求总用时最短，最后求成本最低。
 
+## 支持的宿主（v0.3）
+
+`SKILL.md` 只用抽象能力（spawn_worker、monitor 等），每个宿主的具体做法写在 `skills/hq/references/hosts/` 下。
+
+| 宿主 | 宿主文档 | 状态 |
+|---|---|---|
+| Claude Code（本地 CLI、云端会话、桌面端、IDE） | `hosts/claude-code.md` | 主要宿主，v0.2 起实际使用 |
+| Codex CLI | `hosts/codex.md` + `adapters/codex/` | agent 格式和目录已按官方文档核对（2026-11-25），**未实机运行** |
+| DeepSeek 后端 · 路径一：Claude Code 接 DeepSeek | `hosts/deepseek.md` | 档位压成 flash/pro 两档；云端子会话（B）仍用 Claude 模型 |
+| DeepSeek 后端 · 路径二：Codex 接 DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | 配置示例来自官方摘要，待实测 |
+| 其他支持 SKILL.md 的工具（OpenCode、Gemini CLI、Cursor 等） | 无 | 有 shell 用 W 通道；否则**降级模式**：主会话按同样的计划、台账和质量门槛串行亲自执行 |
+
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.2.0）
+.claude-plugin/plugin.json             plugin 清单（v0.3.0）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
-skills/hq/references/runtimes.md       各派发通道的具体用法、用量读取、建议用户手动调档的话术
+skills/hq/references/runtimes.md       抽象能力、派发通道（A/B/C/D/W）通用规则和宿主索引
+skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / deepseek）
 skills/hq/references/brief-template.md 子会话任务说明模板（含验证级别、检查点）与交付格式
 skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用量口径
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
 skills/hq/scripts/resources.sh         资源探测（Linux/cgroup/macOS），输出还能新开几个本地任务
 skills/hq/scripts/metrics.py           把运行数据汇总成指标报告（只读）
+skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后台运行 codex exec / claude -p
 skills/hq-retro/SKILL.md               /hq-retro 复盘：验证上次改动、出有证据的建议、生成改插件的提示词
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词
-tests/                                 resources.sh 和 metrics.py 的自测
+adapters/codex/                        Codex 自定义 agent 模板 hq-t0…hq-t4（T0–T4 档位，模型名为占位符）
+install.sh                             把技能（和可选的 Codex agent 模板）复制到各宿主的目录，不改任何配置
+tests/                                 resources.sh、cli-worker.sh、install.sh、metrics.py 的自测
 ```
 
 ## 安装
+
+**方式 0：install.sh（Claude Code 和 Codex 通用）**
+```bash
+./install.sh --host claude|codex|both [--scope user|project] [--project-dir <路径>] [--with-codex-agents] [--force] [--dry-run]
+```
+| 宿主 | 个人范围（`--scope user`，默认） | 项目范围（`--scope project`） |
+|---|---|---|
+| claude | `~/.claude/skills/{hq,hq-retro}` | `<项目>/.claude/skills/` |
+| codex | `~/.agents/skills/{hq,hq-retro}` | `<项目>/.agents/skills/` |
+| `--with-codex-agents` | `~/.codex/agents/hq-t*.toml` | `<项目>/.codex/agents/` |
+
+只复制文件，不改任何配置。目标已存在时退出码 3（加 `--force` 覆盖），参数错误退出码 2；会先检查所有目标，不会装一半。装了 agent 模板后，必须按 `adapters/codex/README.md` 替换其中的 `model` 占位符。Codex 的调用方式见 `hosts/codex.md`。
 
 **方式 1：个人 skill（本地最简单）**
 ```bash
@@ -45,6 +73,18 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro .claude/skills/ && git add .claude/skills
 ```
 提交后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`。也可以在云端会话里用方式 2 的 marketplace 安装。
+
+## W 通道与跨厂商 worker（默认关闭）
+
+`skills/hq/scripts/cli-worker.sh` 在独立 git worktree（`.hq/worktrees/<id>`，分支 `hq/<id>`）里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用：
+```bash
+cli-worker.sh start --id t2 --cli codex|claude --model <m> [--effort <e>] --brief <说明文件> [--sandbox read-only|workspace-write]
+cli-worker.sh status|stop|usage --id t2      # 输出 JSON
+cli-worker.sh list
+```
+- sandbox 默认 `workspace-write`。`danger-full-access`（claude 对应 `--dangerously-skip-permissions`）会关闭全部防护，**必须同时传 `--allow-dangerous`**，否则拒绝并以退出码 2 退出。
+- `usage` 按统一口径算 tokens（input + output + cache_write，不含 cache_read）。
+- 用和宿主不同厂商的 CLI 做 worker（跨厂商），需要在 `.hq/PLAYBOOK.md` 授权区写 `worker_clis: [codex, claude]`；**默认为空，即关闭**。
 
 ## 使用示例
 ```
@@ -67,17 +107,18 @@ merge_default: ask        # ask | auto-if-gates-pass：质量门槛都通过时�
 open_pr: ask              # ask | auto
 budget_usd: 20            # 单次运行的花费上限，超出前停下来问
 autonomy: auto            # auto | confirm-plan：confirm-plan 时计划要等你确认再派发
+worker_clis: []           # 跨厂商 worker，如 [codex, claude]；默认空即关闭
 ```
 
 ## 进化闭环：记录 → 复盘 → 改插件
-1. **记录**：每个任务结束、每次运行结束，主会话往 `.hq/runs/<run_id>.jsonl` 追加一行（格式见 `metrics-schema.md`；本地运行时另存一份到 `~/.claude/hq/runs/`）。成本以 `cost_usd` 为主，`tokens` 不含缓存读取。
+1. **记录**：每个任务结束、每次运行结束，主会话往 `.hq/runs/<run_id>.jsonl` 追加一行（格式见 `metrics-schema.md`，记录 `host`；本地运行时另存一份到 `~/.claude/hq/runs/`，Codex 宿主也用这个目录）。成本以 `cost_usd` 为主，`tokens` 不含缓存读取。
 2. **复盘**：累计约 5 次运行或 20 个任务时，主会话会提示你运行 `/hq-retro`。它用 `metrics.py` 出指标报告，先按 `CHANGELOG.md` 的验收指标核对上次改动，再交给独立子代理出有证据的建议（至少 3 个任务或 2 次运行出现才算）。只与本项目有关的经验直接写进 `.hq/PLAYBOOK.md`。
 3. **改插件**：涉及插件本身的建议由你把关。报告最后附一段提示词，你复制到 hq-orchestrator 仓库的会话里执行，它会改文件、跑测试、在 `CHANGELOG.md` 记一条“待验证”并升补丁版本号。下一次复盘再验证它，没达标就撤回。
 
 ## 设计要点
 - **要不要编排**：编排有固定开销，小任务不开子会话。
 - **并行以总用时为准**：优先缩短关键路径；小而相关的任务打包，大任务且文件不重叠才拆开。
-- **难度分档**：按 `calibration.md` 5 维打分，T0 到 T4 对应 haiku/low 到 opus/high；选档算上失败重来的成本，看不准先调研。
+- **难度分档**：按 `calibration.md` 5 维打分得到抽象档位 T0–T4，再按宿主映射成具体模型（Claude Code 为 haiku/low 到 opus/high）；选档算上失败重来的成本，看不准先调研。
 - **动态调档**：子会话遇到超范围衍生任务、难度超预期或反复失败时发检查点；卡住就升一档新开会话从分支接着做，不做降档交接。
 - **运行位置路由**：需要本地资源的任务一定在本地跑，能并行的长任务放到云端，小任务在进程内执行。
 - **资源保护**：每次派发前都检测资源，按 GREEN/YELLOW/RED 三级控制派发；给子会话限定构建并行度；RED 时停掉最新启动的重任务。
@@ -86,12 +127,40 @@ autonomy: auto            # auto | confirm-plan：confirm-plan 时计划要等�
 
 ## 自测
 ```bash
-bash tests/test_resources.sh
+for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh; do echo "$t: $(bash $t | tail -1)"; done
 python3 -m unittest discover tests
 ```
+`test_cli_worker.sh` 用 `tests/fixtures/fake-cli/` 下的假 `codex`、`claude` 测参数拼接和用量解析，不调用真实 CLI。
 `resources.sh` 支持 `HQ_FAKE_CORES`、`HQ_FAKE_LOAD1`、`HQ_FAKE_MEM_TOTAL_MB` 等环境变量注入模拟读数，用来覆盖 GREEN/YELLOW/RED 各种情况。
 
+## 待核实项与本机验证清单
+
+本仓库的开发环境装不了 codex，下面这些需要你在本机实测。结果请写进项目 `.hq/PLAYBOOK.md`（宿主映射）或提 issue。
+
+**待核实**（详见各宿主文档第 5 节）：
+- Codex：`codex exec` 的 `-m`、`-c model_reasoning_effort=…`、`-s` 写法；agent 模板实际能否被加载；并发上限配置名；`codex cloud` 能否指定 model/effort；原生子代理的监控、中止和用量读取。
+- DeepSeek：`CLAUDE_CODE_EFFORT_LEVEL=max` 是否覆盖 hq 按档位设的 effort；`ANTHROPIC_DEFAULT_OPUS_MODEL` 能否设为 `deepseek-v4-pro`；`deepseek-flash` 与 `deepseek-v4-flash` 是否等价。
+- Claude Code：本地 CLI 发起云端任务（通道 D）的参数。
+
+**装好 codex 后运行，核对参数**：
+```bash
+codex --version
+codex exec --help | grep -nE -- '-m|--model|-c|--config|-s|--sandbox|--json'   # 核对 cli-worker.sh 用到的参数
+./install.sh --host codex --with-codex-agents                                  # 再替换 ~/.codex/agents/hq-t*.toml 的 model 占位符
+echo "只回复 OK" | codex exec -m <模型> -c model_reasoning_effort=low -s read-only --json - | tail -3   # 看 turn.completed 的 usage 字段
+cd <某个 git 仓库> && echo "列出仓库根目录文件" > /tmp/b.md
+bash <路径>/cli-worker.sh start --id smoke --cli codex --model <模型> --effort low --brief /tmp/b.md --sandbox read-only
+bash <路径>/cli-worker.sh status --id smoke; bash <路径>/cli-worker.sh usage --id smoke   # tokens 不应为 null
+```
+在 codex 里让它列出可用 agent，确认 hq-t0…hq-t4 被识别。
+
+**DeepSeek 后端跑一次小任务**（路径一）：按 `hosts/deepseek.md` 设好环境变量，在一个小仓库里运行 `/hq` 做一个 T0 任务和一个 T3 任务，然后核对：
+- 子代理实际用的模型：T0 应为 flash，T3 应为 pro（`CLAUDE_CODE_SUBAGENT_MODEL` 不要设）；
+- effort：分别在设与不设 `CLAUDE_CODE_EFFORT_LEVEL=max` 时各跑一次，比较用时和用量，判断档位的思考深度是否被覆盖；
+- 用量：`.hq/runs/*.jsonl` 的 tokens 与 DeepSeek 控制台账单是否对得上（cost_usd 按 Claude 价格算，不可信）。
+
 ## 已知限制
+- Codex 适配和 DeepSeek 后端都还没有实机运行数据，见上一节。
 - 本地 CLI 能否直接创建云端子会话，取决于 CLI 版本（见 runtimes.md 的通道 D）。这类子会话监控能力较弱。需要强监控时，把主会话放在云端，再通过“连接电脑”处理本地任务。
 - 进程内子代理和主会话共享同一台机器，资源保护只能控制派发节奏，没法限制子代理自己调用的进程。所以任务说明里的并行度限制很重要。
 - 进程内子代理的返回结果只有 token 总数、分不出缓存读取，这类任务的 `tokens` 记为空，成本比较以云端子会话的 `cost_usd` 为主。

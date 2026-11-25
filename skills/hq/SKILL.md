@@ -13,7 +13,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 ## 铁律
 
-1. **主会话上下文保持精简**：不亲自做重活（大面积读代码、长时间调试、跑长构建）。不超过 3 次工具调用就能做完的小事自己做。
+1. **主会话上下文保持精简**：不亲自做重活（大面积读代码、长时间调试、跑长构建）。不超过 3 次工具调用就能做完的小事自己做。唯一例外是降级模式（见第 1 步）。
 2. **默认自动执行**：计划作为通知发给用户，不等确认。技术方案、模型、拆分、重试都自主决定；只有“自主决策”一节列出的情况才停下来找用户。
 3. **派发前必须有验收标准**：每个子任务写清目标、文件归属、验收标准、验证级别和验证命令。
 4. **子会话的结果不能直接信**：按第 8 步审核通过后才归并。
@@ -43,9 +43,9 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **C 用户电脑**：local_machine，云端会话连上用户电脑后在那里执行。
   - **D 从本地 CLI 发起云端任务**：先确认 CLI 支持再用，监控能力弱。
   - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
-- **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。铁律 1 此时不适用，但每个任务做完就更新台账，控制上下文。
+- **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
-- **资源基线**：用 shell 查找脚本：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills .claude/skills .agents/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`，执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **资源基线**：用 shell 查找脚本：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills .claude/skills .agents/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`，执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
 - **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
