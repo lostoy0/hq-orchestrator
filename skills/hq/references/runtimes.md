@@ -8,7 +8,7 @@
 | Claude Code 接 DeepSeek 后端 | `hosts/deepseek.md` | 同上，且 `ANTHROPIC_BASE_URL` 指向 deepseek |
 | DeepSeek Harness（dsh，DeepSeek 推荐路径） | `hosts/dsh.md` | 有 `subagent`、`list_subagent_models`、`list_agents` 工具，或存在 `~/.dsh/`、`$DSH_HOME` |
 | Codex（含接 DeepSeek 后端） | `hosts/codex.md`（DeepSeek 部分另见 `hosts/deepseek.md`） | 能看到 `~/.codex/`，能用 codex 的子代理功能 |
-| 其他支持 SKILL.md 的工具（OpenCode、Gemini CLI、Cursor 等） | 无 | 识别不了：有 shell 用 W，否则降级模式 |
+| OpenCode、Cursor、Gemini CLI 及其他支持 SKILL.md 的工具 | `hosts/generic.md` | 见该文档识别表；有 shell 用 W，否则降级模式 |
 
 ## 抽象能力
 

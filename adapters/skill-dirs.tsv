@@ -1,0 +1,11 @@
+# 技能目录登记表（install.sh 读取）。列以空白分隔：
+# key           个人范围路径                  项目范围路径（相对项目根）
+# ~ 展开为 $HOME；@DSH_HOME@ 展开为 ${DSH_HOME:-~/.dsh}。
+# 行的顺序就是最小集合算法打平时的优先顺序。
+claude          ~/.claude/skills              .claude/skills
+agents          ~/.agents/skills              .agents/skills
+dsh             @DSH_HOME@/skills             .dsh/skills
+opencode        ~/.config/opencode/skills     .opencode/skills
+cursor          ~/.cursor/skills              .cursor/skills
+codex-skills    ~/.codex/skills               .codex/skills
+gemini          ~/.gemini/skills              .gemini/skills

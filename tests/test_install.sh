@@ -32,9 +32,13 @@ fresh; HOME="$T/h" DSH_HOME="$T/dh" bash "$INST" --host dsh >"$T/out" 2>&1; rc=$
 fresh; HOME="$T/h" DSH_HOME="$T/dh" bash "$INST" --host dsh --scope project --project-dir "$T/p" >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && [ -f "$T/p/.dsh/skills/hq/SKILL.md" ] && [ ! -e "$T/dh" ] && ok "dsh/project 装到 <项目>/.dsh/skills" || bad "dsh/project" "rc=$rc"
 
-# 5c. all 三处都装
+# 5c. all（v0.4 起为全部登记宿主 + 最小目录集合）：只装 ~/.agents 和 ~/.claude 两处
 fresh; inst --host all; rc=$?
-[ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && [ -f "$T/h/.dsh/skills/hq/SKILL.md" ] && ok "all 三处都装" || bad "all" "rc=$rc"
+[ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.dsh" ] && [ ! -e "$T/h/.config" ] && [ ! -e "$T/h/.cursor" ] && [ ! -e "$T/h/.gemini" ] && ok "all 最小集合只装两处" || bad "all" "rc=$rc"
+# 5c'. all --layout per-host：六个工具各自的专属目录
+fresh; inst --host all --layout per-host; rc=$?
+n=0; for d in .claude/skills .agents/skills .dsh/skills .config/opencode/skills .cursor/skills .gemini/skills; do [ -f "$T/h/$d/hq/SKILL.md" ] && n=$((n+1)); done
+[ $rc = 0 ] && [ $n = 6 ] && ok "all per-host 六处都装" || bad "all per-host" "rc=$rc n=$n"
 
 # 5d. both 仍兼容：只装 claude + codex
 fresh; inst --host both; rc=$?
@@ -59,7 +63,8 @@ inst --host claude --force; rc=$?
 
 # 9. 模板不存在时跳过（用临时副本，缺 adapters 目录）
 fresh; cp -r "$(dirname "$INST")/skills" "$T/repo_skills_tmp" 2>/dev/null
-mkdir -p "$T/repo"; mv "$T/repo_skills_tmp" "$T/repo/skills"; cp "$INST" "$T/repo/install.sh"
+mkdir -p "$T/repo/adapters"; mv "$T/repo_skills_tmp" "$T/repo/skills"; cp "$INST" "$T/repo/install.sh"
+cp "$(dirname "$INST")"/adapters/*.tsv "$T/repo/adapters/"
 HOME="$T/h" CODEX_AGENTS_DIR="$T/ag" bash "$T/repo/install.sh" --host codex --with-codex-agents >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && grep -q "跳过" "$T/out" && [ ! -e "$T/ag" ] && ok "agent 模板不存在时跳过" || bad "agents skip" "rc=$rc"
 
@@ -84,6 +89,93 @@ HOME="$T/h" bash "$INST" --host codex --scope project --project-dir "$T/p" --wit
 
 # 11. 非法参数 => 2
 for args in "" "--host foo" "--host claude --scope x" "--host claude --bogus" "--host"; do
+  fresh; inst $args; rc=$?
+  [ $rc = 2 ] && ok "非法参数 '$args' 退出码 2" || bad "invalid '$args'" "rc=$rc"
+done
+
+# ---------- v0.4.0：新宿主、最小集合、auto、list/update/uninstall、引导下载 ----------
+REPO="$(dirname "$INST")"
+# 12. 新宿主单独安装到专属目录
+fresh; inst --host opencode; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.config/opencode/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.agents" ] && ok "opencode/user 装到 ~/.config/opencode/skills" || bad "opencode/user" "rc=$rc"
+fresh; inst --host cursor --scope project --project-dir "$T/p"; rc=$?
+[ $rc = 0 ] && [ -f "$T/p/.cursor/skills/hq-retro/SKILL.md" ] && ok "cursor/project 装到 <项目>/.cursor/skills" || bad "cursor/project" "rc=$rc"
+fresh; inst --host gemini; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.gemini/skills/hq/SKILL.md" ] && ok "gemini/user 装到 ~/.gemini/skills" || bad "gemini/user" "rc=$rc"
+
+# 13. 最小集合：共享目录优先，不给同一工具装两份
+fresh; inst --host opencode,gemini; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.config" ] && [ ! -e "$T/h/.gemini" ] && ok "opencode,gemini 只装 ~/.agents/skills" || bad "min opencode,gemini" "rc=$rc"
+fresh; inst --host claude,cursor,opencode; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.agents" ] && [ ! -e "$T/h/.cursor" ] && [ ! -e "$T/h/.config" ] && ok "claude,cursor,opencode 只装 ~/.claude/skills" || bad "min claude,cursor,opencode" "rc=$rc"
+fresh; inst --host codex,codex,dsh; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.dsh" ] && ok "codex,dsh 共用 ~/.agents/skills（重复宿主去重）" || bad "min codex,dsh" "rc=$rc"
+# 各工具读到的副本数：每个登记宿主在 all 最小集合下 ≤ 2（opencode 同时读两处，会提示）
+fresh; inst --host all; grep -q "注意: opencode 会从 2 个目录" "$T/out" && ! grep -q "注意: cursor" "$T/out" && ok "重复读取只对 opencode 提示" || bad "dup notice" "$(grep 注意 "$T/out")"
+
+# 14. auto：按检测目录选宿主；HQ_NO_CMD_DETECT=1 屏蔽本机命令
+fresh; mkdir -p "$T/h/.cursor" "$T/h/.gemini"
+HOME="$T/h" HQ_NO_CMD_DETECT=1 bash "$INST" --host auto >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.cursor/skills/hq/SKILL.md" ] && [ -f "$T/h/.gemini/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.claude" ] && ok "auto 检测到 cursor、gemini 并安装" || bad "auto" "rc=$rc"
+fresh; HOME="$T/h" HQ_NO_CMD_DETECT=1 bash "$INST" --host auto >"$T/out" 2>&1; rc=$?
+[ $rc = 4 ] && [ -z "$(ls -A "$T/h")" ] && ok "auto 什么都没检测到 => 4 且不写入" || bad "auto none" "rc=$rc"
+
+# 15. 安装记录与 skill-path
+fresh; inst --host codex
+grep -q '"version":"'"$(sed -n 's/^HQ_VERSION=//p' "$INST")"'"' "$T/h/.agents/skills/hq/.hq-install.json" 2>/dev/null && grep -q '"hosts":\["codex"\]' "$T/h/.agents/skills/hq/.hq-install.json" && ok "写入 .hq-install.json" || bad "marker" "$(cat "$T/h/.agents/skills/hq/.hq-install.json" 2>&1)"
+[ "$(cat "$T/h/.hq/skill-path" 2>/dev/null)" = "$T/h/.agents/skills/hq" ] && ok "写入 ~/.hq/skill-path" || bad "skill-path" "$(cat "$T/h/.hq/skill-path" 2>&1)"
+fresh; inst --host codex --scope project --project-dir "$T/p"
+[ ! -e "$T/h/.hq" ] && ok "项目范围不写 ~/.hq" || bad "project skill-path" "written"
+
+# 16. --list 不写入
+fresh; mkdir -p "$T/h/.gemini"; HOME="$T/h" HQ_NO_CMD_DETECT=1 bash "$INST" --list >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && grep -q "✓ gemini" "$T/out" && grep -q "\.gemini/skills" "$T/out" && [ "$(find "$T/h" -type f | wc -l)" = 0 ] && ok "--list 显示检测和计划且不写入" || bad "--list" "rc=$rc"
+
+# 17. --update：只更新有安装记录的副本
+fresh; inst --host claude; inst --host codex
+echo junk >"$T/h/.claude/skills/hq/junk"; sed -i.bak 's/"version":"[^"]*"/"version":"0.0.1"/' "$T/h/.claude/skills/hq/.hq-install.json"
+rm -f "$T/h/.agents/skills/hq/.hq-install.json" "$T/h/.agents/skills/hq-retro/.hq-install.json"; echo old >"$T/h/.agents/skills/hq/old"
+inst --update; rc=$?
+[ $rc = 0 ] && [ ! -e "$T/h/.claude/skills/hq/junk" ] && grep -q "0.0.1 -> " "$T/out" && ! grep -q '0.0.1' "$T/h/.claude/skills/hq/.hq-install.json" && [ -f "$T/h/.agents/skills/hq/old" ] && grep -q "没有安装记录" "$T/out" && ok "--update 只更新有记录的副本" || bad "--update" "rc=$rc"
+
+# 18. --uninstall：删有记录的，留无记录的；再次卸载 => 4
+inst --uninstall; rc=$?
+[ $rc = 0 ] && [ ! -e "$T/h/.claude/skills/hq" ] && [ -f "$T/h/.agents/skills/hq/old" ] && [ ! -e "$T/h/.hq/skill-path" ] && ok "--uninstall 只删有记录的副本" || bad "--uninstall" "rc=$rc"
+inst --uninstall; rc=$?
+[ $rc = 4 ] && ok "无可卸载副本 => 4" || bad "uninstall none" "rc=$rc"
+
+# 19. 引导下载：脚本单独运行（无 skills/）时从 HQ_REPO_URL 克隆 HQ_REF 再安装
+if command -v git >/dev/null 2>&1; then
+  fresh; rm -rf "$T/src" "$T/boot" "$T/cache"; mkdir -p "$T/src" "$T/boot"
+  (cd "$REPO" && tar cf - --exclude=.git .) | (cd "$T/src" && tar xf -)
+  (cd "$T/src" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm s && git tag v9.9.9) >/dev/null 2>&1
+  cp "$INST" "$T/boot/install.sh"
+  HOME="$T/h" HQ_REPO_URL="$T/src" HQ_REF=v9.9.9 HQ_CACHE_DIR="$T/cache" bash "$T/boot/install.sh" --host claude >"$T/out" 2>&1; rc=$?
+  [ $rc = 0 ] && [ -f "$T/cache/v9.9.9/install.sh" ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && ok "引导下载后安装" || bad "bootstrap" "rc=$rc $(tail -2 "$T/out")"
+  # 通过管道运行（curl | bash 的形态）
+  fresh; HOME="$T/h" HQ_REPO_URL="$T/src" HQ_REF=v9.9.9 HQ_CACHE_DIR="$T/cache" bash -s -- --host codex <"$T/boot/install.sh" >"$T/out" 2>&1; rc=$?
+  [ $rc = 0 ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && ok "管道运行（curl | bash）可用" || bad "bootstrap pipe" "rc=$rc $(tail -2 "$T/out")"
+  fresh; HOME="$T/h" HQ_REPO_URL="$T/src" HQ_REF=v0.0.0-nope HQ_CACHE_DIR="$T/cache" bash "$T/boot/install.sh" --host claude >"$T/out" 2>&1; rc=$?
+  [ $rc = 5 ] && [ ! -e "$T/h/.claude" ] && ok "下载失败 => 5 且不写入" || bad "bootstrap fail" "rc=$rc"
+else
+  echo "SKIP: 没有 git，跳过引导下载测试"
+fi
+
+# 20. 版本号一致：install.sh 与 plugin.json、marketplace.json
+v=$(sed -n 's/^HQ_VERSION=//p' "$INST")
+grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/plugin.json" && grep -q "\"version\": \"$v\"" "$REPO/.claude-plugin/marketplace.json" && ok "版本号一致 ($v)" || bad "version" "install.sh=$v"
+
+# 21. 登记表的每个宿主都有说明，读取目录都在 skill-dirs.tsv 里
+okreg=1
+while read -r id lv pr rd rest; do case "$id" in ''|\#*) continue;; esac
+  for k in $(echo "$pr,$rd" | tr ',' ' '); do grep -Eq "^$k[[:space:]]" "$REPO/adapters/skill-dirs.tsv" || { okreg=0; echo "  $id: 未登记目录 $k"; }; done
+  case "$lv" in native) [ -f "$REPO/skills/hq/references/hosts/$id.md" ] || [ "$id" = claude ] || { okreg=0; echo "  $id: 缺宿主文档"; };; basic) ;; *) okreg=0;; esac
+done <"$REPO/adapters/hosts.tsv"
+[ -f "$REPO/skills/hq/references/hosts/generic.md" ] || okreg=0
+[ $okreg = 1 ] && ok "登记表自洽" || bad "registry" "见上"
+
+# 22. 非法 --layout / 缺 --host
+for args in "--host claude --layout x" "--force"; do
   fresh; inst $args; rc=$?
   [ $rc = 2 ] && ok "非法参数 '$args' 退出码 2" || bad "invalid '$args'" "rc=$rc"
 done

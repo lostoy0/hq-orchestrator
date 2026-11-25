@@ -18,6 +18,27 @@
 
 ---
 
+## v0.4.0（2026-11-25）
+
+本版本让 hq 能一键安装到更多代理工具（OpenCode、Cursor、Gemini CLI），并把安装逻辑改为登记表驱动。新工具只是**基础支持**（降级模式 + W 通道，档位不生效），目录来自官方文档检索，**未实机运行**。设计与后续路线见 `docs/design-more-hosts.md`。
+
+### 宿主登记表 + install.sh 重写
+- **改动**：新增 `adapters/hosts.tsv`（宿主、级别、专属目录、会读取的目录、检测命令/目录、下一步说明）和 `adapters/skill-dirs.tsv`（目录 key 与个人/项目路径）；`install.sh` 改为读登记表，`--host` 支持 `auto`（按命令或配置目录检测）、逗号列表、`all`（全部登记宿主）、`both`（兼容）；新增 `--layout minimal|per-host`（默认 minimal：贪心选能覆盖所选工具的最少目录，打平时优先单个工具的专属目录），`--list`、`--update`、`--uninstall`；每个副本写 `.hq-install.json`，个人范围写 `~/.hq/skill-path`；不在仓库内运行时（`curl | bash`）先用 git 下载 `v<版本>` 标签（`HQ_REF`、`HQ_REPO_URL`、`HQ_CACHE_DIR` 可覆盖）到 `~/.hq-orchestrator/`。新增退出码 4（没有可操作的对象）、5（下载失败）。保持 bash 3.2 兼容、只复制文件、先检查后写入。
+- **行为变化**：`--host all` 从“claude、codex、dsh 三处”改为“全部登记宿主 + 最小集合”，即只装 `~/.agents/skills` 和 `~/.claude/skills`；要旧行为用 `--layout per-host`。
+- **原因/假设**：多数工具已共用 `.agents/skills`、`.claude/skills`，分发不难，难在别重复装、别让用户自己查目录；登记表让新增宿主只需加一行。
+- **验收指标**：`tests/test_install.sh` 全部通过（48 项，含新宿主、最小集合、auto、list/update/uninstall、引导下载、登记表自洽）；用户反馈的安装问题数 = 0；在 OpenCode、Cursor、Gemini CLI 各实测一次能发现并触发 hq 技能。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### 通用宿主文档与技能内的路径
+- **改动**：新增 `skills/hq/references/hosts/generic.md`（OpenCode/Cursor/Gemini CLI/其他的识别表、能力表、档位记录方式 `tier:not-applied`、待核实项）；`SKILL.md` 第 1 步识别 opencode/cursor/gemini/other 并指向 generic.md，脚本查找先读 `~/.hq/skill-path` 再 find（路径加入 opencode/cursor/gemini 目录）；`hq-retro/SKILL.md` 同步；`metrics-schema.md` 的 host 取值加 `opencode`/`cursor`/`gemini`；`runtimes.md` 宿主索引更新；README 中英文更新安装说明并加入 `npx skills add`。
+- **原因/假设**：装到新工具后，技能要能找到自己的脚本，并按统一方式记录 host，复盘才能按宿主比较。
+- **验收指标**：3c 按宿主/通道 → opencode/cursor/gemini 的任务 host 字段都有值；缺记录任务数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.3.2（2026-11-25）
 
 ### 低成本宿主拿不准时上调一档
