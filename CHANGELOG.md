@@ -18,6 +18,15 @@
 
 ---
 
+## v0.3.2（2026-11-25）
+
+### 低成本宿主拿不准时上调一档
+- **改动**：`calibration.md` 新增规则 9：按实际计费方设成本系数（Claude Code 为 high；Codex、dsh、DeepSeek 后端为 low），low 宿主拿不准难度时（离上一档 ≤1 分、模糊度 ≥1，或在两档间犹豫）上调一档，最多一档；关键路径上的小任务或遇到限流时不上调；上调的任务在 notes 记 `bias:+1(cost_low)`。`playbook-template.md` 授权区新增 `cost_weight`；`hosts/codex.md`、`dsh.md`、`deepseek.md` 第 3 节引用此规则；README 中英同步。
+- **原因/假设**：用户偏好。Codex 和 DeepSeek 的额度比 Claude 耐用，选高的边际成本低，用低档失败重来的代价相对更高；上调一档能提高一次通过率，而用时增加可以接受。
+- **验收指标**：low 宿主上 notes 含 `bias:+1(cost_low)` 的任务 ≥5 个后，其一次通过率不低于同宿主未上调的任务，且 actual/est 中位数不高于后者的 1.5 倍；否则收回或缩小适用范围。
+- **状态**：待验证
+- **复盘报告**：无（用户偏好，人工改动）
+
 ## v0.3.1（2026-11-25）
 
 本版本把 DeepSeek Harness（dsh）作为第三个原生宿主接入，DeepSeek 的推荐路径改为 dsh。dsh 部分**只读过官方仓库 deepseek-ai/deepseek-harness 提交 4b399c3 的文档，没有实机运行**，验证清单见 README“待核实项与本机验证清单”。

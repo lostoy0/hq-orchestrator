@@ -28,6 +28,8 @@ DeepSeek 是模型，不是宿主。使用方式有三条路径：
 
 ## 3. 档位映射 T0–T4 →（模型, 思考深度）
 
+**额度成本偏好**：DeepSeek 计费的三条路径都按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一档；关键路径上的小任务或遇到限流时不上调，上调的任务在 notes 记 `bias:+1(cost_low)`；但经 Claude Code 派到 claude.ai 云端子会话（B 通道）的任务按 Claude 额度计，仍算 high。
+
 ### 路径二：Claude Code
 
 DeepSeek 只有 pro 和 flash 两档，五档合成两档，靠思考深度区分：
