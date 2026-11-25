@@ -84,7 +84,7 @@
 | standing_seq | 整数（可选） | 常驻模式下本会话的第几批；非常驻不写 |
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
-| assist_disabled | `[{profile,reason}]`（可选，v0.5.0 之后） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
+| assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
 
 示例：
 
