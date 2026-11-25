@@ -32,7 +32,7 @@
 - 用 W 通道跑宿主自己的 CLI 时，档位按 `--model` 生效（Gemini、Cursor 命令行不支持思考深度，只能靠模型区分档位）；task 的 `channel` 记 `W`，`model` 记 `<cli>:<模型名>`。
 - 降级模式下档位**不改变模型**：主会话用的就是当前模型，task 的 `tier` 照常按 `calibration.md` 打分记录（复盘用来对照难度和返工），`model` 记当前模型名（不知道就记 `unknown`），notes 写 `tier:not-applied`。
 - W 通道的任务按目标 CLI 的映射选模型：`claude` 见 `hosts/claude-code.md` 第 3 节，`codex` 见 `hosts/codex.md` 第 3 节；model 记成 `<cli>:<模型名>`。
-- 成本系数（`calibration.md` 规则 9）：按实际计费方在 PLAYBOOK 写 `cost_weight`；没写时按 `high` 处理（不上调）。
+- 成本系数（`calibration.md` 规则 9）：按实际计费方在 PLAYBOOK 写 `cost_weight`；没写时按 `high` 处理（拿不准时默认只上调思考深度一级，模糊度 ≥1 或风险 2 时上调一整档）。
 
 ## 4. 安装与调用
 

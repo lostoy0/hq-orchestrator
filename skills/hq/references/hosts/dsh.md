@@ -23,7 +23,7 @@
 
 ## 3. 档位映射 T0–T4 →（模型, 思考深度）
 
-**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一档；关键路径上的小任务或遇到限流时不上调，上调的任务在 notes 记 `bias:+1(cost_low)`。
+**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务或遇到限流时不上调，上调的任务在 notes 记 `bias:+1(tier)`。
 
 DeepSeek 只有 pro 和 flash 两档，五档合成两档，靠思考深度区分。下表 provider/model 名只是示意（直连 API 名为 deepseek-v4-flash / deepseek-v4-pro），**以 `list_subagent_models` 返回为准**，首次运行写进 PLAYBOOK。
 
