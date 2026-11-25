@@ -120,6 +120,27 @@ mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-ret
 ```
 提交后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`。也可以在云端会话里用方式 2 的 marketplace 安装。
 
+## 升级
+
+先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.4` 为例，换成要升级到的版本即可。
+
+| 安装方式 | 升级方法 |
+|---|---|
+| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh \| bash -s -- --update` |
+| 方式 0（已 clone 仓库） | `git pull` 后运行 `./install.sh --update`；项目范围加 `--scope project --project-dir <路径>` |
+| 方式 0a（Gemini 扩展） | `gemini extensions update hq-orchestrator` |
+| 方式 0b（`npx skills add`） | 重新运行一次同样的 `npx skills add` 命令覆盖 |
+| 方式 1（手动复制） | 拉取新版本后重新执行 `cp -r` 命令（会覆盖旧文件） |
+| 方式 2（plugin） | `/plugin marketplace update hq-orchestrator-marketplace`，再在 `/plugin` 里更新 `hq-orchestrator`；本地路径添加的 marketplace 先在那个目录 `git pull` |
+| 方式 3（项目仓库） | 重新复制到 `.claude/skills/` 并提交 |
+
+注意：
+
+- `--update` 会把副本更新成**正在运行的这份脚本**的版本，不会自己联网查新版。所以一定要先拿到新版本的脚本（用新标签的一行命令，或先 `git pull`）。
+- `--update` 只处理有安装记录的副本。v0.3 及更早装的、或手动复制的副本会被跳过并提示，用 `./install.sh --host <宿主> --force` 重装一次，以后就能正常 `--update`。
+- `--update` **不更新子代理模板**（`--with-agents` 装的 `hq-t0…t4`）。新版本改了模板时（见 `CHANGELOG.md`），用原来的参数加 `--force` 重装：`./install.sh --host <宿主> --with-agents [--model-map '…'] --force`。注意 `--force` 会覆盖你手动改过的模板。
+- 升级后重开会话，宿主才会读到新技能。
+
 ## W 通道与跨厂商 worker（默认关闭）
 
 `skills/hq/scripts/cli-worker.sh` 在独立 git worktree（`.hq/worktrees/<id>`，分支 `hq/<id>`）里后台运行一个 CLI worker，任何有 shell 的宿主都能用：

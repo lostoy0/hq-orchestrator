@@ -120,6 +120,27 @@ mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/ski
 ```
 After committing, cloud sessions started from this repository can use `/hq` and `/hq-retro`. You can also install via the marketplace from Option 2 inside a cloud session.
 
+## Upgrading
+
+First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.4`; substitute the version you are upgrading to.
+
+| Install method | How to upgrade |
+|---|---|
+| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh \| bash -s -- --update` |
+| Option 0 (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
+| Option 0a (Gemini extension) | `gemini extensions update hq-orchestrator` |
+| Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |
+| Option 1 (manual copy) | Get the new version and run the `cp -r` command again (it overwrites the old files) |
+| Option 2 (plugin) | `/plugin marketplace update hq-orchestrator-marketplace`, then update `hq-orchestrator` from `/plugin`; for a marketplace added from a local path, `git pull` in that directory first |
+| Option 3 (project repository) | Copy again into `.claude/skills/` and commit |
+
+Notes:
+
+- `--update` updates copies to the version of **the script you are running**; it does not check online for a newer one. Get the new script first (the one-line command with the new tag, or `git pull`).
+- `--update` only touches copies with an install record. Copies installed by v0.3 or earlier, or copied by hand, are skipped with a notice; reinstall once with `./install.sh --host <host> --force` and `--update` will handle them from then on.
+- `--update` **does not update sub-agent templates** (`hq-t0…t4` installed with `--with-agents`). When a release changes them (see `CHANGELOG.md`), reinstall with your original flags plus `--force`: `./install.sh --host <host> --with-agents [--model-map '…'] --force`. `--force` overwrites templates you edited by hand.
+- Start a new session after upgrading so the host picks up the new skills.
+
 ## W channel and cross-vendor workers (off by default)
 
 `skills/hq/scripts/cli-worker.sh` runs a CLI worker in the background in a separate git worktree (`.hq/worktrees/<id>`, branch `hq/<id>`); any host with a shell can use it:
