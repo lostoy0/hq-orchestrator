@@ -24,7 +24,7 @@
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.3）
+.claude-plugin/plugin.json             plugin 清单（v0.4.4）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
@@ -59,9 +59,9 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.3/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.4/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.3` 标签下载到 `~/.hq-orchestrator/v0.4.3`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.4.4` 标签下载到 `~/.hq-orchestrator/v0.4.4`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.3/inst
 
 **方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 命令）
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.3
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.4
 ```
 扩展只含技能和命令，不含子代理模板（同一个仓库也是 Claude Code 插件，根目录放 `agents/` 会被 Claude Code 当成自己的子代理）。要让档位生效，再运行 `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'` 安装模板；与扩展同时装了技能时，Gemini CLI 优先用用户目录的副本，安装脚本会提示。更新：`gemini extensions update hq-orchestrator`。
 

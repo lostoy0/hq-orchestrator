@@ -18,6 +18,19 @@
 
 ---
 
+## v0.4.4（2026-11-25）
+
+修复版本：macOS 自带 bash 3.2 下 `install.sh` 无法安装。
+
+### 修复 bash 3.2 下 unbound variable
+- **改动**：macOS 自带 bash 3.2 在 UTF-8 locale 下会把非 ASCII 字节当成变量名的一部分，`install.sh` 第 312 行的 `$s（供` 被读成变量 `s\xEF…`，在 `set -u` 下报 `unbound variable` 并退出（用户实测 `./install.sh --host auto` 复现）。把所有紧跟非 ASCII 字符的变量改成 `${var}`，共 14 处：`install.sh`（下载失败、未知宿主、安装计划、安装、完成提示）、`adapters/render.sh`（模板描述、占位符注释、`--check` 提示）、`skills/hq/scripts/backends/{cursor,gemini,opencode}.sh`（忽略 `--effort` 的提示）。生成的模板内容不变（`render.sh --check` 三种格式一致）。`tests/test_install.sh` 加第 33 项回归检查（用 perl 扫描所有 `.sh`，macOS grep 不支持 `-P`），增至 72 项。版本号在 install.sh、两个 Claude 清单、Gemini 清单和 README 的安装命令同步为 0.4.4。
+- **原因/假设**：macOS 是主要用户平台之一，默认 bash 就是 3.2；修复后 macOS 上能一次装好，W 通道的 cursor、gemini、opencode 后端在带 `--effort` 时也不会中途退出。
+- **验收指标**：`tests/test_install.sh` 全部通过；macOS 自带 bash 下 `./install.sh --host auto` 退出码 0；用户反馈“install.sh 报 unbound variable”的问题数 = 0。
+- **状态**：待验证（只在 Linux 的 bash 5 上跑过测试，macOS bash 3.2 待实机确认）
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.4.3（2026-11-25）
 
 本版本让整个仓库可以作为 Gemini CLI 扩展安装，并把 Gemini CLI 升级为原生宿主。依据 GitHub google-gemini/gemini-cli 的官方文档（2026-11-24 的提交：`docs/extensions/reference.md`、`docs/core/subagents.md`、`docs/cli/skills.md`、`docs/cli/custom-commands.md`），**没有实机运行**；官方把子代理标为预览功能。

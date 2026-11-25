@@ -3,7 +3,7 @@
 # 兼容 bash 3.2（macOS 自带），不使用关联数组。
 # 一行安装：curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v<版本>/install.sh | bash -s -- --host auto
 set -u
-HQ_VERSION=0.4.3
+HQ_VERSION=0.4.4
 HQ_REPO_URL_DEFAULT=https://github.com/lostoy0/hq-orchestrator.git
 
 usage() {
