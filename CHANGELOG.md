@@ -18,7 +18,9 @@
 
 ---
 
-## 未发布
+## v0.5.2（2026-11-25）
+
+`resources.sh` 读不到读数时报 UNKNOWN，不再误报 RED；写明 Codex 作主宿主时的沙箱限制（实测 assist 熔断的结论）。
 
 ### resources.sh 读不到读数时报 UNKNOWN；写明 Codex 作主宿主时的沙箱限制
 - **改动**：`scripts/resources.sh` 每项读数读不到（`sysctl`、`vm_stat`、`/proc` 被拒或没有）时不再当成 0：输出里记为 `null`，新增 `unreadable` 数组和 `reason` 里的“无法读取:…”；已读到的读数没到 RED 时 `level` 为 `UNKNOWN`、`new_local_slots` 最多 1，读到的读数显示 RED 时仍为 RED；新增测试注入 `HQ_FAKE_UNREADABLE`。`tests/test_resources.sh` 的 `over()` 不再用 `local -n`（macOS 自带 bash 3.2 不支持，原先 4 项失败），新增 7 项 UNKNOWN 用例。`SKILL.md` 第 5 步补 `UNKNOWN` 的处理（按 YELLOW），第 1 步辅助预检补“能否建 worktree”；`calibration.md` 规则 10 的关键路径条件加 `UNKNOWN`；`hosts/codex.md` §5 第 9 条改为实测结论；README 中英文同步。
