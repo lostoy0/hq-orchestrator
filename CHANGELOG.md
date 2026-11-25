@@ -18,7 +18,9 @@
 
 ---
 
-## 未发布
+## v0.5.1（2026-11-25）
+
+Codex 辅助执行者实机核实与 macOS 修复；选档“拿不准往上选”扩展到所有宿主；辅助执行者停用（熔断）规则，主宿主不再假定是 Claude。
 
 ### 辅助执行者：不可用或屡次失败就停用，主宿主不再假定是 Claude
 - **改动**：`calibration.md` 规则 10 写明“主宿主”是运行本插件的宿主和模型（不一定是 Claude），profile 与主宿主相同（如 Codex 宿主上的 `codex`）时跳过；新增“停用（熔断）”：不可用（预检不过、worker 起不来、认证失败、限流、额度用完）立即停用，连续失败 2 次或累计失败达到 `assist.max_failures`（默认 2）停用，并定义了“失败”；全部停用时本次剩余任务全部由主宿主执行、按主宿主映射重新选档、不停下问用户，台账头部记 `assist: off（熔断：…）`；常驻模式停用持续到会话结束。`SKILL.md` 辅助执行者一节和第 1 步预检、`playbook-template.md` 新增 `max_failures`、`metrics-schema.md` run 记录新增可选字段 `assist_disabled`、`hosts/codex.md` §5 新增第 9 条、`hosts/kimi.md`、README 中英文、`PROMPT.md` 同步。
