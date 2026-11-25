@@ -146,6 +146,56 @@ class MetricsTest(unittest.TestCase):
             self.assertEqual(r["overview"]["corrupt_lines"], 3)
             self.assertEqual(r["overview"]["tasks"], 1)
 
+    def test_export_anon_keeps_metrics(self):
+        plain, anon = rep(FIX), json.loads(run(FIX, "--export-anon").stdout)
+        self.assertEqual(anon["format"], "hq-anon/v1")
+        s = anon["summary"]
+        self.assertEqual(s["overview"]["runs"], plain["overview"]["runs"])
+        self.assertEqual(s["overview"]["tasks"], plain["overview"]["tasks"])
+        self.assertEqual(s["overview"]["time_from"], "2026-01-01")
+        strip = lambda q: {k: v for k, v in q.items() if k != "run_id"}
+        self.assertEqual(s["quality"]["overall"], plain["quality"]["overall"])
+        self.assertEqual(s["by_tier"], plain["by_tier"])
+        self.assertEqual(s["by_model"], plain["by_model"])
+        self.assertEqual([strip(e) for e in s["efficiency"]], [strip(e) for e in plain["efficiency"]])
+        self.assertNotIn("records", anon)
+        self.assertTrue(all(e["run_id"].startswith("r-") for e in s["efficiency"]))
+        self.assertEqual(json.loads(run(FIX, "--export-anon").stdout), anon)  # stable hashes
+
+    def test_export_anon_drops_free_text(self):
+        secret = "SECRET-acme-login"
+        t = {"type": "task", "run_id": "20260105-" + secret, "task_id": secret, "title": secret, "project": secret,
+             "notes": secret, "drift_note": secret, "verify_evidence": secret + " 12 passed", "verify_pass": True,
+             "kind": secret, "tier": "T2", "model": "codex:" + secret + " with spaces", "effort": "high",
+             "host": "claude-code", "tier_changes": [{"from": "T1", "to": "T2", "reason": secret}],
+             "issues": {"review": 1, "user": secret, "severity_max": secret}, "future": secret, "cost_usd": 0.5}
+        r = {"type": "run", "run_id": t["run_id"], "project": secret, "goal": secret, "plugin_version": secret,
+             "started_at": "2026-01-05T10:11:12Z", "tasks": 1, "integration_pass": "yes"}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "s.jsonl"), "w") as fh:
+                fh.write(json.dumps(t) + "\n" + json.dumps(r) + "\n")
+            p = run(d, "--export-anon", "--raw")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertNotIn("SECRET", p.stdout)
+            self.assertNotIn("acme", p.stdout)
+            recs = json.loads(p.stdout)["records"]
+            run_rec = next(x for x in recs if x["type"] == "run")
+            task = next(x for x in recs if x["type"] == "task")
+            self.assertEqual(run_rec["started_at"], "2026-01-05")
+            self.assertEqual(run_rec["plugin_version"], "other")
+            self.assertIsNone(run_rec["integration_pass"])
+            self.assertEqual((task["kind"], task["model"], task["tier"], task["task_id"]), ("other", "other", "T2", "t1"))
+            self.assertEqual(task["verify_evidence"], "[redacted]")
+            self.assertEqual(task["tier_changes"], [{"from": "T1", "to": "T2"}])
+            self.assertEqual(task["issues"], {"review": 1, "integration": None, "user": None, "severity_max": None})
+            self.assertEqual(json.loads(p.stdout)["summary"]["quality"]["overall"]["verify_rate"], 1.0)
+            for k in ("title", "project", "notes", "drift_note", "future", "goal"):
+                self.assertNotIn(k, task)
+                self.assertNotIn(k, run_rec)
+
+    def test_raw_requires_export(self):
+        self.assertNotEqual(run(FIX, "--raw").returncode, 0)
+
     def test_missing_path_errors(self):
         self.assertNotEqual(run("/no/such/path").returncode, 0)
 

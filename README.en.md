@@ -24,7 +24,7 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.4.5)
+.claude-plugin/plugin.json             plugin manifest (v0.4.6)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -34,7 +34,8 @@ skills/hq/references/brief-template.md task brief template for sub-sessions (wit
 skills/hq/references/metrics-schema.md run-data format (JSONL, v1) and usage definitions
 skills/hq/references/playbook-template.md template for the project playbook .hq/PLAYBOOK.md (including authorization settings)
 skills/hq/scripts/resources.sh         resource probing (Linux/cgroup/macOS); outputs how many more local tasks can be started
-skills/hq/scripts/metrics.py           summarizes run data into a metrics report (read-only)
+skills/hq/scripts/metrics.py           summarizes run data into a metrics report (read-only); --export-anon exports a whitelisted anonymized copy
+skills/hq/scripts/runs-persist.sh      saves run records into the repository (dedicated hq/runs branch or the current branch) and fetches them back
 skills/hq/scripts/cli-worker.sh        W channel: runs the codex / claude / opencode / gemini / cursor CLI in the background in a separate git worktree
 skills/hq/scripts/backends/*.sh        W channel per-CLI argument building and usage parsing (one file per CLI)
 skills/hq-retro/SKILL.md               /hq-retro: checks earlier changes, makes evidence-backed suggestions, generates a prompt for changing the plugin
@@ -52,16 +53,17 @@ adapters/hosts.tsv                     host registry: which skill directories ea
 adapters/skill-dirs.tsv                skill directory registry: personal and project paths
 install.sh                             one-command install: detects tools, copies the skills into the smallest covering set of directories, supports --list/--update/--uninstall; changes no config
 docs/design-more-hosts.md              design draft and roadmap for more hosts (v0.4.x, in Chinese)
-tests/                                 self-tests for resources.sh, cli-worker.sh, install.sh and metrics.py
+tests/                                 self-tests for resources.sh, cli-worker.sh, install.sh, runs-persist.sh and metrics.py
+.github/ISSUE_TEMPLATE/retro-data.md   issue template for sharing anonymized run data
 ```
 
 ## Installation
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.4.5` tag to `~/.hq-orchestrator/v0.4.5`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.4.6` tag to `~/.hq-orchestrator/v0.4.6`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -89,7 +91,7 @@ When not run from inside the repository, the script first uses git to download t
 
 **Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq` and `/hq-retro` commands)
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.5
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.6
 ```
 The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so. Update with `gemini extensions update hq-orchestrator`.
 
@@ -124,7 +126,7 @@ Each cloud session clones the repository into a fresh container and **cannot see
 ```
 After committing `.claude/skills/`, cloud sessions started from this repository can use `/hq` and `/hq-retro`, and the helper scripts (such as `scripts/resources.sh`) run as well. It needs no network or marketplace and pins the version, but every project holds its own copy to upgrade.
 
-Note: `.hq/` (the ledger, `.hq/runs/` run records and `.hq/retro/` retro reports) is not committed by default, so it is lost when the cloud container is reclaimed, and `~/.claude/hq/runs/` is not kept in the cloud either. A `/hq-retro` run in the cloud therefore only sees data from that session; to retro across sessions, save `.hq/runs/` yourself (for example, copy it to your machine and run the retro there).
+Note: `.hq/` (the ledger, run records and retro reports) is not committed by default, so it is lost when the cloud container is reclaimed. To retro across cloud sessions, set `runs_persist: branch` in `.hq/PLAYBOOK.md` (`/hq` also asks once at the end of the first cloud run): after each batch the run records are written to a dedicated `hq/runs` branch without touching your working tree or main, and `/hq-retro` fetches them back. If that branch cannot be pushed, it falls back to `commit` and commits the records with the batch. See "Run records and data sharing" below.
 
 *Alternative: account- or organization-level plugin.* To make it available in every cloud session, enable it for your account or organization in the claude.ai plugin directory (the plugin has to be in your organization's directory first, which may need an admin).
 
@@ -143,11 +145,11 @@ The ledger and run records (`.hq/`, `~/.claude/hq/runs/`) are unaffected: both c
 
 ## Upgrading
 
-First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.5`; substitute the version you are upgrading to.
+First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.6`; substitute the version you are upgrading to.
 
 | Install method | How to upgrade |
 |---|---|
-| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.5/install.sh \| bash -s -- --update` |
+| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh \| bash -s -- --update` |
 | Option 0 (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
 | Option 0a (Gemini extension) | `gemini extensions update hq-orchestrator` |
 | Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |
@@ -220,12 +222,33 @@ open_pr: ask              # ask | auto
 budget_usd: 20            # spending cap per run; stops to ask before exceeding it
 autonomy: auto            # auto | confirm-plan: with confirm-plan, the plan waits for your confirmation before dispatch
 worker_clis: []           # cross-vendor workers: any of codex/claude/opencode/gemini/cursor; empty (off) by default
+runs_persist: off         # off | branch | commit: whether run records are saved into the repository; asked once in the cloud if unset
 ```
 
 ## Improvement loop: record → retro → change the plugin
 1. **Record**: when each task and each run ends, the main session appends a line to `.hq/runs/<run_id>.jsonl` (format in `metrics-schema.md`, including `host`; local runs also keep a copy in `~/.claude/hq/runs/`, which the Codex host uses too). Cost is measured mainly by `cost_usd`; `tokens` excludes cache reads.
 2. **Retro**: after roughly 5 runs or 20 tasks, the main session reminds you to run `/hq-retro`. It produces a metrics report with `metrics.py`, first checks earlier changes against their acceptance metrics in `CHANGELOG.md`, then has an independent sub-agent draft evidence-backed suggestions (a pattern must appear in at least 3 tasks or 2 runs). Project-specific lessons go straight into `.hq/PLAYBOOK.md`.
 3. **Change the plugin**: suggestions about the plugin itself need your approval. The report ends with a prompt you copy into a session on the hq-orchestrator repository; it edits the files, runs the tests, adds a "pending verification" entry to `CHANGELOG.md` and bumps the patch version. The next retro verifies the change and reverts it if it missed its target.
+
+## Run records and data sharing
+
+**Saving run records** (PLAYBOOK `runs_persist`)
+
+| Value | What happens | For |
+|---|---|---|
+| `off` | Records stay in local `.hq/runs/` (local runs also copy to `~/.claude/hq/runs/`) | Local-only use |
+| `branch` | After each batch, `runs-persist.sh save branch` writes the records under `runs/` on a dedicated `hq/runs` branch and pushes it; append-only, safe with several sessions writing at once, never touches the working tree or the current branch | Cloud (recommended) |
+| `commit` | `runs-persist.sh save commit` commits only the record files to the current branch, pushed with the batch | Automatic fallback when `hq/runs` cannot be pushed |
+
+`/hq-retro` first runs `runs-persist.sh fetch` to copy the `hq/runs` records into `.hq/runs-archive/`, then summarizes them with the local records (each run counted once). `hq/runs` is a separate history branch; do not merge it into other branches.
+
+**Sharing data to improve the plugin** (entirely voluntary, never uploaded automatically)
+
+1. Run `/hq-retro --export`. It uses `metrics.py --export-anon` to export a whitelist: only enum and number fields such as tier, model, channel, duration, cost and pass rates are kept; all free text (task titles, goals, notes, verification output) and project names are removed, run ids are hashed, and timestamps are cut to dates. The whitelist is in `metrics-schema.md`.
+2. The export is shown to you in full and saved to `.hq/retro/export-<date>.json`.
+3. If you want to share it, open an issue with the [retro-data template](https://github.com/lostoy0/hq-orchestrator/issues/new?template=retro-data.md) and paste it. Issues are public; review the content once more before posting.
+
+`/hq-retro` mentions this only once, at the end of the first retro report (tracked by `share_hint` in the PLAYBOOK).
 
 ## Design highlights
 - **Orchestrate or not**: orchestration has a fixed overhead, so small tasks do not get sub-sessions.
@@ -239,7 +262,7 @@ worker_clis: []           # cross-vendor workers: any of codex/claude/opencode/g
 
 ## Self-test
 ```bash
-for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh; do echo "$t: $(bash $t | tail -1)"; done
+for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh tests/test_runs_persist.sh; do echo "$t: $(bash $t | tail -1)"; done
 python3 -m unittest discover tests
 ```
 `test_cli_worker.sh` uses the fake `codex`, `claude`, `opencode`, `gemini` and `cursor-agent` under `tests/fixtures/fake-cli/` to test argument assembly and usage parsing; it never calls the real CLIs.

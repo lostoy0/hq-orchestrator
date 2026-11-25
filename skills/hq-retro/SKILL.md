@@ -1,6 +1,6 @@
 ---
 name: hq-retro
-description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl），用 metrics.py 出指标，验证上次改动是否达到预期，产出有证据支撑的改进建议，并生成一段可直接复制到 hq-orchestrator 插件仓库执行的提示词。用户输入 /hq-retro，或 /hq 汇报中提示“该复盘了”（累计约 5 次运行或 20 个任务）时使用。没有运行数据时不要用。
+description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl），用 metrics.py 出指标，验证上次改动是否达到预期，产出有证据支撑的改进建议，并生成一段可直接复制到 hq-orchestrator 插件仓库执行的提示词。用户输入 /hq-retro，或 /hq 汇报中提示“该复盘了”（累计约 5 次运行或 20 个任务）时使用；`/hq-retro --export` 或用户想把数据分享给插件作者时，只导出脱敏数据。没有运行数据时不要用。
 ---
 
 # HQ 复盘
@@ -15,7 +15,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 
 ## 路径约定
 
-- 运行数据：目标项目的 `.hq/runs/*.jsonl`；本地运行时还有 `~/.claude/hq/runs/*.jsonl`。
+- 运行数据：目标项目的 `.hq/runs/*.jsonl`；本地运行时还有 `~/.claude/hq/runs/*.jsonl`；开了 `runs_persist: branch` 的项目，历史记录在专用分支 `hq/runs` 上（用同目录的 `scripts/runs-persist.sh fetch` 取到 `.hq/runs-archive/`）。
 - 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后先看 `~/.hq/skill-path` 下的 `scripts/metrics.py`，没有再用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
 - 项目经验：`.hq/PLAYBOOK.md`（模板 `skills/hq/references/playbook-template.md`）。
 - 改动历史：插件仓库的 `CHANGELOG.md`。找不到就在报告里写明，当作“没有上次改动”。
@@ -25,7 +25,7 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 
 ### 1. 收集数据
 
-1. 运行 `python3 <metrics.py 路径> .hq/runs ~/.claude/hq/runs --last 10`（目录不存在就省略；两处都有的同一次运行只算一次）。用户指定了项目或次数，就加 `--project NAME` 或改 `--last`。
+1. 先运行 `bash <scripts 目录>/runs-persist.sh fetch`（退出码 4 表示没有 `hq/runs` 分支，跳过即可），再运行 `python3 <metrics.py 路径> .hq/runs .hq/runs-archive ~/.claude/hq/runs --last 10`（目录不存在就省略；几处都有的同一次运行只算一次）。用户指定了项目或次数，就加 `--project NAME` 或改 `--last`。
 2. 读 `CHANGELOG.md` 最近几条改动和当时的假设。
 3. 读 `calibration.md` 和目标项目的 `.hq/PLAYBOOK.md`。
 4. 原始 jsonl **只在需要查证某条信号时**才读，读哪条记哪条。
@@ -93,6 +93,17 @@ description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl）�
 6. **复制到 hq-orchestrator 仓库的会话中执行**：一个代码块，内容按下节模板填写。
 
 **没有达到证据门槛的建议、也没有要撤回的改动：** 第 4 节写“本次没有建议改动”，第 6 节不输出提示词。不要硬凑。
+
+## 导出脱敏数据（`/hq-retro --export`）
+
+用户输入 `/hq-retro --export`，或说想把数据分享给插件作者时，不做复盘，只做下面几步：
+
+1. 和第 1 步一样取数据，运行 `python3 <metrics.py 路径> <同样的目录> --export-anon`（用户要逐条记录时加 `--raw`）。脚本按白名单只保留枚举、数字和布尔字段，删掉所有自由文本、`project`、`goal`，run_id 做哈希，时间只留日期。
+2. 把输出**完整**显示给用户，并保存到 `.hq/retro/export-<YYYY-MM-DD>.json`。
+3. 告诉用户：愿意分享的话，在 https://github.com/lostoy0/hq-orchestrator/issues/new?template=retro-data.md 新建 issue，贴上这段内容（可以再附上复盘报告第 6 节的提示词）。issue 是公开的，贴之前请再看一遍。
+4. **绝不自动上传**，也不替用户开 issue。
+
+**只提示一次**：复盘报告末尾，如果 `.hq/PLAYBOOK.md` 的 `share_hint` 不是 `shown`，加一行“愿意帮助改进插件的话，可以运行 `/hq-retro --export` 导出脱敏数据”，然后把 `share_hint` 改成 `shown`（没有这一项就加上）。以后不再提示。
 
 ## 提示词模板
 

@@ -2,11 +2,17 @@
 """Summarize hq run records (JSONL, schema v1) into a metrics report.
 
 Usage: metrics.py <file|dir...> [--format md|json] [--last N] [--project NAME]
+       metrics.py <file|dir...> --export-anon [--raw] [--last N] [--project NAME]
+--export-anon prints an anonymized JSON for sharing: records are first reduced to a
+whitelist of enum/number/boolean fields (all free text, project and goal dropped, run ids
+hashed, timestamps cut to dates), then summarized; --raw also includes those records.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -330,13 +336,125 @@ def render_md(rep):
     return "\n".join(L) + "\n"
 
 
+# ---------- anonymized export (whitelist only; anything not listed is dropped) ----------
+ENUMS = {
+    "kind": {"code", "docs", "research", "review", "config"},
+    "risk": {"low", "med", "high"},
+    "tier": {"T0", "T1", "T2", "T3", "T4"},
+    "host": {"claude-code", "codex", "dsh", "opencode", "cursor", "gemini", "other"},
+    "channel": {"A", "B", "C", "D", "W", "main"},
+    "verify_level": {"doc", "code", "high", "e2e"},
+    "review_outcome": {"pass", "pass_with_fixes", "rework", "failed"},
+}
+SEVERITY = {"none", "minor", "major"}
+TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,64}$")  # model / effort names
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+[A-Za-z0-9.+-]{0,16}$")
+TASK_NUMS = ("tier_score", "est_min", "actual_min", "tokens", "cost_usd", "attempts", "handoffs",
+             "derived_tasks", "checkpoints", "user_corrections")
+TASK_BOOLS = ("user_manual_adjust", "scope_violation", "drift", "verify_pass")
+RUN_NUMS = ("wall_min", "critical_path_min", "tasks", "max_concurrency", "throttle_events",
+            "autonomy_stops", "decisions", "standing_seq", "recommended_next")
+RUN_BOOLS = ("integration_pass", "from_recommendation")
+
+
+def anon_id(rid):
+    return "r-" + hashlib.sha256(("hq-anon:" + rid).encode("utf-8")).hexdigest()[:10]
+
+
+def a_enum(k, v):
+    return None if v is None else (v if isinstance(v, str) and v in ENUMS[k] else "other")
+
+
+def a_token(v):
+    return None if v is None else (v if isinstance(v, str) and TOKEN_RE.match(v) else "other")
+
+
+def a_bool(v):
+    return v if isinstance(v, bool) else None
+
+
+def a_date(v):
+    d = parse_ts(v)
+    return d.strftime("%Y-%m-%d") if d else None
+
+
+def anon_task(t, rid, idx):
+    o = {"type": "task", "run_id": rid, "task_id": "t%d" % idx}
+    for k in ENUMS:
+        if k in t:
+            o[k] = a_enum(k, t[k])
+    for k in ("model", "effort"):
+        if k in t:
+            o[k] = a_token(t[k])
+    for k in TASK_NUMS:
+        if k in t:
+            o[k] = num(t[k])
+    for k in TASK_BOOLS:
+        if k in t:
+            o[k] = a_bool(t[k])
+    if "verify_evidence" in t:  # keep only whether evidence was given
+        o["verify_evidence"] = "[redacted]" if t["verify_evidence"] else ""
+    if isinstance(t.get("issues"), dict):
+        i = t["issues"]
+        o["issues"] = {k: num(i.get(k)) for k in ("review", "integration", "user")}
+        o["issues"]["severity_max"] = i["severity_max"] if i.get("severity_max") in SEVERITY else None
+    if isinstance(t.get("tier_changes"), list):
+        o["tier_changes"] = [{"from": a_enum("tier", c.get("from")), "to": a_enum("tier", c.get("to"))}
+                             if isinstance(c, dict) else {} for c in t["tier_changes"]]
+    return o
+
+
+def anon_run(r, rid):
+    o = {"type": "run", "run_id": rid}
+    if "host" in r:
+        o["host"] = a_enum("host", r["host"])
+    for k in ("started_at", "ended_at"):
+        if k in r:
+            o[k] = a_date(r[k])
+    for k in RUN_NUMS:
+        if k in r:
+            o[k] = num(r[k])
+    for k in RUN_BOOLS:
+        if k in r:
+            o[k] = a_bool(r[k])
+    v = r.get("plugin_version")
+    if v is not None:
+        o["plugin_version"] = v if isinstance(v, str) and VERSION_RE.match(v) else "other"
+    return o
+
+
+def anonymize(runs):
+    out = {}
+    for rid, r in runs.items():
+        h = anon_id(rid)
+        out[h] = {"run": anon_run(r["run"], h) if r["run"] else None,
+                  "tasks": [anon_task(t, h, i + 1) for i, t in enumerate(r["tasks"])]}
+    return out
+
+
+def export_anon(runs, corrupt, raw):
+    ar = anonymize(runs)
+    versions = sorted({(r["run"] or {}).get("plugin_version") for r in ar.values()} - {None})
+    o = {"format": "hq-anon/v1", "schema": "v1", "plugin_versions": versions,
+         "note": "Whitelisted enum/number/boolean fields only; free text, project and goal removed; "
+                 "run ids hashed; timestamps cut to dates.",
+         "summary": build(ar, corrupt)}
+    if raw:
+        o["records"] = [x for r in ar.values() for x in ([r["run"]] if r["run"] else []) + r["tasks"]]
+    return o
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Summarize hq run records into a metrics report.")
     ap.add_argument("paths", nargs="+", help="jsonl files or directories")
     ap.add_argument("--format", choices=["md", "json"], default="md")
     ap.add_argument("--last", type=int, metavar="N")
     ap.add_argument("--project", metavar="NAME")
+    ap.add_argument("--export-anon", action="store_true", help="print an anonymized JSON for sharing")
+    ap.add_argument("--raw", action="store_true", help="with --export-anon: also include the anonymized records")
     a = ap.parse_args(argv)
+    if a.raw and not a.export_anon:
+        ap.error("--raw requires --export-anon")
     runs, corrupt = load(collect_files(a.paths))
     if a.project:
         runs = {k: v for k, v in runs.items() if run_project(v) == a.project}
@@ -346,6 +464,9 @@ def main(argv=None):
         ids.sort(key=lambda i: parse_ts((runs[i]["run"] or {}).get("started_at")) or datetime.min.replace(tzinfo=timezone.utc))
         ids = ids[-a.last:] if a.last > 0 else []
         runs = {i: runs[i] for i in ids}
+    if a.export_anon:
+        sys.stdout.write(json.dumps(export_anon(runs, corrupt, a.raw), ensure_ascii=False, indent=2) + "\n")
+        return
     rep = build(runs, corrupt)
     sys.stdout.write(json.dumps(rep, ensure_ascii=False, indent=2) + "\n" if a.format == "json" else render_md(rep))
 
