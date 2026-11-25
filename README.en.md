@@ -117,42 +117,27 @@ After installing, invoke them with `/hq-orchestrator:hq <goal>` and `/hq-orchest
 
 Each cloud session clones the repository into a fresh container and **cannot see your machine's `~/.claude`**. Nothing installed locally with Options 0, 1 or 2 carries over, including plugins installed with `/plugin install` on your machine. In testing, a cloud session gets skills and plugins from two places: `.claude/skills/` committed to the target project's repository, and plugins enabled for your claude.ai account or organization. So to use hq-orchestrator in the cloud, the skills have to live in **the target project's repository**.
 
-*Option 3a (recommended, verified in the cloud): copy the skills into the project repository.*
+*Recommended (verified in the cloud): copy the skills into the project repository.*
 ```bash
 ./install.sh --host claude --scope project --project-dir <project path>
 # or by hand: mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/skills/hq-retro .claude/skills/
 ```
 After committing `.claude/skills/`, cloud sessions started from this repository can use `/hq` and `/hq-retro`, and the helper scripts (such as `scripts/resources.sh`) run as well. It needs no network or marketplace and pins the version, but every project holds its own copy to upgrade.
 
-*Option 3b: declare the plugin in the project settings (tested: not installed automatically in the cloud).* Commit `.claude/settings.json` in the target project:
-```json
-{
-  "extraKnownMarketplaces": {
-    "hq-orchestrator-marketplace": {
-      "source": { "source": "github", "repo": "lostoy0/hq-orchestrator" }
-    }
-  },
-  "enabledPlugins": {
-    "hq-orchestrator@hq-orchestrator-marketplace": true
-  }
-}
-```
-- Tested in 2026-11: the cloud session clones this file but **does not add the marketplace or install the plugin from it**, and reports no error; `hq-orchestrator:hq` is not in the skill list. Use 3a for the cloud.
-- The file is still useful locally and for teams: when a teammate opens the project locally, Claude Code offers to install the declared plugin. No plugin code lives in the project, and upgrading only needs an update to this repository.
-- The marketplace source must be a reachable GitHub repository (a local-path marketplace only works on your own machine). Invoke with the namespace: `/hq-orchestrator:hq`.
+Note: `.hq/` (the ledger, `.hq/runs/` run records and `.hq/retro/` retro reports) is not committed by default, so it is lost when the cloud container is reclaimed, and `~/.claude/hq/runs/` is not kept in the cloud either. A `/hq-retro` run in the cloud therefore only sees data from that session; to retro across sessions, save `.hq/runs/` yourself (for example, copy it to your machine and run the retro there).
 
-*Option 3c: account- or organization-level plugin.* To make it available in every cloud session, enable it for your account or organization in the claude.ai plugin directory (the plugin has to be in your organization's directory first, which may need an admin).
+*Alternative: account- or organization-level plugin.* To make it available in every cloud session, enable it for your account or organization in the claude.ai plugin directory (the plugin has to be in your organization's directory first, which may need an admin).
 
-You could also run `install.sh` from the environment's setup script or a SessionStart hook on every session, but this is untested, reinstalls every time and depends on environment configuration; 3a is usually simpler.
+> ⚠️ **Do not rely on declaring the plugin in the project's `.claude/settings.json` for the cloud.** Declaring `hq-orchestrator@hq-orchestrator-marketplace` with `extraKnownMarketplaces` + `enabledPlugins` was tested in 2026-11: cloud sessions **do not install the plugin and report no error**, and `hq-orchestrator:hq` is missing from the skill list. If you set it up that way from another guide and it does not work, this is why; use the approach above instead.
+
+You could also run `install.sh` from the environment's setup script or a SessionStart hook on every session, but this is untested, reinstalls every time and depends on environment configuration; the approach above is usually simpler.
 
 **Using it both locally and in the cloud: avoiding duplicate installs**
 
-| Existing local install | Effect of adding Option 3a or 3b in the project | Recommendation |
+| Situation | Effect | Recommendation |
 |---|---|---|
-| Option 0 or 1 (`~/.claude/skills/hq`) + Option 3a | Locally, this project sees two `/hq` skills with the same name (personal and project copies), possibly at different versions | If unsure which one wins, check versions with `./install.sh --list`; keeping both on the same version is simplest |
-| Option 0 or 1 (`~/.claude/skills/hq`) + Option 3b | Locally you get both `/hq` and `/hq-orchestrator:hq`. The names do not clash, but the model may pick either one, the two versions drift apart over time, and the plugin copy looks up its helper scripts via `~/.hq/skill-path` first, so it may run the personal copy's older scripts | Pick one: if you only use the plugin, remove the personal copy with `./install.sh --uninstall`; if you develop it locally, keep it and call `/hq` explicitly while debugging |
-| Option 2 (marketplace added from a local path) + Option 3b | Same marketplace name and plugin ID, so it is not installed twice; the local-path version stays in use locally | Good for development: your edited code runs locally |
-| A project that commits `.claude/skills/hq` and also declares the plugin | Two copies locally | Choose either 3a or 3b; choose 3a if you need the cloud |
+| A personal copy on your machine (Option 0 or 1, `~/.claude/skills/hq`) plus the Option 3 copy committed in the project | Locally, this project sees two `/hq` skills with the same name, possibly at different versions | Check versions with `./install.sh --list`; keeping both on the same version is simplest |
+| Both a personal copy and the Option 2 plugin on your machine | Locally you get both `/hq` and `/hq-orchestrator:hq`. The names do not clash, but the model may pick either one, the two versions drift apart over time, and the plugin copy looks up its helper scripts via `~/.hq/skill-path` first, so it may run the personal copy's older scripts | Pick one: if you only use the plugin, remove the personal copy with `./install.sh --uninstall`; if you develop it locally, keep it and call `/hq` explicitly while debugging |
 
 The ledger and run records (`.hq/`, `~/.claude/hq/runs/`) are unaffected: both copies write to the same place and retros work as usual. If you are unsure how it was installed locally, run `./install.sh --list` and `ls ~/.claude/skills ~/.claude/plugins`.
 
@@ -168,8 +153,7 @@ First check what you have: `./install.sh --list` shows each installed copy with 
 | Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |
 | Option 1 (manual copy) | Get the new version and run the `cp -r` command again (it overwrites the old files) |
 | Option 2 (plugin) | `/plugin marketplace update hq-orchestrator-marketplace`, then update `hq-orchestrator` from `/plugin`; for a marketplace added from a local path, `git pull` in that directory first |
-| Option 3a (copy in the project repository) | `./install.sh --update --scope project --project-dir <path>` (or copy again into `.claude/skills/`) and commit |
-| Option 3b (plugin declared in the project) | Same as Option 2: `/plugin marketplace update hq-orchestrator-marketplace` |
+| Option 3 (copy in the project repository) | `./install.sh --update --scope project --project-dir <path>` (or copy again into `.claude/skills/`) and commit |
 
 Notes:
 
