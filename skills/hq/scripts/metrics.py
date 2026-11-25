@@ -153,7 +153,8 @@ def quality(tasks, runs):
     }
 
 
-def group(tasks, keyf):
+def group(tasks, keyf, skip=frozenset()):
+    """skip: id()s of tasks from runs with contradictory time data; left out of actual/est only."""
     g = {}
     for t in tasks:
         g.setdefault(keyf(t), []).append(t)
@@ -163,7 +164,7 @@ def group(tasks, keyf):
         n = len(ts)
         toks = [num(t.get("tokens")) for t in ts if num(t.get("tokens")) is not None]
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
-        rs = [ratio(t) for t in ts if ratio(t) is not None]
+        rs = [ratio(t) for t in ts if id(t) not in skip and ratio(t) is not None]
         out.append({
             "key": k, "n": n, "insufficient": n < MIN_N,
             "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
@@ -171,6 +172,7 @@ def group(tasks, keyf):
             "handoff_rate": rate(sum(1 for t in ts if cnt(t.get("handoffs")) > 0), n),
             "avg_cost_usd": mean(cost), "avg_tokens": mean(toks),
             "ratio_median": med(rs), "ratio_n": len(rs),
+            "ratio_excluded": sum(1 for t in ts if id(t) in skip and ratio(t) is not None),
         })
     return out
 
@@ -275,13 +277,15 @@ def build(runs, corrupt):
             d = parse_ts(r.get(k))
             if d:
                 stamps.append((d, r[k]))
-    tiers = group(tasks, lambda t: t["tier"] if isinstance(t.get("tier"), str) else "unknown")
-    models = group(tasks, lambda t: "%s/%s" % (t["model"] if isinstance(t.get("model"), str) else "unknown",
-                                               t["effort"] if isinstance(t.get("effort"), str) else "unknown"))
-    s_ = lambda t, k: t[k] if isinstance(t.get(k), str) else "unknown"
-    hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")))
     effs = [efficiency(i, runs[i]) for i in ids]
-    rs = [ratio(t) for t in tasks if ratio(t) is not None]
+    # actual_min of runs with contradictory time data is unreliable: keep those tasks out of actual/est
+    skip = frozenset(id(t) for e in effs if e["inconsistent"] for t in runs[e["run_id"]]["tasks"])
+    tiers = group(tasks, lambda t: t["tier"] if isinstance(t.get("tier"), str) else "unknown", skip)
+    models = group(tasks, lambda t: "%s/%s" % (t["model"] if isinstance(t.get("model"), str) else "unknown",
+                                               t["effort"] if isinstance(t.get("effort"), str) else "unknown"), skip)
+    s_ = lambda t, k: t[k] if isinstance(t.get(k), str) else "unknown"
+    hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")), skip)
+    rs = [ratio(t) for t in tasks if id(t) not in skip and ratio(t) is not None]
     miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
     return {
         "overview": {"runs": len(ids), "tasks": len(tasks), "corrupt_lines": corrupt,
@@ -334,7 +338,9 @@ def render_md(rep):
     gh = ["分组", "n", "一次通过率", "升档率", "交接率", "平均 cost_usd", "平均 tokens", "actual/est 中位数", "备注"]
     def grow(g):
         return [g["key"], g["n"], f(g["first_pass_rate"], "p"), f(g["escalation_rate"], "p"), f(g["handoff_rate"], "p"),
-                f(g["avg_cost_usd"]), f(g["avg_tokens"], "d"), f(g["ratio_median"]), "样本不足" if g["insufficient"] else ""]
+                f(g["avg_cost_usd"]), f(g["avg_tokens"], "d"), f(g["ratio_median"]),
+                "；".join(x for x in ("样本不足" if g["insufficient"] else "",
+                                     "用时比排除矛盾 run 的 %d 条" % g["ratio_excluded"] if g["ratio_excluded"] else "") if x)]
     L += ["", "## 3a. 按档位", ""] + table(gh, [grow(g) for g in rep["by_tier"]])
     L += ["", "## 3b. 按模型/思考深度", ""] + table(gh, [grow(g) for g in rep["by_model"]])
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
