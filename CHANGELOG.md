@@ -26,7 +26,7 @@
 - **改动**：新增 `skills/hq/scripts/runs-persist.sh`：`save branch` 用 git 底层命令把 `.hq/runs/*.jsonl` 写进专用分支 `hq/runs` 的 `runs/` 下并推送（不碰工作区和当前分支；只追加；别的会话同时推送时重新拉取再试，最多 3 次；推不上退出码 3）；`save commit` 只把记录文件提交到当前分支；`fetch` 取回到 `.hq/runs-archive/`。`SKILL.md` 第 9 步删去“云端不需要保存”，按 PLAYBOOK 新项 `runs_persist: off|branch|commit` 保存，`branch` 推不上就降级为 `commit` 并改写 PLAYBOOK；云端没写这项时在第一次汇报里问一次。授权配置、`playbook-template.md` 加 `runs_persist`。`hq-retro` 第 1 步先 `fetch` 再把 `.hq/runs-archive` 一起汇总。新增 `tests/test_runs_persist.sh`（26 项）。README 中英文加“运行记录与数据分享”一节。
 - **原因/假设**：云端容器回收后 `.hq/runs/` 丢失（2026-11-25 云端实测 `/hq-retro` 只看到本会话数据），主要在云端使用的项目永远凑不够复盘门槛。存进项目仓库后数据和代码在同一信任范围，不涉及第三方。
 - **验收指标**：开了 `runs_persist: branch` 的云端项目，`/hq-retro` 的 run 数等于实际运行过的批次数（缺失 = 0）；`runs-persist.sh` 推送失败后降级为 `commit` 的次数单独记进 notes，比例不应超过 50%（超过说明云端默认应改为 `commit`）；保存步骤导致的 `autonomy_stops` 只有云端首次那一次。
-- **状态**：待验证（本地用 bare 仓库测过并发、降级和取回；云端能否推送 `hq/runs` 分支未实测）
+- **状态**：待验证（本地用 bare 仓库测过并发、降级和取回；2026-11-25 云端会话实测 `save branch` 推送 `hq/runs` 成功、`fetch` 取回成功，但云端删不掉远程分支，测试分支需手动删除）
 - **复盘报告**：无（人工改动）
 
 ### 手动导出脱敏数据
