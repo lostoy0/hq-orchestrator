@@ -99,7 +99,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
 - **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
-- **辅助执行者**（开启时）：先去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
+- **辅助执行者**（开启时）：先去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥；辅助都走 W 通道，还要确认本会话能建 worktree（`git worktree add` 要写 `.git`，Codex 等宿主的沙箱可能禁止），不能建就整个名单按“不可用”停用。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
 - **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
@@ -137,7 +137,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 
 - **本地槽位**（A、C、W 的重任务）：每次派发前运行 `resources.sh`，重任务 `1500 1`，轻任务 `400 0.25`。
   - `new_local_slots` 是在当前占用上还能再开几个。新任务 30 到 60 秒后才拉高负载，连续派发时把最近 60 秒内新开的任务从槽位里扣掉。
-  - `YELLOW` 最多再开 1 个；`RED` 不再派发。`RED` 且内存可用低于 5% 或交换区持续上涨：用 stop_worker 停掉最近启动的重任务，放回队列，台账记一次 `throttle_events`。
+  - `YELLOW` 最多再开 1 个；`RED` 不再派发。`UNKNOWN` 表示有读数读不到（如沙箱禁止 `sysctl`，见输出的 `unreadable`），不代表资源紧张：按 `YELLOW` 处理，最多再开 1 个，台账“资源基线”写明哪些读不到。`RED` 且内存可用低于 5% 或交换区持续上涨：用 stop_worker 停掉最近启动的重任务，放回队列，台账记一次 `throttle_events`。
 - **限 CPU**：说明里写明并行度（`make -j2`、`pytest -n 2`、`--maxWorkers=2`）。用户电脑同一时间最多 1 个任务跑全量构建或测试。
 - **远程槽位**：不占本地资源但消耗额度，并发不超过预算上限和宿主的 concurrency_limit。
 - 每当有任务完成、失败或巡检时，重新算槽位，从就绪队列按“关键路径优先，其次难度高的优先”补位。

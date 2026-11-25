@@ -274,7 +274,7 @@ runs_persist: off         # off | branch | commit：运行记录是否保存进�
 - **难度分档**：按 `calibration.md` 5 维打分得到抽象档位 T0–T4，再按宿主映射成具体模型（Claude Code 为 haiku/low 到 opus/high）；选档算上失败重来的成本，看不准先调研。拿不准难度时自动往上选一步（`calibration.md` 规则 9）：Codex、dsh、DeepSeek 后端额度更便宜，上调一整档；Claude Code 默认只把思考深度上调一级，需求模糊或高风险时上调一整档（可在 PLAYBOOK 的 `cost_weight` 调整）。
 - **动态调档**：子会话遇到超范围衍生任务、难度超预期或反复失败时发检查点；卡住就升一档新开会话从分支接着做，不做降档交接。
 - **运行位置路由**：需要本地资源的任务一定在本地跑，能并行的长任务放到云端，小任务在进程内执行。
-- **资源保护**：每次派发前都检测资源，按 GREEN/YELLOW/RED 三级控制派发；给子会话限定构建并行度；RED 时停掉最新启动的重任务。
+- **资源保护**：每次派发前都检测资源，按 GREEN/YELLOW/RED 三级控制派发（读数读不到时报 UNKNOWN，按 YELLOW 最多再开 1 个）；给子会话限定构建并行度；RED 时停掉最新启动的重任务。
 - **质量把关**：三项质量门槛；验证按风险分 doc/code/high/e2e 四级，只有 high 级主会话才逐个复跑验收命令，归并后统一跑一次全量测试；高风险或大改动另派独立审核者。
 - **可恢复**：所有状态写在台账里，上下文被压缩或会话重启后可以接着做。
 
@@ -284,7 +284,7 @@ for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh 
 python3 -m unittest discover tests
 ```
 `test_cli_worker.sh` 用 `tests/fixtures/fake-cli/` 下的假 `codex`、`claude`、`opencode`、`gemini`、`cursor-agent` 测参数拼接和用量解析，不调用真实 CLI。
-`resources.sh` 支持 `HQ_FAKE_CORES`、`HQ_FAKE_LOAD1`、`HQ_FAKE_MEM_TOTAL_MB` 等环境变量注入模拟读数，用来覆盖 GREEN/YELLOW/RED 各种情况。
+`resources.sh` 支持 `HQ_FAKE_CORES`、`HQ_FAKE_LOAD1`、`HQ_FAKE_MEM_TOTAL_MB` 等环境变量注入模拟读数，用来覆盖 GREEN/YELLOW/RED 各种情况；`HQ_FAKE_UNREADABLE=cores,mem_total,…` 模拟读不到的读数（UNKNOWN）。
 
 ## 待核实项与本机验证清单
 

@@ -18,6 +18,15 @@
 
 ---
 
+## 未发布
+
+### resources.sh 读不到读数时报 UNKNOWN；写明 Codex 作主宿主时的沙箱限制
+- **改动**：`scripts/resources.sh` 每项读数读不到（`sysctl`、`vm_stat`、`/proc` 被拒或没有）时不再当成 0：输出里记为 `null`，新增 `unreadable` 数组和 `reason` 里的“无法读取:…”；已读到的读数没到 RED 时 `level` 为 `UNKNOWN`、`new_local_slots` 最多 1，读到的读数显示 RED 时仍为 RED；新增测试注入 `HQ_FAKE_UNREADABLE`。`tests/test_resources.sh` 的 `over()` 不再用 `local -n`（macOS 自带 bash 3.2 不支持，原先 4 项失败），新增 7 项 UNKNOWN 用例。`SKILL.md` 第 5 步补 `UNKNOWN` 的处理（按 YELLOW），第 1 步辅助预检补“能否建 worktree”；`calibration.md` 规则 10 的关键路径条件加 `UNKNOWN`；`hosts/codex.md` §5 第 9 条改为实测结论；README 中英文同步。
+- **原因/假设**：2026-11-25 在 Codex（0.172.0，`codex exec --approve-for-me`）里实测 assist 熔断：沙箱禁止 `sysctl`，旧脚本把读不到当成 0，报 `RED`/0 槽位，会挡住所有本地派发；同时沙箱禁止写 `.git`，W 通道建不了 worktree、主宿主也提交不了。熔断本身按规则 10 正常工作（`same_as_host` 跳过、缺 `env_file` 和建不了 worktree 都记为不可用、剩余任务全部由 Codex 自己做、`autonomy_stops: 0`）。假设：区分“读不到”和“资源紧张”后，沙箱宿主不会再被误判为 RED。
+- **验收指标**：沙箱宿主（Codex 等）的运行里，因 `resources.sh` 误报 RED 而 `throttle_events` > 0 的次数 = 0；`level: UNKNOWN` 的运行里，因资源不足被 stop_worker 的任务 = 0。
+- **状态**：待验证（`test_resources.sh` 26/26；在 `codex sandbox` 里实跑：旧脚本 RED/0、新脚本 UNKNOWN/1）
+- **复盘报告**：无（人工改动）
+
 ## v0.5.1（2026-11-25）
 
 Codex 辅助执行者实机核实与 macOS 修复；选档“拿不准往上选”扩展到所有宿主；辅助执行者停用（熔断）规则，主宿主不再假定是 Claude。

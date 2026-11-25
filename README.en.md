@@ -274,7 +274,7 @@ runs_persist: off         # off | branch | commit: whether run records are saved
 - **Difficulty tiers**: scored on 5 dimensions in `calibration.md` into abstract tiers T0–T4, then mapped per host to concrete models (on Claude Code, haiku/low through opus/high). Tier choice includes the cost of failing and redoing; when difficulty is unclear, research first. When the tier is uncertain, every host rounds up one step (`calibration.md` rule 9): Codex, dsh and DeepSeek backends have cheaper quotas and go up a full tier; Claude Code raises only the thinking depth by one level by default, and a full tier when the task is ambiguous or high-risk (adjust with `cost_weight` in the PLAYBOOK).
 - **Dynamic re-tiering**: sub-sessions send a checkpoint on out-of-scope derived work, unexpected difficulty or repeated failure; a stuck task is handed to a new session one tier higher that continues from its branch. No downgrade handoffs.
 - **Run-location routing**: tasks that need local resources always run locally; long tasks that can run in parallel go to the cloud; small tasks run in-process.
-- **Resource protection**: resources are checked before every dispatch, and dispatch is controlled at three levels: GREEN/YELLOW/RED. Each sub-session is given a build parallelism limit. At RED, the most recently started heavy task is stopped.
+- **Resource protection**: resources are checked before every dispatch, and dispatch is controlled at three levels: GREEN/YELLOW/RED (UNKNOWN when some readings cannot be read, treated like YELLOW: at most one more). Each sub-session is given a build parallelism limit. At RED, the most recently started heavy task is stopped.
 - **Quality control**: three quality gates; verification is graded by risk into doc/code/high/e2e, the main session re-runs acceptance commands itself only for high, and a full test run happens once after merging; high-risk or large changes get a separate independent reviewer.
 - **Recoverable**: all state is written to the ledger, so work can continue after context compression or a session restart.
 
@@ -284,7 +284,7 @@ for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh 
 python3 -m unittest discover tests
 ```
 `test_cli_worker.sh` uses the fake `codex`, `claude`, `opencode`, `gemini` and `cursor-agent` under `tests/fixtures/fake-cli/` to test argument assembly and usage parsing; it never calls the real CLIs.
-`resources.sh` accepts `HQ_FAKE_CORES`, `HQ_FAKE_LOAD1`, `HQ_FAKE_MEM_TOTAL_MB` and similar environment variables to inject simulated readings, covering the GREEN/YELLOW/RED cases.
+`resources.sh` accepts `HQ_FAKE_CORES`, `HQ_FAKE_LOAD1`, `HQ_FAKE_MEM_TOTAL_MB` and similar environment variables to inject simulated readings, covering the GREEN/YELLOW/RED cases; `HQ_FAKE_UNREADABLE=cores,mem_total,…` simulates unreadable readings (UNKNOWN).
 
 ## Open items and on-machine verification checklist
 
