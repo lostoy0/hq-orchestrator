@@ -36,7 +36,8 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **claude-code**：工具列表里有名为 Agent 的子代理工具，或有 Claude Code 远程会话工具（工具名以 claude-code-remote 开头）。若环境变量 `ANTHROPIC_BASE_URL` 指向 deepseek，另读 `references/hosts/deepseek.md`。
   - **codex**：能看到 `~/.codex/`、能用 codex 的子代理功能。读 `references/hosts/codex.md`（接 DeepSeek 后端时另读 `hosts/deepseek.md`）。
   - **dsh**（DeepSeek Harness）：工具列表里有 `subagent`、`list_subagent_models`、`list_agents`，或存在 `~/.dsh/`、`$DSH_HOME`。读 `references/hosts/dsh.md`；`$DSH_HOME` 非默认时把上面 find 的 `~/.dsh/skills` 换成 `$DSH_HOME/skills`。
-  - **opencode / cursor / gemini / other**（OpenCode、Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）：读 `references/hosts/generic.md`，按其识别表记 host；有 shell 且 `worker_clis` 允许时用 W，否则用降级模式。
+  - **opencode**：工具列表里有 `subagent`（参数为 agent ID、`description`、`prompt`、可选 `sessionID`，没有 `list_subagent_models`），或系统提示表明是 OpenCode，或存在 `.opencode/`、`~/.config/opencode/`。读 `references/hosts/opencode.md`（子代理和主会话共用工作目录，改代码任务要先建 worktree）。
+  - **cursor / gemini / other**（Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）：读 `references/hosts/generic.md`，按其识别表记 host；有 shell 且 `worker_clis` 允许时用 W，否则用降级模式。
   - 识别后读对应的 `references/hosts/<host>.md`，按其能力表使用下面的抽象能力。
 - **我在哪**：宿主文档说明怎样判断云端会话还是本地；只有云端会话通常才有 remote_workers 和 local_machine。
 - **有哪些派发通道**（通用规则见 `references/runtimes.md`，具体调用见宿主文档）：

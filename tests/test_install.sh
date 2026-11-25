@@ -180,6 +180,49 @@ for args in "--host claude --layout x" "--force"; do
   [ $rc = 2 ] && ok "非法参数 '$args' 退出码 2" || bad "invalid '$args'" "rc=$rc"
 done
 
+# ---------- v0.4.1：模板生成器、--with-agents、OpenCode ----------
+R="$REPO/adapters/render.sh"
+# 23. 仓库里的模板与生成器输出一致（防止手改漂移）
+bash "$R" --format codex --check "$REPO/adapters/codex/agents" >"$T/out" 2>&1 && ok "codex 模板与 tiers.tsv 一致" || bad "codex render check" "$(cat "$T/out")"
+bash "$R" --format opencode --check "$REPO/adapters/opencode/agents" >"$T/out" 2>&1 && ok "opencode 模板与 tiers.tsv 一致" || bad "opencode render check" "$(cat "$T/out")"
+# 24. opencode 模板是 V2 格式：mode: subagent，没有 V1 字段，默认不写 model
+bad24=""
+for f in "$REPO"/adapters/opencode/agents/hq-t*.md; do
+  head -1 "$f" | grep -qx -- '---' || bad24="$bad24 $(basename "$f"):no-frontmatter"
+  fm=$(awk 'NR==1{next} /^---$/{exit} {print}' "$f")
+  echo "$fm" | grep -qx 'mode: subagent' || bad24="$bad24 $(basename "$f"):mode"
+  echo "$fm" | grep -Eq '^(tools|permission|temperature|maxSteps|prompt|disable|name|model):' && bad24="$bad24 $(basename "$f"):v1-or-model"
+done
+[ -z "$bad24" ] && [ "$(ls "$REPO"/adapters/opencode/agents/hq-t*.md | wc -l)" = 5 ] && ok "opencode 模板为 V2 subagent 格式" || bad "opencode fmt" "$bad24"
+# 25. --model-map：opencode 自动追加 #<思考深度>，显式 variant 保留；codex 填模型名
+rm -rf "$T/r"; bash "$R" --format opencode --out "$T/r" --model-map 'T0=openai/m-small,T4=anthropic/m-big#max' >/dev/null 2>&1
+grep -qx 'model: openai/m-small#low' "$T/r/hq-t0.md" && grep -qx 'model: anthropic/m-big#max' "$T/r/hq-t4.md" && ! grep -q '^model:' "$T/r/hq-t2.md" && ok "opencode --model-map 生成 provider/model#variant" || bad "opencode map" "$(grep -h model "$T/r"/*.md)"
+rm -rf "$T/r"; bash "$R" --format codex --out "$T/r" --model-map 'T3=gpt-big' >/dev/null 2>&1
+grep -qx 'model = "gpt-big"' "$T/r/hq-t3.toml" && grep -qx 'model_reasoning_effort = "medium"' "$T/r/hq-t3.toml" && grep -q '^model = "<' "$T/r/hq-t0.toml" && ok "codex --model-map 填模型、其余保留占位符" || bad "codex map" "-"
+for m in 'T9=a/b' 'T0=' 'T0=nomodelslash' 'T0=a/b c'; do
+  bash "$R" --format opencode --out "$T/r2" --model-map "$m" >/dev/null 2>&1; rc=$?
+  [ $rc = 2 ] && ok "非法 --model-map '$m' 退出码 2" || bad "bad map '$m'" "rc=$rc"
+done
+# 26. install --with-agents：opencode 模板进 ~/.config/opencode/agents / <项目>/.opencode/agents
+fresh; HOME="$T/h" bash "$INST" --host opencode --with-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(ls "$T/h/.config/opencode/agents"/hq-t*.md 2>/dev/null | wc -l)" = 5 ] && [ ! -e "$T/h/.codex" ] && grep -q "档位不生效" "$T/out" && ok "opencode --with-agents 个人范围" || bad "opencode agents user" "rc=$rc"
+fresh; HOME="$T/h" bash "$INST" --host opencode --scope project --project-dir "$T/p" --with-agents --model-map 'T0=x/y,T1=x/y,T2=x/y,T3=x/z,T4=x/z' >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && grep -qx 'model: x/z#high' "$T/p/.opencode/agents/hq-t4.md" && [ ! -e "$T/h/.config/opencode/agents" ] && ok "opencode --with-agents --model-map 项目范围" || bad "opencode agents project" "rc=$rc $(tail -2 "$T/out")"
+# 27. --with-agents 对多个宿主：codex + opencode 都装；对没有模板的宿主给提示
+fresh; HOME="$T/h" bash "$INST" --host codex,opencode --with-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.codex/agents/hq-t2.toml" ] && [ -f "$T/h/.config/opencode/agents/hq-t2.md" ] && ok "codex,opencode --with-agents 两种模板都装" || bad "multi agents" "rc=$rc"
+fresh; HOME="$T/h" bash "$INST" --host codex,opencode --with-agents --model-map 'T0=a/b' >"$T/out" 2>&1; rc=$?
+[ $rc = 2 ] && [ -z "$(ls -A "$T/h")" ] && ok "--model-map 对应多个宿主 => 2 且不写入" || bad "map multi" "rc=$rc"
+fresh; HOME="$T/h" bash "$INST" --host claude --with-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && grep -q "没有子代理模板" "$T/out" && [ ! -e "$T/h/.codex" ] && ok "claude --with-agents 提示无模板" || bad "claude agents" "rc=$rc"
+# 28. opencode 模板已存在 => 3 且不装一半；OPENCODE_AGENTS_DIR 覆盖
+fresh; mkdir -p "$T/ag"; echo keep >"$T/ag/hq-t1.md"
+HOME="$T/h" OPENCODE_AGENTS_DIR="$T/ag" bash "$INST" --host opencode --with-agents >"$T/out" 2>&1; rc=$?
+[ $rc = 3 ] && grep -q keep "$T/ag/hq-t1.md" && [ ! -e "$T/h/.config/opencode/skills/hq" ] && ok "opencode 模板已存在 => 3 且不装一半" || bad "opencode agents exists" "rc=$rc"
+# 29. dry-run + model-map 不写入
+fresh; HOME="$T/h" bash "$INST" --host opencode --with-agents --model-map 'T0=a/b' --dry-run >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -z "$(find "$T/h" -type f)" ] && ok "dry-run + --model-map 不写入" || bad "dry map" "rc=$rc"
+
 echo "----"
 echo "SUMMARY: $pass passed, $fail failed"
 [ $fail -eq 0 ]

@@ -1,14 +1,14 @@
-# 宿主适配：通用（OpenCode、Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）
+# 宿主适配：通用（Cursor、Gemini CLI 及其他支持 SKILL.md 的工具）
 
 ## 1. 概述与适用范围
 
-- 适用：还没有专门宿主文档的工具。v0.4.0 起 `install.sh` 能把技能装到 OpenCode、Cursor、Gemini CLI 读取的目录（见 `adapters/hosts.tsv`，级别 `basic`），这些工具在 hq 里统一按本文件运行。
-- 核实状态（2026-11-25）：技能目录来自各工具官方文档，**没有实机运行**。各工具的原生子代理（OpenCode `.opencode/agents/`、Cursor `.cursor/agents/`、Gemini CLI `.gemini/agents/`）**暂不使用**，等专门的宿主文档核实后再接（计划见 `docs/design-more-hosts.md`）。
+- 适用：还没有专门宿主文档的工具。v0.4.0 起 `install.sh` 能把技能装到 Cursor、Gemini CLI 读取的目录（见 `adapters/hosts.tsv`，级别 `basic`），这些工具在 hq 里统一按本文件运行。**OpenCode 自 v0.4.1 起有专门文档 `opencode.md`**；版本为 V1 或没装 `hq-t*` 子代理时也可按本文件降级运行。
+- 核实状态（2026-11-25）：技能目录来自各工具官方文档，**没有实机运行**。各工具的原生子代理（Cursor `.cursor/agents/`、Gemini CLI `.gemini/agents/`）**暂不使用**，等专门的宿主文档核实后再接（计划见 `docs/design-more-hosts.md`）。
 - **识别特征**（任一即可；结果写进台账头部，`host` 记对应 id）：
 
 | host | 特征 |
 |---|---|
-| `opencode` | 系统提示或工具说明表明是 OpenCode；有 `.opencode/` 或 `~/.config/opencode/` |
+| `opencode` | 见 `opencode.md`；只在它无法使用时（V1 版本、没装 `hq-t*`）按本文件降级 |
 | `cursor` | 系统提示表明是 Cursor Agent；有 `.cursor/` 或 `~/.cursor/` |
 | `gemini` | 系统提示表明是 Gemini CLI；有 `.gemini/` 或 `~/.gemini/` |
 | `other` | 都不符合 |
@@ -43,7 +43,7 @@
 ## 5. 已知限制与待核实项
 
 1. 只装了技能，档位不生效；大目标在降级模式下是串行的，用时会明显长于原生宿主。
-2. 待核实：OpenCode 子代理 frontmatter 的 `model: provider/model#variant` 能否按档位生效（若能，升级为原生宿主，优先级最高）。
+2. OpenCode 已在 v0.4.1 升级为原生宿主（见 `opencode.md`）。
 3. 待核实：Cursor 子代理的文件格式、能否指定模型；`agent -p` 的 `--model` 参数（团队管理员可禁用 headless）。
 4. 待核实：Gemini CLI 子代理模型只能在 `settings.json` 的 `agents.overrides` 设置；`gemini -p -m <model> --output-format json` 作为 W 后端。
 5. 待核实：Cursor 是否读取 `~/.agents/skills`（登记表暂未计入，Cursor 按 `~/.claude/skills` 覆盖）。

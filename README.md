@@ -17,17 +17,18 @@
 | **DeepSeek Harness（dsh）· DeepSeek 推荐路径** | `hosts/dsh.md` | 原生宿主：`subagent` 逐次指定 provider/model/思考深度；**只读过官方文档，未实机运行** |
 | DeepSeek 后端 · 路径二：Claude Code 接 DeepSeek | `hosts/deepseek.md` | 档位压成 flash/pro 两档；云端子会话（B）仍用 Claude 模型 |
 | DeepSeek 后端 · 路径三：Codex 接 DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | 配置示例来自官方摘要，待实测 |
-| OpenCode、Cursor、Gemini CLI（v0.4 起可一键安装） | `hosts/generic.md` | 基础支持：技能目录按官方文档登记，**未实机运行**；有 shell 用 W 通道，否则**降级模式**（主会话按同样的计划、台账和质量门槛串行亲自执行）。原生子代理适配见 `docs/design-more-hosts.md` |
+| **OpenCode（V2）** | `hosts/opencode.md` + `adapters/opencode/` | v0.4.1 起原生宿主：`hq-t0…t4` 子代理各带 `provider/model#variant`，档位逐任务生效；**只读过官方文档，未实机运行** |
+| Cursor、Gemini CLI（v0.4 起可一键安装） | `hosts/generic.md` | 基础支持：技能目录按官方文档登记，**未实机运行**；有 shell 用 W 通道，否则**降级模式**（主会话按同样的计划、台账和质量门槛串行亲自执行）。原生子代理适配见 `docs/design-more-hosts.md` |
 | 其他支持 SKILL.md 的工具 | `hosts/generic.md` | 同上；可用 `npx skills add` 安装（见“安装”） |
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.0）
+.claude-plugin/plugin.json             plugin 清单（v0.4.1）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
 skills/hq/references/runtimes.md       抽象能力、派发通道（A/B/C/D/W）通用规则和宿主索引
-skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / dsh / deepseek / generic）
+skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / dsh / opencode / deepseek / generic）
 skills/hq/references/brief-template.md 子会话任务说明模板（含验证级别、检查点）与交付格式
 skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用量口径
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
@@ -37,7 +38,11 @@ skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后�
 skills/hq-retro/SKILL.md               /hq-retro 复盘：验证上次改动、出有证据的建议、生成改插件的提示词
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词
-adapters/codex/                        Codex 自定义 agent 模板 hq-t0…hq-t4（T0–T4 档位，模型名为占位符）
+adapters/tiers.tsv                     档位登记表：T0–T4 的思考深度、模型档次、适合任务（子代理模板的唯一来源）
+adapters/render.sh                     由 tiers.tsv 生成各宿主的 hq-t0…hq-t4 模板，可用 --model-map 填入模型
+adapters/agent-dirs.tsv                子代理模板的安装目录登记表
+adapters/codex/                        Codex 自定义 agent 模板 hq-t0…hq-t4（生成，模型名为占位符）
+adapters/opencode/                     OpenCode V2 子代理模板 hq-t0…hq-t4（生成，默认不设 model）
 adapters/hosts.tsv                     宿主登记表：每个工具读哪些技能目录、怎么检测（新增宿主加一行）
 adapters/skill-dirs.tsv                技能目录登记表：个人/项目范围路径
 install.sh                             一键安装：自动检测工具、按最小目录集合复制技能，支持 --list/--update/--uninstall，不改任何配置
@@ -49,12 +54,12 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.0/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.1/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.0` 标签下载到 `~/.hq-orchestrator/v0.4.0`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.4.1` 标签下载到 `~/.hq-orchestrator/v0.4.1`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
-             [--layout minimal|per-host] [--with-codex-agents] [--force] [--dry-run]
+             [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
 ./install.sh --list          # 检测到的工具、已装副本和安装计划，不写入
 ./install.sh --update        # 把本脚本装过的副本更新到当前版本
 ./install.sh --uninstall     # 删除本脚本装过的副本
@@ -69,10 +74,13 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.0/inst
 | 各工具专属目录（只装一个工具时使用） | `${DSH_HOME:-~/.dsh}/skills`、`~/.config/opencode/skills`、`~/.cursor/skills`、`~/.gemini/skills`（项目范围为 `.dsh/`、`.opencode/`、`.cursor/`、`.gemini/` 下的 `skills/`） |
 
   OpenCode 同时读前两个目录，Claude Code 和 Codex 都装时它会看到两份同名技能，按其规则只加载一份。`--layout per-host` 改为每个工具各装自己的专属目录（v0.3 的 `--host all` 行为）。
-- `--with-codex-agents`：Codex agent 模板装到 `~/.codex/agents/hq-t*.toml`（项目范围 `<项目>/.codex/agents/`），装后按 `adapters/codex/README.md` 替换 `model` 占位符。
+- `--with-agents`：同时安装所选宿主的子代理档位模板 `hq-t0…hq-t4`：Codex 装到 `~/.codex/agents/*.toml`，OpenCode 装到 `~/.config/opencode/agents/*.md`（项目范围为 `<项目>/.codex/agents/`、`<项目>/.opencode/agents/`）。加 `--model-map 'T0=<模型>,…,T4=<模型>'` 会现场生成带真实模型的模板（一次只对一个宿主；Codex 写模型名，OpenCode 写 `provider/model`，自动追加 `#low/#medium/#high`）。不加时 Codex 模板是占位符（必须替换），OpenCode 模板不设 model（继承父会话模型，档位不生效）。旧写法 `--with-codex-agents` 仍可用。
+  ```bash
+  ./install.sh --host opencode --with-agents --model-map 'T0=<p/小模型>,T1=<p/中档>,T2=<p/中档>,T3=<p/最强>,T4=<p/最强>'
+  ```
 - 只复制文件，不改任何配置；每个副本里写 `.hq-install.json`（版本、来源、宿主），个人范围另写 `~/.hq/skill-path` 供技能找到自己的脚本。`--update`/`--uninstall` 只处理有安装记录的副本（v0.3 装的没有记录，用 `--host … --force` 重装一次即可纳入）。
 - 退出码：0 成功；2 参数错误；3 目标已存在（加 `--force` 覆盖，或用 `--update`）；4 没有可操作的对象（未检测到工具、没有可更新/卸载的副本）；5 下载失败。会先检查所有目标，不会装一半。
-- 宿主说明：Codex 的调用方式见 `hosts/codex.md`；dsh 的首次运行步骤见 `hosts/dsh.md`；OpenCode、Cursor、Gemini CLI 见 `hosts/generic.md`。
+- 宿主说明：Codex 的调用方式见 `hosts/codex.md`；dsh 的首次运行步骤见 `hosts/dsh.md`；OpenCode 见 `hosts/opencode.md`；Cursor、Gemini CLI 见 `hosts/generic.md`。
 
 **方式 0b：社区通用安装器**（覆盖 70 多种代理工具，只装技能）
 ```bash
@@ -169,7 +177,8 @@ python3 -m unittest discover tests
 - dsh：桌面端子代理模型路由设置的位置；并发上限配置键；非交互 CLI 命令（能否做 W 通道 worker）；`reasoning_effort` 取值范围；用量和成本的读取方式；中止子代理的方式；Schedule 的工具名。
 - DeepSeek（路径二、三）：`CLAUDE_CODE_EFFORT_LEVEL=max` 是否覆盖 hq 按档位设的 effort；`ANTHROPIC_DEFAULT_OPUS_MODEL` 能否设为 `deepseek-v4-pro`；`deepseek-flash` 与 `deepseek-v4-flash` 是否等价。
 - Claude Code：本地 CLI 发起云端任务（通道 D）的参数。
-- OpenCode、Cursor、Gemini CLI（v0.4 基础支持）：`--host auto` 装好后各工具能否发现并触发 hq 技能；Cursor 是否也读 `~/.agents/skills`；`npx skills add` 是否带上 `scripts/` 和 `references/`。
+- OpenCode（v0.4.1 原生宿主）：`hq-t*` 子代理能否被识别、各档 `model#variant` 能否解析；中止子代理的方式；`opencode session export` 里的 token/成本字段；多个后台子代理同时运行时的权限审批。
+- Cursor、Gemini CLI（v0.4 基础支持）：`--host auto` 装好后各工具能否发现并触发 hq 技能；Cursor 是否也读 `~/.agents/skills`；`npx skills add` 是否带上 `scripts/` 和 `references/`。
 
 **装好 codex 后运行，核对参数**：
 ```bash
@@ -194,7 +203,7 @@ bash <路径>/cli-worker.sh status --id smoke; bash <路径>/cli-worker.sh usage
 - 用量：`.hq/runs/*.jsonl` 的 tokens 与 DeepSeek 控制台账单是否对得上（cost_usd 按 Claude 价格算，不可信）。
 
 ## 已知限制
-- Codex 适配、dsh、DeepSeek 后端以及 OpenCode/Cursor/Gemini CLI 都还没有实机运行数据，见上一节。OpenCode/Cursor/Gemini CLI 目前只是基础支持，档位不生效。
+- Codex 适配、dsh、DeepSeek 后端以及 OpenCode/Cursor/Gemini CLI 都还没有实机运行数据，见上一节。Cursor/Gemini CLI 目前只是基础支持，档位不生效；OpenCode 的子代理和主会话共用工作目录，改代码的任务靠 hq 先建 worktree 隔离。
 - 本地 CLI 能否直接创建云端子会话，取决于 CLI 版本（见 runtimes.md 的通道 D）。这类子会话监控能力较弱。需要强监控时，把主会话放在云端，再通过“连接电脑”处理本地任务。
 - 进程内子代理和主会话共享同一台机器，资源保护只能控制派发节奏，没法限制子代理自己调用的进程。所以任务说明里的并行度限制很重要。
 - 进程内子代理的返回结果只有 token 总数、分不出缓存读取，这类任务的 `tokens` 记为空，成本比较以云端子会话的 `cost_usd` 为主。

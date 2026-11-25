@@ -6,6 +6,6 @@
 claude      native  claude    claude                       claude        ~/.claude            Claude Code：重启会话后输入 /hq
 codex       native  agents    agents                       codex         ~/.codex             Codex：按 skills/hq/references/hosts/codex.md 的技能调用方式使用
 dsh         native  dsh       dsh,agents                   -             @DSH_HOME@           dsh：按 skills/hq/references/hosts/dsh.md 首次运行（先开启子代理模型选择、调用 list_subagent_models）
-opencode    basic   opencode  opencode,claude,agents       opencode      ~/.config/opencode   OpenCode：基础支持（降级模式 + W 通道，见 hosts/generic.md）；在会话里让代理使用 hq 技能
+opencode    native  opencode  opencode,claude,agents       opencode      ~/.config/opencode   OpenCode：按 skills/hq/references/hosts/opencode.md 首次运行；档位要生效需 --with-agents --model-map（见 adapters/opencode/README.md）
 cursor      basic   cursor    cursor,claude,codex-skills   cursor-agent  ~/.cursor            Cursor：基础支持（降级模式 + W 通道，见 hosts/generic.md）；重启 Cursor 后在 Agent 里使用 hq 技能
 gemini      basic   gemini    gemini,agents                gemini        ~/.gemini            Gemini CLI：基础支持（降级模式 + W 通道，见 hosts/generic.md）；重启 CLI，首次激活技能需要确认

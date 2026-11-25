@@ -3,13 +3,13 @@
 # 兼容 bash 3.2（macOS 自带），不使用关联数组。
 # 一行安装：curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v<版本>/install.sh | bash -s -- --host auto
 set -u
-HQ_VERSION=0.4.0
+HQ_VERSION=0.4.1
 HQ_REPO_URL_DEFAULT=https://github.com/lostoy0/hq-orchestrator.git
 
 usage() {
   cat <<U
 用法: install.sh --host <宿主> [--scope user|project] [--project-dir <路径>] [--layout minimal|per-host]
-                 [--with-codex-agents] [--force] [--dry-run]
+                 [--with-agents [--model-map 'T0=<模型>,…']] [--with-codex-agents] [--force] [--dry-run]
       install.sh --list    [--host <宿主>] [--scope ...]   只显示检测结果、已装副本和安装计划，不写入
       install.sh --update  [--scope ...]                   把本脚本装过的副本更新到当前版本
       install.sh --uninstall [--scope ...]                 删除本脚本装过的副本（只删有安装记录的）
@@ -19,6 +19,9 @@ usage() {
            per-host 每个工具装到各自的专属目录
   目录对照见 adapters/skill-dirs.tsv、adapters/hosts.tsv。例如 ~/.agents/skills 可被 codex、dsh、opencode、gemini 读取，
   ~/.claude/skills 可被 claude、opencode、cursor 读取；所以 dsh 也会读取 ~/.agents/skills，装过 codex 的不必再装 dsh。
+  --with-agents      同时安装所选宿主的子代理档位模板 hq-t0…hq-t4（目前 codex、opencode；见 adapters/agent-dirs.tsv）
+  --model-map <映射> 生成模板时填入模型（只能配合一个宿主的模板）：codex 写模型名；opencode 写 provider/model[#variant]
+  --with-codex-agents 只装 Codex 模板（旧写法，不管 --host 是什么都装）
   不在仓库里运行时（如 curl | bash），先把 v\$HQ_VERSION（可用 HQ_REF 覆盖）下载到 ~/.hq-orchestrator/<ref> 再安装。
 退出码: 0 成功; 2 参数非法; 3 目标已存在(加 --force 覆盖); 4 没有可操作的对象; 5 下载失败
 U
@@ -51,14 +54,16 @@ if [ -z "$ROOT" ] || [ ! -f "$ROOT/skills/hq/SKILL.md" ]; then
 fi
 
 # ---------- 参数 ----------
-action=install; host=""; scope="user"; pdir=""; layout="minimal"; agents=0; force=0; dry=0
+action=install; host=""; scope="user"; pdir=""; layout="minimal"; agents=0; codex_agents=0; mmap=""; force=0; dry=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) [ $# -ge 2 ] || die2 "--host 缺少值"; host=$2; shift 2;;
     --scope) [ $# -ge 2 ] || die2 "--scope 缺少值"; scope=$2; shift 2;;
     --project-dir) [ $# -ge 2 ] || die2 "--project-dir 缺少值"; pdir=$2; shift 2;;
     --layout) [ $# -ge 2 ] || die2 "--layout 缺少值"; layout=$2; shift 2;;
-    --with-codex-agents) agents=1; shift;;
+    --with-agents) agents=1; shift;;
+    --with-codex-agents) codex_agents=1; shift;;
+    --model-map) [ $# -ge 2 ] || die2 "--model-map 缺少值"; mmap=$2; shift 2;;
     --force) force=1; shift;;
     --dry-run) dry=1; shift;;
     --list) action=list; shift;;
@@ -232,7 +237,7 @@ if [ "$action" = update ] || [ "$action" = uninstall ]; then
 $found
 EOF
   [ -n "$first" ] && write_skill_path "$first"
-  [ "$action" = uninstall ] && echo "完成。Codex agent 模板（如装过）不会自动删除：~/.codex/agents/hq-t*.toml 或 <项目>/.codex/agents/。"
+  [ "$action" = uninstall ] && echo "完成。子代理模板（如装过）不会自动删除：~/.codex/agents/hq-t*.toml、~/.config/opencode/agents/hq-t*.md，或项目里的 .codex/agents/、.opencode/agents/。"
   exit 0
 fi
 
@@ -240,17 +245,47 @@ fi
 resolve_hosts "$host"
 plan_dirs
 
-# Codex 子代理档位模板（--with-codex-agents）：个人范围 ~/.codex/agents，项目范围 <项目>/.codex/agents
-# （已按 Codex 官方文档核对，2026-11-25，未实机运行）。CODEX_AGENTS_DIR 可显式覆盖（测试用）。
-adir=""; tpl=()
-if [ $agents -eq 1 ]; then
-  if [ -n "${CODEX_AGENTS_DIR:-}" ]; then adir=$CODEX_AGENTS_DIR
-  elif [ "$scope" = user ]; then adir="$HOME/.codex/agents"
-  else adir="$pdir/.codex/agents"; fi
-  shopt -s nullglob
-  tpl=("$ROOT"/adapters/codex/agents/*.toml)
-  shopt -u nullglob
+# 子代理档位模板（--with-agents / --with-codex-agents）：目录见 adapters/agent-dirs.tsv；
+# 不带 --model-map 时复制仓库里预生成的 adapters/<格式>/agents/，带时用 adapters/render.sh 现场生成。
+A_FMT=(); A_USER=(); A_PROJ=(); A_ENV=(); A_EXT=()
+if [ -f "$ROOT/adapters/agent-dirs.tsv" ]; then
+  while read -r f u p e x; do
+    case "$f" in ''|\#*) continue;; esac
+    A_FMT+=("$f"); A_USER+=("$u"); A_PROJ+=("$p"); A_ENV+=("$e"); A_EXT+=("$x")
+  done <"$ROOT/adapters/agent-dirs.tsv"
 fi
+FMTS=()
+for i in ${A_FMT[@]+"${!A_FMT[@]}"}; do
+  f=${A_FMT[$i]}
+  if { [ $agents -eq 1 ] && in_list "$f" "${HOSTS[@]}"; } || { [ $codex_agents -eq 1 ] && [ "$f" = codex ]; }; then FMTS+=("$i"); fi
+done
+if [ $codex_agents -eq 1 ] && [ ${#FMTS[@]} -eq 0 ]; then FMTS=(-1); fi   # 登记表缺失时按旧路径处理
+[ -n "$mmap" ] && [ ${#FMTS[@]} -ne 1 ] && die2 "--model-map 需要且只能对应一个宿主的模板（当前 ${#FMTS[@]} 个）；分多次安装"
+[ -n "$mmap" ] && [ "${FMTS[0]}" = -1 ] && die2 "缺少 adapters/agent-dirs.tsv，无法使用 --model-map"
+AG_SRC=(); AG_DST=(); AG_NOTE=()
+render_tmp=""
+for i in ${FMTS[@]+"${FMTS[@]}"}; do
+  if [ "$i" = -1 ]; then f=codex; ext=toml; envv=CODEX_AGENTS_DIR; ud='~/.codex/agents'; pd=.codex/agents
+  else f=${A_FMT[$i]}; ext=${A_EXT[$i]}; envv=${A_ENV[$i]}; ud=${A_USER[$i]}; pd=${A_PROJ[$i]}; fi
+  eval "ov=\${$envv:-}"
+  if [ -n "$ov" ]; then adir=$ov; elif [ "$scope" = user ]; then adir=$(expand "$ud"); else adir="$pdir/$pd"; fi
+  sdir="$ROOT/adapters/$f/agents"
+  if [ -n "$mmap" ]; then
+    render_tmp=$(mktemp -d); trap 'rm -rf "$render_tmp"' EXIT
+    bash "$ROOT/adapters/render.sh" --format "$f" --out "$render_tmp" --model-map "$mmap" || exit 2
+    sdir=$render_tmp
+  fi
+  n=0
+  for src in "$sdir"/hq-t*."$ext"; do
+    [ -e "$src" ] || continue
+    AG_SRC+=("$src"); AG_DST+=("$adir/$(basename "$src")"); n=$((n+1))
+  done
+  if [ $n -eq 0 ]; then AG_NOTE+=("提示: 未找到 adapters/$f/agents/hq-t*.$ext 模板，跳过 $f 的子代理模板")
+  elif [ -n "$mmap" ]; then AG_NOTE+=("$f 子代理模板已按 --model-map 填入模型；没填的档位见文件内注释")
+  elif [ "$f" = codex ]; then AG_NOTE+=("codex 子代理模板里的 model 是占位符，必须按 adapters/codex/README.md 替换（或重装时加 --model-map）")
+  else AG_NOTE+=("$f 子代理模板未设置 model（继承父会话模型，档位不生效）；按 adapters/$f/README.md 用 --model-map 重装"); fi
+done
+if [ $agents -eq 1 ] && [ ${#FMTS[@]} -eq 0 ]; then AG_NOTE+=("提示: 所选宿主（${HOSTS[*]}）没有子代理模板，--with-agents 不起作用"); fi
 
 echo "宿主: ${HOSTS[*]}  范围: $scope  布局: $layout"
 # 先检查所有目标（技能和 agent 模板），避免装一半
@@ -261,8 +296,7 @@ for k in "${KEYS[@]}"; do base=$(dir_path "$k")
     fi
   done
 done
-for f in ${tpl[@]+"${tpl[@]}"}; do
-  dst="$adir/$(basename "$f")"
+for dst in ${AG_DST[@]+"${AG_DST[@]}"}; do
   if [ -e "$dst" ] && [ $force -eq 0 ]; then
     echo "错误: 目标已存在: $dst ；如需覆盖请加 --force" >&2; exit 3
   fi
@@ -287,18 +321,12 @@ for h in "${HOSTS[@]}"; do n=0
   [ $n -gt 1 ] && echo "注意: $h 会从 $n 个目录读到同名技能 hq（多个工具共用时无法避免），按该工具的规则只加载其中一份。"
 done
 
-if [ $agents -eq 1 ]; then
-  if [ ${#tpl[@]} -eq 0 ]; then
-    echo "提示: 未找到 adapters/codex/agents/*.toml 模板，跳过 --with-codex-agents"
-  else
-    run mkdir -p "$adir"
-    for f in "${tpl[@]}"; do
-      dst="$adir/$(basename "$f")"
-      run cp "$f" "$dst"
-      echo "安装 agent 模板 -> $dst（请替换其中的 model 占位符）"
-    done
-  fi
-fi
+for i in ${AG_SRC[@]+"${!AG_SRC[@]}"}; do
+  run mkdir -p "$(dirname "${AG_DST[$i]}")"
+  run cp "${AG_SRC[$i]}" "${AG_DST[$i]}"
+  echo "安装子代理模板 -> ${AG_DST[$i]}"
+done
+for m in ${AG_NOTE[@]+"${AG_NOTE[@]}"}; do echo "$m"; done
 
 echo "完成（v$HQ_VERSION）。下一步:"
 for h in "${HOSTS[@]}"; do i=$(host_idx "$h"); echo "  ${H_NOTE[$i]}"; done

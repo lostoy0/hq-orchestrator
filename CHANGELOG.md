@@ -18,6 +18,26 @@
 
 ---
 
+## v0.4.1（2026-11-25）
+
+本版本把 OpenCode（V2）升级为原生宿主，并让子代理档位模板由一份档位表生成。OpenCode 部分**只读过官方文档源码（GitHub sst/opencode，2026-11-25），没有实机运行**。
+
+### OpenCode 宿主适配
+- **改动**：新增 `skills/hq/references/hosts/opencode.md`（5 节：`subagent` 工具按 `hq-t0…t4` 派发、后台运行并以 `<subagent>` 消息通知、带 `sessionID` 续发消息；stop_worker、worker_usage 待核实；子代理与主会话共用工作目录，改代码任务由主会话先建 `.hq/worktrees/<id>` 并在派发前后检查主工作区 `git status`；成本系数按 provider 判断）。`SKILL.md` 第 1 步加 opencode 识别（与 dsh 的 `subagent` 以参数区分）；`runtimes.md`、`calibration.md` 加 OpenCode 行；`generic.md` 移出 OpenCode；`hosts.tsv` 中 opencode 改为 native。
+- **原因/假设**：OpenCode V2 的子代理可在 agent 文件里设 `model: provider/model#variant`，五档能逐任务生效，比降级模式快且省。
+- **验收指标**：3c 按宿主/通道 → `opencode/A` 组有 ≥3 个任务时一次通过率 ≥ 70%；notes 含 `tier:not-applied` 的 opencode 任务占比 ≤ 20%；问题数里“子代理越界改主工作区”= 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### 子代理模板生成器与 `--with-agents`
+- **改动**：新增 `adapters/tiers.tsv`（T0–T4 的思考深度、模型档次、适合任务）、`adapters/render.sh`（生成 codex TOML 和 OpenCode V2 Markdown，`--model-map` 填模型，`--check` 校验、`--all` 重新生成）、`adapters/agent-dirs.tsv`（模板安装目录）；`adapters/codex/agents/` 改为生成产物（内容只改了注释），新增 `adapters/opencode/agents/` 和 README。`install.sh` 新增 `--with-agents`（按所选宿主装模板）和 `--model-map`（只对一个宿主），保留 `--with-codex-agents`；卸载提示包含 OpenCode 模板目录。`tests/test_install.sh` 增至 64 项（生成结果与仓库一致、V2 格式、映射规则、非法映射、安装目录、多宿主、已存在不装一半、dry-run）。
+- **原因/假设**：每加一个宿主就多 5 个手写模板，容易漂移；安装时直接填模型，避免用户手改占位符。
+- **验收指标**：`tests/test_install.sh` 全部通过；用户反馈“模板模型未替换/格式错误”的问题数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.4.0（2026-11-25）
 
 本版本让 hq 能一键安装到更多代理工具（OpenCode、Cursor、Gemini CLI），并把安装逻辑改为登记表驱动。新工具只是**基础支持**（降级模式 + W 通道，档位不生效），目录来自官方文档检索，**未实机运行**。设计与后续路线见 `docs/design-more-hosts.md`。
