@@ -117,42 +117,25 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 
 云端会话每次都在新容器里从仓库 clone 代码，**读不到你本机的 `~/.claude`**。所以本机用方式 0、1、2 装的东西（包括本机 `/plugin install` 装的插件）都不会带到云端。实测云端会话能用的 skill 和插件来自两处：目标项目仓库里提交的 `.claude/skills/`，以及 claude.ai 账号或组织里启用的插件。所以要让云端能用，skill 必须跟着**目标项目的仓库**走。
 
-*方式 3a（推荐，云端已实测可用）：把 skill 复制进项目仓库。*
+*推荐做法（云端已实测可用）：把 skill 复制进项目仓库。*
 ```bash
 ./install.sh --host claude --scope project --project-dir <项目路径>
 # 或手动：mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro .claude/skills/
 ```
 提交 `.claude/skills/` 后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`，辅助脚本（如 `scripts/resources.sh`）也能正常运行。好处是不依赖网络和 marketplace，还能锁定版本；坏处是每个项目一份副本，要逐个升级。
 
-*方式 3b：在项目配置里声明插件（云端实测不会自动安装）。* 在目标项目里提交 `.claude/settings.json`：
-```json
-{
-  "extraKnownMarketplaces": {
-    "hq-orchestrator-marketplace": {
-      "source": { "source": "github", "repo": "lostoy0/hq-orchestrator" }
-    }
-  },
-  "enabledPlugins": {
-    "hq-orchestrator@hq-orchestrator-marketplace": true
-  }
-}
-```
-- 2026-11 实测：云端会话会 clone 这份配置，但**不会据此添加 marketplace 或安装插件**，也不报错，skill 列表里没有 `hq-orchestrator:hq`。所以云端请用 3a。
-- 这份配置适合本地和团队共享：同事在本地打开项目时，Claude Code 会提示安装声明的插件。项目里不放插件代码，升级只需更新本仓库。
-- marketplace 来源必须是能访问的 GitHub 仓库（本地路径的 marketplace 只对你本机有效）。调用时带命名空间：`/hq-orchestrator:hq`。
+*另一种做法：账号或组织级插件。* 想让所有云端会话都能用，可以在 claude.ai 的插件目录里给账号或组织启用它（前提是插件已在组织目录中，可能需要管理员上架）。
 
-*方式 3c：账号或组织级插件。* 想让所有云端会话都能用，可以在 claude.ai 的插件目录里给账号或组织启用它（前提是插件已在组织目录中，可能需要管理员上架）。
+> ⚠️ **不要用项目 `.claude/settings.json` 声明插件来支持云端。** 用 `extraKnownMarketplaces` + `enabledPlugins` 声明 `hq-orchestrator@hq-orchestrator-marketplace` 的写法，2026-11 实测在云端**不会安装插件，也不报错**，skill 列表里没有 `hq-orchestrator:hq`。如果你照别处的教程这样配了却用不了，原因就在这里，改用上面的做法。
 
-也可以用环境的 setup script 或 SessionStart hook 在每次开会话时运行 `install.sh`，但未实测，每次都要重装，还依赖环境配置，一般不如 3a 省事。
+也可以用环境的 setup script 或 SessionStart hook 在每次开会话时运行 `install.sh`，但未实测，每次都要重装，还依赖环境配置，一般不如上面的做法省事。
 
 **本地和云端同时用：避免重复安装**
 
-| 本地已有的安装 | 在项目里再加方式 3a 或 3b 后的效果 | 建议 |
+| 情况 | 效果 | 建议 |
 |---|---|---|
-| 方式 0 或 1（`~/.claude/skills/hq`）+ 方式 3a | 本地在这个项目里会读到个人副本和项目副本两个同名的 `/hq`，版本可能不同 | 本地以哪份为准不确定时，用 `./install.sh --list` 看版本；两份保持同一版本最省事 |
-| 方式 0 或 1（`~/.claude/skills/hq`）+ 方式 3b | 本地会同时出现 `/hq` 和 `/hq-orchestrator:hq`，名字不冲突，但模型可能选到任意一个；两份版本会慢慢不一致；插件版找辅助脚本时会先读 `~/.hq/skill-path`，可能用到个人副本里的旧脚本 | 二选一：只用插件就 `./install.sh --uninstall` 删掉个人副本；要在本地改插件、调试就保留，调试时明确用 `/hq` |
-| 方式 2（从本地路径添加的 marketplace）+ 方式 3b | marketplace 名字和插件 ID 都相同，不会装成两份；本地继续用本地路径版本 | 适合开发：本地跑你改过的代码 |
-| 同一项目既提交了 `.claude/skills/hq` 又声明了插件 | 本地会出现两份 | 3a、3b 选一种；要支持云端就选 3a |
+| 本机有个人副本（方式 0 或 1，`~/.claude/skills/hq`），项目里又提交了方式 3 的副本 | 本地在这个项目里会读到两个同名的 `/hq`，版本可能不同 | 用 `./install.sh --list` 看版本，两份保持同一版本最省事 |
+| 本机既有个人副本，又用方式 2 装了插件 | 本地会同时出现 `/hq` 和 `/hq-orchestrator:hq`，名字不冲突，但模型可能选到任意一个；两份版本会慢慢不一致；插件版找辅助脚本时会先读 `~/.hq/skill-path`，可能用到个人副本里的旧脚本 | 二选一：只用插件就 `./install.sh --uninstall` 删掉个人副本；要在本地改插件、调试就保留，调试时明确用 `/hq` |
 
 台账和运行记录（`.hq/`、`~/.claude/hq/runs/`）不受影响，两份 skill 写的是同一处，复盘照常。不确定本地是哪种安装时，可以运行 `./install.sh --list` 和 `ls ~/.claude/skills ~/.claude/plugins` 查看。
 
@@ -168,8 +151,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 | 方式 0b（`npx skills add`） | 重新运行一次同样的 `npx skills add` 命令覆盖 |
 | 方式 1（手动复制） | 拉取新版本后重新执行 `cp -r` 命令（会覆盖旧文件） |
 | 方式 2（plugin） | `/plugin marketplace update hq-orchestrator-marketplace`，再在 `/plugin` 里更新 `hq-orchestrator`；本地路径添加的 marketplace 先在那个目录 `git pull` |
-| 方式 3a（项目仓库副本） | `./install.sh --update --scope project --project-dir <路径>`（或重新复制到 `.claude/skills/`）并提交 |
-| 方式 3b（项目声明插件） | 同方式 2：`/plugin marketplace update hq-orchestrator-marketplace` |
+| 方式 3（项目仓库副本） | `./install.sh --update --scope project --project-dir <路径>`（或重新复制到 `.claude/skills/`）并提交 |
 
 注意：
 
