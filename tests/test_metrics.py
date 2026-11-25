@@ -56,7 +56,11 @@ class MetricsTest(unittest.TestCase):
         self.assertAlmostEqual(t2["escalation_rate"], 1 / 3)
         self.assertAlmostEqual(t2["handoff_rate"], 1 / 3)
         self.assertAlmostEqual(t2["avg_cost_usd"], 0.4)
-        self.assertAlmostEqual(t2["ratio_median"], 2.0)
+        self.assertIsNone(t2["ratio_median"])  # all T2 tasks are in r2, whose time data is contradictory
+        self.assertEqual((t2["ratio_n"], t2["ratio_excluded"]), (0, 3))
+        t1 = grp(r["by_tier"], "T1")
+        self.assertAlmostEqual(t1["ratio_median"], 0.5)
+        self.assertEqual(t1["ratio_excluded"], 0)
         self.assertFalse(t2["insufficient"])
         self.assertTrue(grp(r["by_tier"], "T3")["insufficient"])
         self.assertEqual(grp(r["by_tier"], "unknown")["n"], 2)
@@ -82,7 +86,9 @@ class MetricsTest(unittest.TestCase):
         has = lambda scope, frag: any(a == scope and frag in m for a, m, _ in s)
         self.assertTrue(has("tier T1", "降档"))
         self.assertTrue(has("tier T2", "一次通过率 33%"))
-        self.assertTrue(has("tier T2", ">1.5"))
+        self.assertFalse(has("tier T2", ">1.5"))  # its actual/est came only from contradictory r2
+        self.assertFalse(has("model/effort sonnet/medium", ">1.5"))
+        self.assertTrue(has("model/effort sonnet/low", "降档"))
         self.assertTrue(has("run r2", "时间数据矛盾"))
         self.assertFalse(has("run r2", "并行加速比"))
         self.assertFalse(has("run r3", "并行加速比"))  # no critical path: room to parallelize unknown
@@ -169,7 +175,7 @@ class MetricsTest(unittest.TestCase):
         p = run(FIX)
         self.assertEqual(p.returncode, 0, p.stderr)
         for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 6b. 调档与检查点", "## 7. 信号", "样本不足",
-                  "加速比上限", "数据矛盾：speedup>max_concurrency, task>wall"):
+                  "加速比上限", "数据矛盾：speedup>max_concurrency, task>wall", "用时比排除矛盾 run 的 3 条"):
             self.assertIn(h, p.stdout)
 
     def test_garbage_does_not_crash(self):

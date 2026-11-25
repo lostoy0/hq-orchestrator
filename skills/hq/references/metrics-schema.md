@@ -111,7 +111,7 @@
 - 质量门槛：漂移率（`drift` 或 `scope_violation`）、验证到位率（有 `verify_evidence` 且 `verify_pass`）、各环节问题/任务（`issues`）、major 数、返工率（`review_outcome` 为 rework/failed）、合并通过率（run 的 `integration_pass`）。
 - 按档位、按模型/深度：一次通过率（`attempts`=1 且审核通过）、升档率（`tier_changes` 非空）、交接率、平均 cost_usd 和 tokens、actual/est 中位数。
 - 效率（每个 run）：wall/关键路径、并行加速比（各任务 actual_min 之和 / wall_min，即平均同时在跑几个任务）、加速比上限（actual_min 之和 / critical_path_min，任务图允许的最好情况）、max_concurrency、throttle_events。
-  - **数据矛盾**：加速比 > max_concurrency × 1.1，或某个任务的 actual_min > wall_min，说明 actual_min 口径不对（常见原因是把等审核、合并的时间也算了进去）。备注列标“数据矛盾”，该 run 不产生加速比信号，改为提示核对口径。
+  - **数据矛盾**：加速比 > max_concurrency × 1.1，或某个任务的 actual_min > wall_min，说明 actual_min 口径不对（常见原因是把等审核、合并的时间也算了进去）。备注列标“数据矛盾”，该 run 不产生加速比信号，改为提示核对口径；它的任务也不计入按档位、按模型/深度、按宿主/通道和总体的 actual/est 用时比（备注列写“用时比排除矛盾 run 的 N 条”），所以“估时偏乐观”“可能存在降档空间”这两类用时信号不受它影响。一次通过率、升档率、成本等与时间无关的统计照常包含这些任务。
   - “加速比偏低”信号只在加速比 < 1.3、且加速比上限 ≥ 1.3（任务图本来允许并行）时给出；没记 critical_path_min 的 run 不判断。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
