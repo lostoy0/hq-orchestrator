@@ -264,6 +264,12 @@ fresh; mkdir -p "$T/h/.gemini/extensions/hq-orchestrator"; HOME="$T/h" bash "$IN
 fresh; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1
 ! grep -q "已装 Gemini 扩展" "$T/out" && ok "未装扩展时不提示" || bad "gemini ext no notice" "-"
 
+# 33. macOS 自带 bash 3.2 在 UTF-8 locale 下会把非 ASCII 字节当成变量名的一部分（如 $ 后跟 s 再跟全角括号，会被读成变量 s\xEF…，set -u 下报 unbound variable）；
+#     所以紧跟非 ASCII 字符的变量必须写成 ${var}
+ROOTD="$(dirname "$INST")"
+hits=$(cd "$ROOTD" && find install.sh adapters skills tests -name '*.sh' -exec perl -ne 'print "$ARGV:$.: $_" if /(?<!\\)\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/; close ARGV if eof' {} +)
+[ -z "$hits" ] && ok "紧跟非 ASCII 的变量都带花括号（兼容 bash 3.2）" || bad "bash 3.2 多字节变量名" "$hits"
+
 echo "----"
 echo "SUMMARY: $pass passed, $fail failed"
 [ $fail -eq 0 ]

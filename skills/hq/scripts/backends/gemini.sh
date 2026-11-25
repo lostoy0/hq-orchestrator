@@ -12,7 +12,7 @@ be_argv() {
     danger-full-access) argv+=(--approval-mode yolo);;
   esac
   argv+=(-p "按上面的任务说明执行，完成后按说明里的交付格式回复。")
-  [ -n "$EFFORT" ] && NOTES="${NOTES}gemini 命令行不支持思考深度，忽略 --effort $EFFORT；"
+  [ -n "$EFFORT" ] && NOTES="${NOTES}gemini 命令行不支持思考深度，忽略 --effort ${EFFORT}；"
   STDIN_SRC=brief
 }
 be_usage() {

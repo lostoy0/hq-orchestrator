@@ -45,7 +45,7 @@ if [ -z "$ROOT" ] || [ ! -f "$ROOT/skills/hq/SKILL.md" ]; then
     echo "下载 hq-orchestrator $ref <- $url"
     if ! git clone -q --depth 1 --branch "$ref" "$url" "$tmp/src" 2>"$tmp/err"; then
       cat "$tmp/err" >&2; rm -rf "$tmp"
-      echo "错误: 下载失败（ref=$ref）。可设置 HQ_REF=<标签或分支> 后重试" >&2; exit 5
+      echo "错误: 下载失败（ref=${ref}）。可设置 HQ_REF=<标签或分支> 后重试" >&2; exit 5
     fi
     rm -rf "$dst"; mv "$tmp/src" "$dst"; rm -rf "$tmp"
   fi
@@ -129,7 +129,7 @@ resolve_hosts() {
     both) HOSTS=(claude codex);;
     *) local IFS=,; for h in $v; do
          [ -n "$h" ] || continue
-         host_idx "$h" >/dev/null || die2 "--host 不认识的宿主: $h（可选 auto|all|${H_ID[*]}；both 为旧写法）"
+         host_idx "$h" >/dev/null || die2 "--host 不认识的宿主: ${h}（可选 auto|all|${H_ID[*]}；both 为旧写法）"
          in_list "$h" ${HOSTS[@]+"${HOSTS[@]}"} || HOSTS+=("$h")
        done
        [ ${#HOSTS[@]} -gt 0 ] || die2 "--host 为空";;
@@ -207,7 +207,7 @@ if [ "$action" = list ]; then
   fi
   if [ "$host" = auto ] && [ "$det" = "  " ]; then echo "安装计划：未检测到工具，请用 --host 指定"; exit 0; fi
   resolve_hosts "$host"; plan_dirs
-  echo "安装计划（--host $host --layout $layout）："
+  echo "安装计划（--host $host --layout ${layout}）："
   for k in "${KEYS[@]}"; do echo "  $(dir_path "$k")/{hq,hq-retro}  <- $(readers_of "$k")"; done
   exit 0
 fi
@@ -309,7 +309,7 @@ for k in "${KEYS[@]}"; do base=$(dir_path "$k"); rd=$(readers_of "$k")
     [ -e "$base/$s" ] && run rm -rf "$base/$s"
     run cp -r "$ROOT/skills/$s" "$base/$s"
     write_marker "$base/$s" "$k" "$(json_hosts $rd)"
-    echo "安装 $s -> $base/$s（供 $rd 读取）"
+    echo "安装 $s -> $base/${s}（供 $rd 读取）"
   done
   [ -z "$first" ] && first="$base/hq"
 done
@@ -332,6 +332,6 @@ for i in ${AG_SRC[@]+"${!AG_SRC[@]}"}; do
 done
 for m in ${AG_NOTE[@]+"${AG_NOTE[@]}"}; do echo "$m"; done
 
-echo "完成（v$HQ_VERSION）。下一步:"
+echo "完成（v${HQ_VERSION}）。下一步:"
 for h in "${HOSTS[@]}"; do i=$(host_idx "$h"); echo "  ${H_NOTE[$i]}"; done
 exit 0

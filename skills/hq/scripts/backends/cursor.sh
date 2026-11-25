@@ -10,7 +10,7 @@ be_argv() {
       NOTES="${NOTES}cursor 没有只限工作区的沙箱：--force 允许未被规则拒绝的全部命令，隔离只靠 worktree 和任务说明；";;
     danger-full-access) argv+=(--force);;
   esac
-  [ -n "$EFFORT" ] && NOTES="${NOTES}cursor 命令行不支持思考深度，忽略 --effort $EFFORT；"
+  [ -n "$EFFORT" ] && NOTES="${NOTES}cursor 命令行不支持思考深度，忽略 --effort ${EFFORT}；"
   argv+=("$(cat "$BRIEF")")
   STDIN_SRC=null
 }

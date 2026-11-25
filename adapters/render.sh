@@ -79,11 +79,11 @@ while read -r tier effort cls desc; do
       echo "# 可选 model / model_reasoning_effort；放在 ~/.codex/agents/（个人）或 <项目>/.codex/agents/（项目）。"
       echo "# sandbox_mode / approval_policy 等写在这里不会覆盖父会话，不要依赖。"
       echo "name = \"$name\""
-      echo "description = \"HQ 档位 $tier：适合$desc\""
+      echo "description = \"HQ 档位 ${tier}：适合$desc\""
       if [ -n "$m" ]; then
         echo "model = \"$m\""
       else
-        echo "# $cls：占位符，必须替换成你账户里 \`codex\` 实际可用的模型名（见 adapters/codex/README.md），不要原样使用。"
+        echo "# ${cls}：占位符，必须替换成你账户里 \`codex\` 实际可用的模型名（见 adapters/codex/README.md），不要原样使用。"
         echo "model = \"<$cls>\""
       fi
       echo "model_reasoning_effort = \"$effort\""
@@ -96,9 +96,9 @@ while read -r tier effort cls desc; do
       echo "---"
       echo "# 由 adapters/render.sh 从 adapters/tiers.tsv 生成，请改 tiers.tsv 后重新生成，不要手改。"
       echo "# Gemini CLI 子代理格式（官方文档 docs/core/subagents.md，2026-11-24，未实机运行）；放在 ~/.gemini/agents/ 或 <项目>/.gemini/agents/。"
-      echo "# 命令行和子代理都没有思考深度设置，档位只靠模型区分（本档原定思考深度 $effort）。"
+      echo "# 命令行和子代理都没有思考深度设置，档位只靠模型区分（本档原定思考深度 ${effort}）。"
       echo "name: $name"
-      echo "description: \"HQ 档位 $tier（$cls）：适合$desc由 hq 技能按档位派发。\""
+      echo "description: \"HQ 档位 ${tier}（${cls}）：适合${desc}由 hq 技能按档位派发。\""
       echo "kind: local"
       if [ -n "$m" ]; then
         echo "model: $m"
@@ -119,7 +119,7 @@ while read -r tier effort cls desc; do
       echo "---"
       echo "# 由 adapters/render.sh 从 adapters/tiers.tsv 生成，请改 tiers.tsv 后重新生成，不要手改。"
       echo "# OpenCode V2 agent 格式（官方文档 2026-11-25，未实机运行）；放在 ~/.config/opencode/agents/ 或 <项目>/.opencode/agents/。"
-      echo "description: \"HQ 档位 $tier（$cls，思考深度 $effort）：适合$desc由 hq 技能按档位派发。\""
+      echo "description: \"HQ 档位 ${tier}（${cls}，思考深度 ${effort}）：适合${desc}由 hq 技能按档位派发。\""
       echo "mode: subagent"
       if [ -n "$m" ]; then
         case "$m" in *#*) ;; *) m="$m#$effort";; esac
@@ -140,7 +140,7 @@ if [ -n "$check" ]; then
   rc=0
   for f in "$dst"/*."$ext"; do
     g="$check/$(basename "$f")"
-    if ! cmp -s "$f" "$g"; then echo "不一致: $g（运行 adapters/render.sh --all 重新生成）" >&2; rc=1; fi
+    if ! cmp -s "$f" "$g"; then echo "不一致: ${g}（运行 adapters/render.sh --all 重新生成）" >&2; rc=1; fi
   done
   for g in "$check"/hq-t*."$ext"; do
     [ -e "$g" ] || continue

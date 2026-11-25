@@ -6,7 +6,7 @@
 be_argv() {
   local m=$MODEL
   if [ -n "$EFFORT" ]; then
-    case "$m" in *#*) NOTES="${NOTES}model 已带 #variant，忽略 --effort $EFFORT；";; *) m="$m#$EFFORT";; esac
+    case "$m" in *#*) NOTES="${NOTES}model 已带 #variant，忽略 --effort ${EFFORT}；";; *) m="$m#$EFFORT";; esac
   fi
   argv=(opencode run --model "$m" --format json --title "hq/$ID")
   case $SANDBOX in
