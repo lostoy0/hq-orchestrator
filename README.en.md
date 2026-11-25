@@ -166,7 +166,9 @@ By default `/hq <goal>` handles one batch. To keep going batch after batch in th
 ```
 /hq --stay Finish the CSV export first
 ```
-After that, just state the next goal, such as "next batch: add permission checks to the export". Each batch ends with a report whose last line says it is standing by for the next goal; asking questions in between does not exit. Say "exit standing mode" or `/hq --stop` to end it.
+After that, just state the next goal, such as "next batch: add permission checks to the export". Each batch ends with a report whose last line says it is standing by for the next goal; asking questions in between does not exit.
+
+After each batch report it recommends the next batch (up to 5 items, each with its source, estimated tier and time). Sources are the ledger's backlog, unfinished items from the earlier conversation, and the project's roadmap, TODOs, open issues and failing tests. Reply "go with the recommendation" to start. When nothing actionable is left and the overall goal is met, it says plainly that all project tasks are done and nothing more can be executed, and lists the sources it checked. It does not invent work to fill the list; things that need keys, a deploy or your own action are listed separately and do not count as actionable. To have it keep going on its recommendations without waiting, say "continue automatically with the recommendations" (budget and stop conditions still apply). Say "exit standing mode" or `/hq --stop` to end it.
 
 **Taking over a session that is already open**: a skill installed after a session started usually only shows up in `/hq` after you reopen the session. To avoid that, type this in the session (replace the path with your skill directory; `find ~/.claude ~/.agents -path '*hq/SKILL.md'` finds it):
 ```

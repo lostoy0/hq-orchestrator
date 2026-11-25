@@ -81,6 +81,8 @@
 | integration_pass | 布尔 | 最终合并验证是否通过 |
 | plugin_version | 字符串 | hq 插件版本 |
 | standing_seq | 整数（可选） | 常驻模式下本会话的第几批；非常驻不写 |
+| from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
+| recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
 
 示例：
 
