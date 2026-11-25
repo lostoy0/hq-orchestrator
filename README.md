@@ -124,6 +124,8 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 ```
 提交 `.claude/skills/` 后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`，辅助脚本（如 `scripts/resources.sh`）也能正常运行。好处是不依赖网络和 marketplace，还能锁定版本；坏处是每个项目一份副本，要逐个升级。
 
+注意：`.hq/`（台账、`.hq/runs/` 运行记录、`.hq/retro/` 复盘报告）默认不提交，云端容器回收后就没了，`~/.claude/hq/runs/` 在云端也不保留。所以在云端跑 `/hq-retro` 只能看到本会话产生的数据；想跨会话复盘，需要自己把 `.hq/runs/` 保存下来（例如复制到本地再复盘）。
+
 *另一种做法：账号或组织级插件。* 想让所有云端会话都能用，可以在 claude.ai 的插件目录里给账号或组织启用它（前提是插件已在组织目录中，可能需要管理员上架）。
 
 > ⚠️ **不要用项目 `.claude/settings.json` 声明插件来支持云端。** 用 `extraKnownMarketplaces` + `enabledPlugins` 声明 `hq-orchestrator@hq-orchestrator-marketplace` 的写法，2026-11 实测在云端**不会安装插件，也不报错**，skill 列表里没有 `hq-orchestrator:hq`。如果你照别处的教程这样配了却用不了，原因就在这里，改用上面的做法。

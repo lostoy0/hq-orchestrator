@@ -124,6 +124,8 @@ Each cloud session clones the repository into a fresh container and **cannot see
 ```
 After committing `.claude/skills/`, cloud sessions started from this repository can use `/hq` and `/hq-retro`, and the helper scripts (such as `scripts/resources.sh`) run as well. It needs no network or marketplace and pins the version, but every project holds its own copy to upgrade.
 
+Note: `.hq/` (the ledger, `.hq/runs/` run records and `.hq/retro/` retro reports) is not committed by default, so it is lost when the cloud container is reclaimed, and `~/.claude/hq/runs/` is not kept in the cloud either. A `/hq-retro` run in the cloud therefore only sees data from that session; to retro across sessions, save `.hq/runs/` yourself (for example, copy it to your machine and run the retro there).
+
 *Alternative: account- or organization-level plugin.* To make it available in every cloud session, enable it for your account or organization in the claude.ai plugin directory (the plugin has to be in your organization's directory first, which may need an admin).
 
 > ⚠️ **Do not rely on declaring the plugin in the project's `.claude/settings.json` for the cloud.** Declaring `hq-orchestrator@hq-orchestrator-marketplace` with `extraKnownMarketplaces` + `enabledPlugins` was tested in 2026-11: cloud sessions **do not install the plugin and report no error**, and `hq-orchestrator:hq` is missing from the skill list. If you set it up that way from another guide and it does not work, this is why; use the approach above instead.
