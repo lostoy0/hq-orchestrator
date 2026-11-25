@@ -192,18 +192,32 @@ def cost_by_kind(tasks):
     return out
 
 
+SPEEDUP_TOL = 1.1  # allowed slack over max_concurrency (rounding of minutes)
+
+
 def efficiency(rid, r):
     run, ts = r["run"] or {}, r["tasks"]
     wall, crit = num(run.get("wall_min")), num(run.get("critical_path_min"))
     acts = [num(t.get("actual_min")) for t in ts if num(t.get("actual_min")) is not None]
     declared = num(run.get("tasks"))
+    conc = num(run.get("max_concurrency"))
+    speedup = sum(acts) / wall if acts and wall else None
+    # Impossible combinations mean actual_min was measured differently (e.g. including review/merge waits)
+    problems = []
+    if speedup is not None and conc and speedup > conc * SPEEDUP_TOL:
+        problems.append("speedup>max_concurrency")
+    if wall and any(a > wall for a in acts):
+        problems.append("task>wall")
     return {
         "run_id": rid, "tasks": len(ts),
         "missing_records": max(0, declared - len(ts)) if declared is not None else None,
         "wall_over_critical": wall / crit if wall is not None and crit else None,
-        "speedup": sum(acts) / wall if acts and wall else None,
-        "max_concurrency": num(run.get("max_concurrency")),
+        "speedup": speedup,
+        # best speedup the task graph allowed: total work / critical path
+        "speedup_ceiling": sum(acts) / crit if acts and crit else None,
+        "max_concurrency": conc,
         "throttle_events": num(run.get("throttle_events")),
+        "inconsistent": problems,
     }
 
 
@@ -237,8 +251,17 @@ def signals(tiers, models, overall_ratio, effs):
     if om is not None and on >= 3 and om > 1.5:
         add("overall", "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % om, on)
     for e in effs:
-        if e["speedup"] is not None and e["speedup"] < 1.3 and e["tasks"] >= 3:
-            add("run %s" % e["run_id"], "并行加速比 %.2f (<1.3)" % e["speedup"], e["tasks"])
+        if e["tasks"] < 3:
+            continue
+        if e["inconsistent"]:
+            add("run %s" % e["run_id"], "时间数据矛盾（%s），该 run 的加速比不可信，先核对 actual_min 口径"
+                % ", ".join(e["inconsistent"]), e["tasks"])
+            continue
+        # only flag low speedup when the task graph left room to parallelize
+        if (e["speedup"] is not None and e["speedup"] < 1.3
+                and e["speedup_ceiling"] is not None and e["speedup_ceiling"] >= 1.3):
+            add("run %s" % e["run_id"], "并行加速比 %.2f (<1.3)，而任务图允许的上限为 %.2f"
+                % (e["speedup"], e["speedup_ceiling"]), e["tasks"])
     return s
 
 
@@ -316,9 +339,10 @@ def render_md(rep):
     L += ["", "## 3b. 按模型/思考深度", ""] + table(gh, [grow(g) for g in rep["by_model"]])
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
     L += ["", "## 4. 效率", ""]
-    L += table(["run", "任务数", "wall/关键路径", "并行加速比", "max_concurrency", "throttle_events"],
-               [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["max_concurrency"], "d"),
-                 f(e["throttle_events"], "d")] for e in rep["efficiency"]])
+    L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events", "备注"],
+               [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["speedup_ceiling"]),
+                 f(e["max_concurrency"], "d"), f(e["throttle_events"], "d"),
+                 "数据矛盾：" + ", ".join(e["inconsistent"]) if e["inconsistent"] else ""] for e in rep["efficiency"]])
     L += ["", "## 5. 开销（按 kind）", ""]
     L += table(["kind", "n", "平均 tokens", "每预计分钟成本 (USD)", "备注"],
                [[c["key"], c["n"], f(c["avg_tokens"], "d"), f(c["cost_per_est_min"], "c"), "样本不足" if c["insufficient"] else ""]

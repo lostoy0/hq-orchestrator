@@ -24,7 +24,7 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.4.6)
+.claude-plugin/plugin.json             plugin manifest (v0.4.7)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -61,9 +61,9 @@ tests/                                 self-tests for resources.sh, cli-worker.s
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.7/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.4.6` tag to `~/.hq-orchestrator/v0.4.6`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.4.7` tag to `~/.hq-orchestrator/v0.4.7`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -91,7 +91,7 @@ When not run from inside the repository, the script first uses git to download t
 
 **Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq` and `/hq-retro` commands)
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.6
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.7
 ```
 The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so. Update with `gemini extensions update hq-orchestrator`.
 
@@ -145,11 +145,11 @@ The ledger and run records (`.hq/`, `~/.claude/hq/runs/`) are unaffected: both c
 
 ## Upgrading
 
-First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.6`; substitute the version you are upgrading to.
+First check what you have: `./install.sh --list` shows each installed copy with its path and version (from the copy's `.hq-install.json`). Then upgrade the same way you installed. The examples use `v0.4.7`; substitute the version you are upgrading to.
 
 | Install method | How to upgrade |
 |---|---|
-| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.6/install.sh \| bash -s -- --update` |
+| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.7/install.sh \| bash -s -- --update` |
 | Option 0 (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
 | Option 0a (Gemini extension) | `gemini extensions update hq-orchestrator` |
 | Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |

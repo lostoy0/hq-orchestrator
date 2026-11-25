@@ -68,8 +68,13 @@ class MetricsTest(unittest.TestCase):
         e = {x["run_id"]: x for x in r["efficiency"]}
         self.assertAlmostEqual(e["r1"]["speedup"], 2.0)
         self.assertAlmostEqual(e["r1"]["wall_over_critical"], 1.5)
+        self.assertAlmostEqual(e["r1"]["speedup_ceiling"], 3.0)
+        self.assertEqual(e["r1"]["inconsistent"], [])
         self.assertAlmostEqual(e["r3"]["speedup"], 0.75)
         self.assertIsNone(e["r3"]["wall_over_critical"])
+        self.assertIsNone(e["r3"]["speedup_ceiling"])
+        # r2: 3 tasks totalling 90 min in a 30 min run with max_concurrency 1, one task 40 min > wall
+        self.assertEqual(e["r2"]["inconsistent"], ["speedup>max_concurrency", "task>wall"])
         self.assertEqual(r["autonomy"], {"autonomy_stops": 1, "decisions": 3, "user_corrections": 3})
 
     def test_signals(self):
@@ -78,10 +83,38 @@ class MetricsTest(unittest.TestCase):
         self.assertTrue(has("tier T1", "降档"))
         self.assertTrue(has("tier T2", "一次通过率 33%"))
         self.assertTrue(has("tier T2", ">1.5"))
-        self.assertTrue(has("run r3", "并行加速比"))
+        self.assertTrue(has("run r2", "时间数据矛盾"))
+        self.assertFalse(has("run r2", "并行加速比"))
+        self.assertFalse(has("run r3", "并行加速比"))  # no critical path: room to parallelize unknown
         self.assertFalse(has("run r1", "并行加速比"))
+        self.assertFalse(has("run r1", "矛盾"))
         self.assertFalse(has("tier T3", ""))
         self.assertTrue(all(n >= 3 for _, _, n in s))
+
+    def _speedup_signals(self, run_rec, acts):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "s.jsonl"), "w") as fh:
+                for i, a in enumerate(acts):
+                    fh.write(json.dumps({"type": "task", "run_id": "s", "task_id": "t%d" % i, "actual_min": a}) + "\n")
+                fh.write(json.dumps(dict(run_rec, type="run", run_id="s")) + "\n")
+            r = rep(d)
+        return r["efficiency"][0], [x["message"] for x in r["signals"] if x["scope"] == "run s"]
+
+    def test_speedup_signal_needs_room_to_parallelize(self):
+        # serial chain: critical path == wall, speedup 1 is unavoidable -> no signal
+        e, s = self._speedup_signals({"wall_min": 30, "critical_path_min": 30, "max_concurrency": 1}, [10, 10, 10])
+        self.assertAlmostEqual(e["speedup_ceiling"], 1.0)
+        self.assertEqual(s, [])
+        # independent tasks run one after another: ceiling 3, speedup 1 -> signal
+        e, s = self._speedup_signals({"wall_min": 30, "critical_path_min": 10, "max_concurrency": 1}, [10, 10, 10])
+        self.assertEqual(len(s), 1)
+        self.assertIn("上限为 3.00", s[0])
+        # speedup slightly above max_concurrency stays within tolerance
+        e, _ = self._speedup_signals({"wall_min": 20, "critical_path_min": 10, "max_concurrency": 2}, [15, 14, 14])
+        self.assertEqual(e["inconsistent"], [])
+        e, s = self._speedup_signals({"wall_min": 20, "critical_path_min": 10, "max_concurrency": 2}, [15, 15, 15])
+        self.assertEqual(e["inconsistent"], ["speedup>max_concurrency"])
+        self.assertTrue(any("时间数据矛盾" in m for m in s))
 
     def test_last_and_project(self):
         self.assertEqual(rep(FIX, "--last", "1")["overview"]["runs"], 1)
@@ -135,7 +168,8 @@ class MetricsTest(unittest.TestCase):
     def test_md_output(self):
         p = run(FIX)
         self.assertEqual(p.returncode, 0, p.stderr)
-        for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 6b. 调档与检查点", "## 7. 信号", "样本不足"):
+        for h in ("## 1. 总览", "## 2. 质量门槛", "## 3a. 按档位", "## 4. 效率", "## 6b. 调档与检查点", "## 7. 信号", "样本不足",
+                  "加速比上限", "数据矛盾：speedup>max_concurrency, task>wall"):
             self.assertIn(h, p.stdout)
 
     def test_garbage_does_not_crash(self):
