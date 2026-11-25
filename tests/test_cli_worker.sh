@@ -108,6 +108,18 @@ s=$(wait_state on done); u=$(W usage --id on); [ "$(jget "$u" tokens)" = null ] 
 miss=""; for f in "$HERE"/skills/hq/scripts/backends/*.sh; do c=$(basename "$f" .sh); b=$c; [ $c = cursor ] && b=cursor-agent; [ -x "$HERE/tests/fixtures/fake-cli/$b" ] || miss="$miss $c"; done
 [ -z "$miss" ] && ok "every backend has a fake CLI" || bad "fake CLI missing" "$miss"
 
+# 9 v0.5.0 --env-file / --label（辅助执行者，如 Kimi 经 claude CLI）
+printf 'ANTHROPIC_BASE_URL=https://kimi.example/anthropic\nANTHROPIC_AUTH_TOKEN=sekret-123\n' > "$T/kimi.env"; chmod 600 "$T/kimi.env"
+out=$(W start --id km --cli claude --model kimi-x --env-file "$T/kimi.env" --label kimi --brief "$T/brief.md" 2>&1)
+s=$(wait_state km done); [ "$s" = done ] && grep -q 'kimi.example/anthropic' .hq/workers/km/out.jsonl && ok "env-file injected into worker" || bad "env-file injected" "$s $(head -3 .hq/workers/km/out.jsonl)"
+! grep -rq 'sekret-123' .hq/workers/km/cmd .hq/workers/km/log <(echo "$out") $( [ -f .hq/workers/km/notes ] && echo .hq/workers/km/notes ) && grep -q 'env_file=' .hq/workers/km/cmd && ok "secret not in cmd/log/output, cmd records path" || bad "secret leak" "$(cat .hq/workers/km/cmd)"
+[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] && ok "env-file does not leak into caller" || bad "caller env" "set"
+[ "$(jget "$out" label)" = kimi ] && [ "$(jget "$(W status --id km)" label)" = kimi ] && [ "$(jget "$(W usage --id km)" label)" = kimi ] && [ "$(jget "$(W usage --id km)" tokens)" = 150 ] && ok "label in start/status/usage" || bad "label" "$(W status --id km) $(W usage --id km)"
+[ "$(jget "$(W status --id k1)" label)" = null ] && [ "$(jget "$(W usage --id k1)" label)" = null ] && ok "label null when not given" || bad "label null" "$(W status --id k1)"
+chmod 644 "$T/kimi.env"
+W start --id kp --cli claude --model m --env-file "$T/kimi.env" --brief "$T/brief.md" >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && [ ! -e .hq/worktrees/kp ] && ok "env-file readable by others -> exit 2, nothing created" || bad "env-file perms" "rc=$rc"
+
 # 7 非法参数 → 2
 chk() { local name=$1; shift; W "$@" >/dev/null 2>&1; local rc=$?; [ $rc -eq 2 ] && ok "invalid args exit 2: $name" || bad "invalid args exit 2: $name" "rc=$rc"; }
 chk "no command"
@@ -119,6 +131,8 @@ chk "missing brief file" start --id x --cli codex --model m --brief "$T/none"
 chk "bad sandbox" start --id x --cli codex --model m --brief "$T/brief.md" --sandbox yolo
 chk "unknown flag" status --id x --zzz 1
 chk "status without id" status
+chk "missing env file" start --id x --cli claude --model m --brief "$T/brief.md" --env-file "$T/none.env"
+chk "bad label" start --id x --cli claude --model m --brief "$T/brief.md" --label "a b"
 
 echo "----"
 echo "SUMMARY: $pass passed, $fail failed"

@@ -285,6 +285,9 @@ def build(runs, corrupt):
                                                t["effort"] if isinstance(t.get("effort"), str) else "unknown"), skip)
     s_ = lambda t, k: t[k] if isinstance(t.get(k), str) else "unknown"
     hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")), skip)
+    # 辅助执行者（v0.5.0 可选字段 assist）：null/缺失记为 main（主宿主自己的模型）
+    assist = group(tasks, lambda t: "assist:%s/%s" % (t["assist"], s_(t, "tier")) if isinstance(t.get("assist"), str) and t["assist"]
+                   else "main/%s" % s_(t, "tier"), skip)
     rs = [ratio(t) for t in tasks if id(t) not in skip and ratio(t) is not None]
     miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
     return {
@@ -293,7 +296,7 @@ def build(runs, corrupt):
                      "time_from": min(stamps)[1] if stamps else None, "time_to": max(stamps)[1] if stamps else None},
         "quality": {"overall": quality(tasks, rr),
                     "per_run": [dict(quality(runs[i]["tasks"], [runs[i]["run"] or {}]), run_id=i) for i in ids]},
-        "by_tier": tiers, "by_model": models, "by_host_channel": hosts,
+        "by_tier": tiers, "by_model": models, "by_host_channel": hosts, "by_assist": assist,
         "efficiency": effs,
         "cost": cost_by_kind(tasks),
         "adjust": adjust(tasks),
@@ -344,6 +347,8 @@ def render_md(rep):
     L += ["", "## 3a. 按档位", ""] + table(gh, [grow(g) for g in rep["by_tier"]])
     L += ["", "## 3b. 按模型/思考深度", ""] + table(gh, [grow(g) for g in rep["by_model"]])
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
+    if any(g["key"].startswith("assist:") for g in rep["by_assist"]):
+        L += ["", "## 3d. 辅助执行者 vs 主宿主（按档位；交接率≈被收回给主宿主的比例）", ""] + table(gh, [grow(g) for g in rep["by_assist"]])
     L += ["", "## 4. 效率", ""]
     L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events", "备注"],
                [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["speedup_ceiling"]),
@@ -413,7 +418,7 @@ def anon_task(t, rid, idx):
     for k in ENUMS:
         if k in t:
             o[k] = a_enum(k, t[k])
-    for k in ("model", "effort"):
+    for k in ("model", "effort", "assist"):
         if k in t:
             o[k] = a_token(t[k])
     for k in TASK_NUMS:

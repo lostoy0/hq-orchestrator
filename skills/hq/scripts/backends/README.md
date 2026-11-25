@@ -10,3 +10,4 @@
 约定：
 - sandbox 只有 `read-only`、`workspace-write`、`danger-full-access` 三档；`danger-full-access` 的 `--allow-dangerous` 闸门在 cli-worker.sh 里统一检查。CLI 没有对应档位时选**更保守**的映射，并在 `NOTES` 里写明；实在映射不了就 `return 2`（cli-worker.sh 以退出码 2 拒绝，不建 worktree）。
 - 参数来源和核实状态写在文件头注释里；新增后端要在 `tests/fixtures/fake-cli/` 加假 CLI，并在 `tests/test_cli_worker.sh` 覆盖参数拼装和用量解析。
+- `--env-file`、`--label` 由 cli-worker.sh 统一处理，后端不用管：env 文件在 `run.sh` 里注入 CLI 进程（适合经 claude CLI 接 Kimi 等第三方兼容接口），label 只用于记录。

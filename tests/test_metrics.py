@@ -48,6 +48,29 @@ class MetricsTest(unittest.TestCase):
         self.assertAlmostEqual(per["r1"]["drift_rate"], 0.2)
         self.assertAlmostEqual(per["r2"]["drift_rate"], 2 / 3)
 
+    def test_by_assist(self):
+        rows = [
+            {"type": "task", "run_id": "ra", "task_id": "t1", "tier": "T1", "attempts": 1, "review_outcome": "pass", "assist": "kimi", "model": "kimi:k2"},
+            {"type": "task", "run_id": "ra", "task_id": "t2", "tier": "T1", "attempts": 2, "review_outcome": "rework", "assist": "kimi", "handoffs": 1},
+            {"type": "task", "run_id": "ra", "task_id": "t3", "tier": "T1", "attempts": 1, "review_outcome": "pass"},
+            {"type": "task", "run_id": "ra", "task_id": "t4", "tier": "T3", "attempts": 1, "review_outcome": "pass", "assist": None},
+            {"type": "run", "run_id": "ra", "host": "claude-code"},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "ra.jsonl")
+            with open(p, "w") as fh:
+                fh.write("\n".join(json.dumps(x) for x in rows) + "\n")
+            r = rep(p)
+            k = grp(r["by_assist"], "assist:kimi/T1")
+            self.assertEqual(k["n"], 2)
+            self.assertAlmostEqual(k["first_pass_rate"], 0.5)
+            self.assertAlmostEqual(k["handoff_rate"], 0.5)
+            self.assertEqual(grp(r["by_assist"], "main/T1")["n"], 1)
+            self.assertEqual(grp(r["by_assist"], "main/T3")["n"], 1)
+            md = run(p).stdout
+            self.assertIn("3d.", md)
+            self.assertNotIn("3d.", run(FIX).stdout)  # no assist data -> section hidden
+
     def test_groups(self):
         r = rep(FIX)
         t2 = grp(r["by_tier"], "T2")

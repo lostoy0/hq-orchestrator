@@ -10,6 +10,7 @@
 | Codex（含接 DeepSeek 后端） | `hosts/codex.md`（DeepSeek 部分另见 `hosts/deepseek.md`） | 能看到 `~/.codex/`，能用 codex 的子代理功能 |
 | OpenCode（V2） | `hosts/opencode.md` | 有 `subagent` 工具（参数含 agent ID、`sessionID`），或有 `.opencode/`、`~/.config/opencode/` |
 | Gemini CLI | `hosts/gemini.md` | 系统提示表明是 Gemini CLI；有 `activate_skill` 工具，或有 `.gemini/`、`~/.gemini/` |
+| 辅助执行者 Kimi（不是宿主，经 W 通道调用） | `hosts/kimi.md` | PLAYBOOK `assist.profiles` 里有 kimi，或 `/hq --assist kimi` |
 | Cursor 及其他支持 SKILL.md 的工具 | `hosts/generic.md` | 见该文档识别表；有 shell 用 W，否则降级模式 |
 
 ## 抽象能力
@@ -49,7 +50,7 @@
 
 ### W：CLI 子进程 worker
 - 由 `scripts/cli-worker.sh` 在独立 git worktree 里后台运行一个 CLI（codex、claude、opencode、gemini、cursor；每个 CLI 的参数和用量解析在 `scripts/backends/<cli>.sh`）。任何有 shell 的宿主都能用。
-- 接口：`start --id <id> --cli codex|claude|opencode|gemini|cursor --model <m> [--effort <e>] --brief <说明文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]`；`status --id <id>`、`stop --id <id>`、`usage --id <id>`（输出 JSON）、`list`。状态写在 `.hq/workers/<id>/`。
+- 接口：`start --id <id> --cli codex|claude|opencode|gemini|cursor --model <m> [--effort <e>] --brief <说明文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous] [--env-file <文件>] [--label <profile>]`；`status --id <id>`、`stop --id <id>`、`usage --id <id>`（输出 JSON）、`list`。状态写在 `.hq/workers/<id>/`。
 - 各 CLI 的映射：
 | `--cli` | 实际命令 | read-only | workspace-write（默认） | danger-full-access（需 `--allow-dangerous`） | `--effort` | 用量 | 核实状态 |
 |---|---|---|---|---|---|---|---|
@@ -63,6 +64,7 @@
 - 占本地资源，派发前过 `resources.sh`，按 A 的规则计槽位。
 - 没有回信通道：说明里不写宿主专有回报方式，结果写在交付格式里，主会话用 `status` / `usage` 读取。
 - 用到非宿主自带的模型时，task 记录的 model 写成 `<cli>:<模型名>`。
+- **辅助执行者**（`calibration.md` 规则 10）也走 W：`--label <profile>` 让 `status`/`usage` 带上 profile 名；`--env-file` 只给这个 worker 进程注入接口地址和密钥（文件必须 chmod 600，否则退出码 2；值不写进 `cmd`、`notes` 和输出）。
 
 ### 降级模式（channel 记 `main`）
 - 宿主没有子代理能力、也没有 shell 可用 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录 task 数据。

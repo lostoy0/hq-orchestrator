@@ -24,12 +24,12 @@
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.8）
+.claude-plugin/plugin.json             plugin 清单（v0.5.0）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
 skills/hq/references/runtimes.md       抽象能力、派发通道（A/B/C/D/W）通用规则和宿主索引
-skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / dsh / opencode / deepseek / generic）
+skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / dsh / opencode / deepseek / generic；kimi 为辅助执行者）
 skills/hq/references/brief-template.md 子会话任务说明模板（含验证级别、检查点）与交付格式
 skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用量口径
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
@@ -61,9 +61,9 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.8/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.5.0/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.8` 标签下载到 `~/.hq-orchestrator/v0.4.8`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.5.0` 标签下载到 `~/.hq-orchestrator/v0.5.0`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -91,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.8/inst
 
 **方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 命令）
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.4.8
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.5.0
 ```
 扩展只含技能和命令，不含子代理模板（同一个仓库也是 Claude Code 插件，根目录放 `agents/` 会被 Claude Code 当成自己的子代理）。要让档位生效，再运行 `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'` 安装模板；与扩展同时装了技能时，Gemini CLI 优先用用户目录的副本，安装脚本会提示。更新：`gemini extensions update hq-orchestrator`。
 
@@ -145,11 +145,11 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 
 ## 升级
 
-先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.4.8` 为例，换成要升级到的版本即可。
+先看已装的是哪个版本：`./install.sh --list` 会列出每个副本的路径和版本（读取副本里的 `.hq-install.json`）。然后按当初的安装方式升级，下面以 `v0.5.0` 为例，换成要升级到的版本即可。
 
 | 安装方式 | 升级方法 |
 |---|---|
-| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.8/install.sh \| bash -s -- --update` |
+| 方式 0（一行安装） | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.5.0/install.sh \| bash -s -- --update` |
 | 方式 0（已 clone 仓库） | `git pull` 后运行 `./install.sh --update`；项目范围加 `--scope project --project-dir <路径>` |
 | 方式 0a（Gemini 扩展） | `gemini extensions update hq-orchestrator` |
 | 方式 0b（`npx skills add`） | 重新运行一次同样的 `npx skills add` 命令覆盖 |
@@ -176,6 +176,24 @@ cli-worker.sh list
 - sandbox 默认 `workspace-write`。`danger-full-access` 会关闭全部防护，**必须同时传 `--allow-dangerous`**，否则拒绝并以退出码 2 退出。
 - `usage` 按统一口径算 tokens（input + output + cache_write，不含 cache_read）。
 - 用和宿主不同厂商的 CLI 做 worker（跨厂商），需要在 `.hq/PLAYBOOK.md` 授权区写 `worker_clis`（如 `[codex, claude]`）；**默认为空，即关闭**。宿主自己的 CLI（如 Gemini CLI 宿主用 `--cli gemini`）不需要授权，这也是 Cursor、Gemini CLI 宿主让档位生效的方式。
+
+## 辅助执行者：Claude 主攻难点，Codex / Kimi 承接中低难度（v0.5.0，默认关闭）
+
+大目标拆成很多子任务时，可以让主宿主（如 Claude）只做难的、重要的任务，把需求明确的中低难度任务交给更便宜的模型，再由主宿主审核，以节省主宿主额度、增加并行度。
+
+- **怎么分**（`skills/hq/calibration.md` 规则 10）：只有档位 ≤ `max_tier`（默认 T2）、风险低、需求明确、一条命令就能验证对错、且不是共享接口这类前置任务的，才交给辅助；T3/T4、架构、安全、数据、并发、迁移、根因不明的问题和所有审核都留给主宿主。
+- **怎么审**：辅助的产出一律由主宿主审核，不按“审核降一档”的规则降档；改动超过约 150 行另派独立审核。
+- **失败怎么办**：辅助失败一次，就由主宿主高一档从它的分支接手；同一个辅助本次运行失败 2 次就不再派给它。
+- **怎么开**：
+  ```
+  /hq --assist codex,kimi <目标>            # 本次运行，按顺序优先
+  /hq --assist kimi --assist-max T1 <目标>  # 只把 T0–T1 交出去
+  /hq --assist off <目标>                   # 本次关闭
+  ```
+  长期设置写在 `.hq/PLAYBOOK.md` 授权区的 `assist`（`use`、`max_tier`、每个 profile 的 CLI、各档模型、可选 `env_file`），模板见 `skills/hq/references/playbook-template.md`。命令参数优先。
+- **Kimi**：推荐经 `claude` CLI 接 Kimi 的 Anthropic 兼容接口，接口地址和密钥放在权限 600 的 `env_file` 里，`cli-worker.sh --env-file` 只把它注入这个 worker 进程，值不写进日志。见 `skills/hq/references/hosts/kimi.md`（**只按公开资料整理，未实机运行**）。
+- **效果看数据**：task 记录多了 `assist` 字段，`metrics.py` 报告的“3d 辅助执行者 vs 主宿主”按档位对比一次通过率和回收率，`/hq-retro` 据此建议调低 `max_tier` 或停用某个辅助。
+- **注意**：辅助走 W 通道，在本机（或云端容器）里运行，占本地 CPU 和内存；云端会话里要装好 CLI、放行接口主机、配好密钥，否则自动全部留给主宿主。外部模型失败重来会吃掉省下的额度，所以拿不准难度的任务不会交出去。
 
 ## 使用示例
 ```
