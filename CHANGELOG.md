@@ -18,6 +18,26 @@
 
 ---
 
+## v0.3.1（2026-11-25）
+
+本版本把 DeepSeek Harness（dsh）作为第三个原生宿主接入，DeepSeek 的推荐路径改为 dsh。dsh 部分**只读过官方仓库 deepseek-ai/deepseek-harness 提交 4b399c3 的文档，没有实机运行**，验证清单见 README“待核实项与本机验证清单”。
+
+### dsh 宿主适配
+- **改动**：新增 `skills/hq/references/hosts/dsh.md`（5 节、9 项能力：`subagent` 逐次传 provider/model/reasoning_effort，首次先 `list_subagent_models`；完成通知 + `list_agents` 监控；`send_message`；Schedule 做 schedule_checkin；stop_worker、worker_usage 待核实；外部后端不能选模型；并发取子代理树容量与 resources.sh 槽位较小值；W 通道暂不接入）。`hosts/deepseek.md` 改为三条路径，路径一（推荐）为 dsh，原两条顺延为路径二、三。`SKILL.md` 第 1 步加 dsh 识别特征，`SKILL.md` 与 `hq-retro/SKILL.md` 的 find 路径加 `~/.dsh/skills`、`.dsh/skills`。`calibration.md` 加 dsh 映射行（T0–T2 flash low/low/medium，T3–T4 pro medium/high），`runtimes.md` 宿主索引、`metrics-schema.md` host 取值加 `dsh`。
+- **原因/假设**：dsh 每次派子代理都能指定模型和思考深度，五个档位能逐任务生效，比经 Claude Code（`CLAUDE_CODE_EFFORT_LEVEL`/`CLAUDE_CODE_SUBAGENT_MODEL` 可能覆盖档位、B 通道走 Claude 模型）或 Codex 接入更直接。
+- **验收指标**：3c 按宿主/通道 → `dsh/A` 组有 ≥3 个任务时一次通过率 ≥ 70%；3a 按档位 → dsh 宿主下 T3/T4 一次通过率不低于 T0–T2；PLAYBOOK 有 dsh 映射行；缺记录任务数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+### install.sh：`--host dsh` 与 `--host all`
+- **改动**：`install.sh` 的 `--host` 新增 `dsh`（个人范围 `${DSH_HOME:-~/.dsh}/skills`，项目范围 `<项目>/.dsh/skills`）和 `all`（三处都装）；`both` 保留作兼容（claude + codex）。usage 说明 dsh 也读 `~/.agents/skills`，装过 codex 不必重复装。`tests/test_install.sh` 补 dsh 个人/项目范围、`DSH_HOME`、`all`、`both` 兼容和 usage 说明的用例。
+- **原因/假设**：让 dsh 用户一条命令装好；`all` 覆盖三种宿主，`both` 不破坏旧脚本。
+- **验收指标**：`tests/test_install.sh` 全部通过；用户反馈的安装问题数 = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.3.0（2026-11-25）
 
 本版本让插件宿主无关：能在 Claude Code、Codex 上运行，并能通过这两者接入 DeepSeek 后端；其他工具走 W 通道或降级模式。Codex 和 DeepSeek 部分**都没有实机运行过**，验证清单见 README“待核实项与本机验证清单”。验收指标都能从 `metrics.py` 报告直接读出（“小节名 → 列名”），新增“3c. 按宿主/通道”小节。

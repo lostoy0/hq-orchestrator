@@ -7,8 +7,8 @@
     {
       "name": "hq-orchestrator",
       "source": "./",
-      "description": "司令部模式：主会话统筹、子会话执行的多任务编排技能，附带运行数据记录和 /hq-retro 复盘；支持 Claude Code、Codex 和 DeepSeek 后端等多宿主。",
-      "version": "0.3.0"
+      "description": "司令部模式：主会话统筹、子会话执行的多任务编排技能，附带运行数据记录和 /hq-retro 复盘；支持 Claude Code、Codex、DeepSeek Harness（dsh）和 DeepSeek 后端等多宿主。",
+      "version": "0.3.1"
     }
   ]
 }

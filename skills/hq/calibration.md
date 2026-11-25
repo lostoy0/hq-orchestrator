@@ -1,6 +1,6 @@
 # HQ 选档校准表
 
-版本: 0.3.0 | 最后校准: 2026-11-24（初始值，来自 v0.1 经验默认值，尚未经复盘数据调整）
+版本: 0.3.1 | 最后校准: 2026-11-24（初始值，来自 v0.1 经验默认值，尚未经复盘数据调整）
 
 `SKILL.md` 第 3 步按本文件选档。复盘（`/hq-retro`）只改这个文件：调整分数线、抽象档位的定义、各宿主映射、修正规则，并更新上面的版本号、校准日期和下方的变更记录。
 
@@ -34,12 +34,14 @@
 |---|---|---|---|---|---|
 | Claude Code | haiku / low | sonnet / low | sonnet / medium | opus / medium | opus / high（必要时 xhigh） |
 | Codex | 见 `references/hosts/codex.md` 第 3 节 | | | | |
-| DeepSeek 后端 | 见 `references/hosts/deepseek.md` 第 3 节 | | | | |
+| dsh（DeepSeek Harness，DeepSeek 推荐路径） | flash / low | flash / low | flash / medium | pro / medium | pro / high |
+| DeepSeek 后端（经 Claude Code / Codex） | 见 `references/hosts/deepseek.md` 第 3 节 | | | | |
 | 其他 / 降级模式 | 按“所需能力”从宿主可用模型中选 | | | | |
 
 - 宿主文档第 3 节是该宿主映射的详细说明；本表的 Claude Code 行与 `hosts/claude-code.md` 保持一致，改一处同时改另一处。
 - **首次在新宿主上运行时**，主会话把实际用的映射写进项目 `.hq/PLAYBOOK.md` 的“选档偏好”（注明宿主），之后该宿主优先按 PLAYBOOK 的映射。
 - **effort 可能被环境变量覆盖（待实测，不下结论）**：Claude Code 接 DeepSeek 后端时官方建议设 `CLAUDE_CODE_EFFORT_LEVEL=max`，可能覆盖按档位设置的思考深度（见 `references/hosts/deepseek.md`）。此时本表的深度列可能不生效；复盘按 notes 的 `effort_env:max` 分组，样本不足前不据此调整档位。
+- dsh 行的 flash/pro 是档次名，具体 provider/model 以 `list_subagent_models` 返回为准（见 `references/hosts/dsh.md` 第 3 节，改一处同时改另一处）。
 - W 通道跨厂商时，按目标 CLI 所属宿主的映射选模型，task 记录的 model 写成 `<cli>:<模型名>`。
 
 ## 修正规则
@@ -56,5 +58,6 @@
 8. 用户纠正过的选档偏好，后续任务沿用，并在下次复盘时写进本文件。
 
 ## 变更记录
+- 0.3.1（2026-11-25）：新增 dsh 宿主映射行，档位数值不变。
 - 0.3.0（2026-11-25）：档位改为“抽象档位 + 各宿主映射”，数值不变。
 - 0.2.0（2026-11-24）：从 SKILL.md 移出；新增规则 1、2、6。

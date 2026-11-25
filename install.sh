@@ -5,8 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<U
-用法: ./install.sh --host claude|codex|both [--scope user|project] [--project-dir <路径>]
+用法: ./install.sh --host claude|codex|dsh|all [--scope user|project] [--project-dir <路径>]
                    [--with-codex-agents] [--force] [--dry-run]
+  --host claude  个人: ~/.claude/skills           项目: <项目>/.claude/skills
+  --host codex   个人: ~/.agents/skills           项目: <项目>/.agents/skills
+  --host dsh     个人: \${DSH_HOME:-~/.dsh}/skills 项目: <项目>/.dsh/skills
+  --host all     以上三处都装；--host both 为旧写法，等同 claude + codex
+  注意: dsh 也会读取 ~/.agents/skills 和 <项目>/.agents/skills，装过 codex 的不必再装 dsh
 退出码: 0 成功; 2 参数非法; 3 目标已存在(加 --force 覆盖)
 U
 }
@@ -25,7 +30,7 @@ while [ $# -gt 0 ]; do
     *) die2 "未知参数: $1";;
   esac
 done
-case "$host" in claude|codex|both) ;; *) die2 "--host 必须是 claude|codex|both";; esac
+case "$host" in claude|codex|dsh|all|both) ;; *) die2 "--host 必须是 claude|codex|dsh|all（both 为旧写法）";; esac
 case "$scope" in user|project) ;; *) die2 "--scope 必须是 user|project";; esac
 if [ "$scope" = project ]; then
   [ -n "$pdir" ] || pdir=$PWD
@@ -48,10 +53,12 @@ fi
 
 # 先检查所有目标（技能和 agent 模板），避免装一半
 targets=(); hosts=()
-[ "$host" = both ] && hosts=(claude codex) || hosts=("$host")
+case "$host" in both) hosts=(claude codex);; all) hosts=(claude codex dsh);; *) hosts=("$host");; esac
 for h in "${hosts[@]}"; do
-  if [ "$h" = claude ]; then sub=.claude/skills; else sub=.agents/skills; fi
-  if [ "$scope" = user ]; then base="$HOME/$sub"; else base="$pdir/$sub"; fi
+  case "$h" in claude) sub=.claude/skills;; codex) sub=.agents/skills;; dsh) sub=.dsh/skills;; esac
+  if [ "$scope" = project ]; then base="$pdir/$sub"
+  elif [ "$h" = dsh ]; then base="${DSH_HOME:-$HOME/.dsh}/skills"
+  else base="$HOME/$sub"; fi
   for s in hq hq-retro; do targets+=("$h|$base|$s"); done
 done
 for t in "${targets[@]}"; do
@@ -90,7 +97,10 @@ fi
 
 echo "完成。下一步:"
 for h in "${hosts[@]}"; do
-  if [ "$h" = claude ]; then echo "  Claude Code: 重启会话后输入 /hq"
-  else echo "  Codex: 按 skills/hq/references/hosts/codex.md 的技能调用方式使用"; fi
+  case "$h" in
+    claude) echo "  Claude Code: 重启会话后输入 /hq";;
+    codex) echo "  Codex: 按 skills/hq/references/hosts/codex.md 的技能调用方式使用（dsh 也能读到这个目录）";;
+    dsh) echo "  dsh: 按 skills/hq/references/hosts/dsh.md 首次运行（先开启子代理模型选择、调用 list_subagent_models）";;
+  esac
 done
 exit 0

@@ -28,7 +28,7 @@
 | risk | `low`/`med`/`high` | 风险等级 | 规划完成时 |
 | tier_score | 整数 0–10 | 难度评估总分 | 难度评估时 |
 | tier | `T0`–`T4` | 最终使用的档位 | 难度评估时；升降档后更新为最终值 |
-| host | `claude-code`/`codex`/`other`（可选） | 主会话所在宿主 | 派发时 |
+| host | `claude-code`/`codex`/`dsh`/`other`（可选） | 主会话所在宿主 | 派发时 |
 | model | 字符串 | 最终使用的模型；跨厂商（非宿主自带模型）写成 `<cli>:<模型名>`，如 `codex:<模型名>` | 派发时（升降档后更新） |
 | effort | 字符串 | 思考深度（low/medium/high/xhigh…） | 派发时（升降档后更新） |
 | channel | `A`/`B`/`C`/`D`/`W`/`main` | 派发通道。`W` 是 CLI 子进程 worker（`cli-worker.sh`）；`main` 表示主会话自己做（含降级模式） | 派发时 |
@@ -68,7 +68,7 @@
 | type | `"run"` | 记录类型 |
 | run_id | 字符串 | run id，与文件名一致 |
 | project | 字符串 | 项目名 |
-| host | `claude-code`/`codex`/`other`（可选） | 主会话所在宿主 |
+| host | `claude-code`/`codex`/`dsh`/`other`（可选） | 主会话所在宿主 |
 | goal | 字符串 | 用户目标 |
 | started_at / ended_at | ISO8601 字符串 | 开始 / 结束时间 |
 | wall_min | 数字 | 总耗时（墙钟分钟） |

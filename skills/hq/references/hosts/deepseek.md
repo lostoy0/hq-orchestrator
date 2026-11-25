@@ -2,32 +2,33 @@
 
 ## 1. 概述与适用版本
 
-DeepSeek 是模型，不是宿主。使用方式是“宿主 + DeepSeek 后端”，分两条路径：
+DeepSeek 是模型，不是宿主。使用方式有三条路径：
 
-- **路径一：Claude Code 接 DeepSeek。** 能力与 [claude-code.md](claude-code.md) 相同。例外是 B 通道（claude.ai 云端子会话）不在 DeepSeek 后端上运行，用的是 Claude 模型和你的 Claude 套餐额度。
-- **路径二：Codex 接 DeepSeek。** 能力与 [codex.md](codex.md) 相同。
+- **路径一（推荐）：DeepSeek Harness（dsh）。** DeepSeek 官方智能体工具，作为 hq 的原生宿主，每次派子代理都能指定模型和思考深度。完整说明见 [dsh.md](dsh.md)（只读过文档、未实机运行）。本文件以下内容只针对路径二、三。
+- **路径二：Claude Code 接 DeepSeek。** 能力与 [claude-code.md](claude-code.md) 相同。例外是 B 通道（claude.ai 云端子会话）不在 DeepSeek 后端上运行，用的是 Claude 模型和你的 Claude 套餐额度。
+- **路径三：Codex 接 DeepSeek。** 能力与 [codex.md](codex.md) 相同。
 
 核实日期：2026-11-25。来源：api-docs.deepseek.com 的 Anthropic API 指南、Claude Code 接入指南、“Integrate with Codex”页（均经搜索摘要核实，未直接抓取全文）。适用的 Claude Code / Codex 版本：待核实（Codex 官方脚本要求 0.164 及以上，来自搜索摘要，待核实）。
 
 ## 2. 能力表
 
-能力沿用所选宿主，下表只写与 DeepSeek 后端相关的差异。
+能力沿用所选宿主，下表只写与 DeepSeek 后端相关的差异（路径一 dsh 的能力表见 dsh.md）。
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | 路径一：A 通道（`Agent` 工具）；路径二：见 codex.md。B 通道仍是 Claude 模型，不走 DeepSeek | B 不可用或不想用 Claude 额度时改用 A/W |
+| spawn_worker | 路径二：A 通道（`Agent` 工具）；路径三：见 codex.md。B 通道仍是 Claude 模型，不走 DeepSeek | B 不可用或不想用 Claude 额度时改用 A/W |
 | monitor | 同所选宿主（claude-code.md / codex.md） | 同宿主文档 |
 | message_worker | 同所选宿主 | 同宿主文档 |
 | stop_worker | 同所选宿主 | 同宿主文档 |
 | worker_usage | cost_usd 优先；tokens = input + output + cache_write，不含 cache_read；拿不到填 null。DeepSeek 后端下 Claude Code 的 cost_usd 按 Claude 价格算，不可信：以 DeepSeek 控制台账单为准，task 记录 notes 标注 `billing:deepseek` | cost_usd 填 null，tokens 照常 |
 | schedule_checkin | 同所选宿主 | 同宿主文档 |
-| remote_workers | 路径一：仅 B 通道，且该通道是 Claude 后端；路径二：见 codex.md | 无云端时只用本地 A/W |
-| local_machine | 同所选宿主（C 通道依赖云端会话，仅路径一的云端主会话可用） | 主会话直接在本机运行 |
+| remote_workers | 路径二：仅 B 通道，且该通道是 Claude 后端；路径三：见 codex.md | 无云端时只用本地 A/W |
+| local_machine | 同所选宿主（C 通道依赖云端会话，仅路径二的云端主会话可用） | 主会话直接在本机运行 |
 | concurrency_limit | 同所选宿主；DeepSeek 的并发/速率限制待核实 | 先过 resources.sh，保守并发 |
 
 ## 3. 档位映射 T0–T4 →（模型, 思考深度）
 
-### 路径一：Claude Code
+### 路径二：Claude Code
 
 DeepSeek 只有 pro 和 flash 两档，五档合成两档，靠思考深度区分：
 
@@ -43,15 +44,15 @@ DeepSeek 只有 pro 和 flash 两档，五档合成两档，靠思考深度区�
 
 **opus 指向。** 官方示例中 `ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-flash[1m]`，opus 也指向 flash。要让 T3/T4 用上 pro，需把它设为 `deepseek-v4-pro`。官方文档确认直连 API 的模型名为 deepseek-v4-pro，且服务端把 claude-opus* 映射到 deepseek-v4-pro；但“该变量可以显式设为 deepseek-v4-pro”这一点官方示例没有直接写出，待核实。
 
-### 路径二：Codex
+### 路径三：Codex
 
 在 Codex 模型提供方配置里使用 deepseek-v4-flash / deepseek-v4-pro，按 codex.md 的方式映射档位（建议 T0–T2 → flash，T3–T4 → pro，思考深度同上）。Codex 模板文件名与 reasoning 字段以 codex.md 为准。
 
 ## 4. 安装与调用
 
-安装技能：`./install.sh --host claude|codex|both`（见仓库根目录）。调用方式同宿主（Claude Code 用 `/hq`；Codex 见 codex.md）。
+安装技能：路径二、三用 `./install.sh --host claude|codex|all`（见仓库根目录）；路径一用 `--host dsh`，见 dsh.md。调用方式同宿主（Claude Code 用 `/hq`；Codex 见 codex.md）。
 
-### 路径一配置示例（bash）
+### 路径二配置示例（bash）
 
 ```bash
 export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
@@ -67,7 +68,7 @@ export CLAUDE_CODE_EFFORT_LEVEL="max"                   # 官方建议；可能�
 
 **`CLAUDE_CODE_EFFORT_LEVEL` 与档位的关系（未下结论）**：若它覆盖 A 通道的 `effort` 参数和 W 通道的 `--effort`，第 3 节的思考深度列就不生效，所有档位都按 max 跑（T0–T2 成本上升、用时变长）。设了该变量时，task 记录 notes 标注 `effort_env:max`；想让档位生效可不设它，再用小任务对比两种设置（见 README 验证清单）。`claude-code.md`、`calibration.md` 已同步标注此风险。
 
-### 路径二配置示例（`~/.codex/config.toml`，依官方“Integrate with Codex”摘要，字段细节待核实）
+### 路径三配置示例（`~/.codex/config.toml`，依官方“Integrate with Codex”摘要，字段细节待核实）
 
 ```toml
 model = "deepseek-v4-pro"           # 官方示例默认 deepseek-flash，按需改

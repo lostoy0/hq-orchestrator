@@ -14,18 +14,19 @@
 |---|---|---|
 | Claude Code（本地 CLI、云端会话、桌面端、IDE） | `hosts/claude-code.md` | 主要宿主，v0.2 起实际使用 |
 | Codex CLI | `hosts/codex.md` + `adapters/codex/` | agent 格式和目录已按官方文档核对（2026-11-25），**未实机运行** |
-| DeepSeek 后端 · 路径一：Claude Code 接 DeepSeek | `hosts/deepseek.md` | 档位压成 flash/pro 两档；云端子会话（B）仍用 Claude 模型 |
-| DeepSeek 后端 · 路径二：Codex 接 DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | 配置示例来自官方摘要，待实测 |
+| **DeepSeek Harness（dsh）· DeepSeek 推荐路径** | `hosts/dsh.md` | 原生宿主：`subagent` 逐次指定 provider/model/思考深度；**只读过官方文档，未实机运行** |
+| DeepSeek 后端 · 路径二：Claude Code 接 DeepSeek | `hosts/deepseek.md` | 档位压成 flash/pro 两档；云端子会话（B）仍用 Claude 模型 |
+| DeepSeek 后端 · 路径三：Codex 接 DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | 配置示例来自官方摘要，待实测 |
 | 其他支持 SKILL.md 的工具（OpenCode、Gemini CLI、Cursor 等） | 无 | 有 shell 用 W 通道；否则**降级模式**：主会话按同样的计划、台账和质量门槛串行亲自执行 |
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.3.0）
+.claude-plugin/plugin.json             plugin 清单（v0.3.1）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
 skills/hq/references/runtimes.md       抽象能力、派发通道（A/B/C/D/W）通用规则和宿主索引
-skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / deepseek）
+skills/hq/references/hosts/*.md        各宿主的能力表、档位映射、安装调用、待核实项（claude-code / codex / dsh / deepseek）
 skills/hq/references/brief-template.md 子会话任务说明模板（含验证级别、检查点）与交付格式
 skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用量口径
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
@@ -42,17 +43,19 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 ## 安装
 
-**方式 0：install.sh（Claude Code 和 Codex 通用）**
+**方式 0：install.sh（Claude Code、Codex、dsh 通用）**
 ```bash
-./install.sh --host claude|codex|both [--scope user|project] [--project-dir <路径>] [--with-codex-agents] [--force] [--dry-run]
+./install.sh --host claude|codex|dsh|all [--scope user|project] [--project-dir <路径>] [--with-codex-agents] [--force] [--dry-run]
 ```
 | 宿主 | 个人范围（`--scope user`，默认） | 项目范围（`--scope project`） |
 |---|---|---|
 | claude | `~/.claude/skills/{hq,hq-retro}` | `<项目>/.claude/skills/` |
 | codex | `~/.agents/skills/{hq,hq-retro}` | `<项目>/.agents/skills/` |
+| dsh | `${DSH_HOME:-~/.dsh}/skills/{hq,hq-retro}` | `<项目>/.dsh/skills/` |
+| all | 以上三处（`both` 为旧写法，等同 claude + codex，仍可用） | 同左 |
 | `--with-codex-agents` | `~/.codex/agents/hq-t*.toml` | `<项目>/.codex/agents/` |
 
-只复制文件，不改任何配置。目标已存在时退出码 3（加 `--force` 覆盖），参数错误退出码 2；会先检查所有目标，不会装一半。装了 agent 模板后，必须按 `adapters/codex/README.md` 替换其中的 `model` 占位符。Codex 的调用方式见 `hosts/codex.md`。
+只复制文件，不改任何配置。目标已存在时退出码 3（加 `--force` 覆盖），参数错误退出码 2；会先检查所有目标，不会装一半。装了 agent 模板后，必须按 `adapters/codex/README.md` 替换其中的 `model` 占位符。Codex 的调用方式见 `hosts/codex.md`。dsh 也会读取 `~/.agents/skills` 和 `<项目>/.agents/skills`，已用 `--host codex` 装过的不必再装 dsh；dsh 的首次运行步骤见 `hosts/dsh.md`。
 
 **方式 1：个人 skill（本地最简单）**
 ```bash
@@ -135,11 +138,12 @@ python3 -m unittest discover tests
 
 ## 待核实项与本机验证清单
 
-本仓库的开发环境装不了 codex，下面这些需要你在本机实测。结果请写进项目 `.hq/PLAYBOOK.md`（宿主映射）或提 issue。
+本仓库的开发环境装不了 codex 和 dsh，下面这些需要你在本机实测。结果请写进项目 `.hq/PLAYBOOK.md`（宿主映射）或提 issue。
 
 **待核实**（详见各宿主文档第 5 节）：
 - Codex：`codex exec` 的 `-m`、`-c model_reasoning_effort=…`、`-s` 写法；agent 模板实际能否被加载；并发上限配置名；`codex cloud` 能否指定 model/effort；原生子代理的监控、中止和用量读取。
-- DeepSeek：`CLAUDE_CODE_EFFORT_LEVEL=max` 是否覆盖 hq 按档位设的 effort；`ANTHROPIC_DEFAULT_OPUS_MODEL` 能否设为 `deepseek-v4-pro`；`deepseek-flash` 与 `deepseek-v4-flash` 是否等价。
+- dsh：桌面端子代理模型路由设置的位置；并发上限配置键；非交互 CLI 命令（能否做 W 通道 worker）；`reasoning_effort` 取值范围；用量和成本的读取方式；中止子代理的方式；Schedule 的工具名。
+- DeepSeek（路径二、三）：`CLAUDE_CODE_EFFORT_LEVEL=max` 是否覆盖 hq 按档位设的 effort；`ANTHROPIC_DEFAULT_OPUS_MODEL` 能否设为 `deepseek-v4-pro`；`deepseek-flash` 与 `deepseek-v4-flash` 是否等价。
 - Claude Code：本地 CLI 发起云端任务（通道 D）的参数。
 
 **装好 codex 后运行，核对参数**：
@@ -154,13 +158,18 @@ bash <路径>/cli-worker.sh status --id smoke; bash <路径>/cli-worker.sh usage
 ```
 在 codex 里让它列出可用 agent，确认 hq-t0…hq-t4 被识别。
 
-**DeepSeek 后端跑一次小任务**（路径一）：按 `hosts/deepseek.md` 设好环境变量，在一个小仓库里运行 `/hq` 做一个 T0 任务和一个 T3 任务，然后核对：
+**dsh 跑一次小任务**（DeepSeek 路径一，推荐）：`./install.sh --host dsh`（或已装 codex 则跳过），然后：
+- 在桌面端开启子代理模型选择；
+- 运行 `list_subagent_models`，按 `hosts/dsh.md` 第 3 节把 T0–T4 映射到返回的路由，写进 `.hq/PLAYBOOK.md`；
+- 运行 `/hq` 跑一个小任务（一个 T0、一个 T3），核对子代理实际用的模型和思考深度与档位映射一致，并记下用量能否读到。
+
+**DeepSeek 后端跑一次小任务**（路径二）：按 `hosts/deepseek.md` 设好环境变量，在一个小仓库里运行 `/hq` 做一个 T0 任务和一个 T3 任务，然后核对：
 - 子代理实际用的模型：T0 应为 flash，T3 应为 pro（`CLAUDE_CODE_SUBAGENT_MODEL` 不要设）；
 - effort：分别在设与不设 `CLAUDE_CODE_EFFORT_LEVEL=max` 时各跑一次，比较用时和用量，判断档位的思考深度是否被覆盖；
 - 用量：`.hq/runs/*.jsonl` 的 tokens 与 DeepSeek 控制台账单是否对得上（cost_usd 按 Claude 价格算，不可信）。
 
 ## 已知限制
-- Codex 适配和 DeepSeek 后端都还没有实机运行数据，见上一节。
+- Codex 适配、dsh 和 DeepSeek 后端都还没有实机运行数据，见上一节。
 - 本地 CLI 能否直接创建云端子会话，取决于 CLI 版本（见 runtimes.md 的通道 D）。这类子会话监控能力较弱。需要强监控时，把主会话放在云端，再通过“连接电脑”处理本地任务。
 - 进程内子代理和主会话共享同一台机器，资源保护只能控制派发节奏，没法限制子代理自己调用的进程。所以任务说明里的并行度限制很重要。
 - 进程内子代理的返回结果只有 token 总数、分不出缓存读取，这类任务的 `tokens` 记为空，成本比较以云端子会话的 `cost_usd` 为主。

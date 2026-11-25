@@ -14,18 +14,19 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 |---|---|---|
 | Claude Code (local CLI, cloud sessions, desktop, IDE) | `hosts/claude-code.md` | Primary host, used in practice since v0.2 |
 | Codex CLI | `hosts/codex.md` + `adapters/codex/` | Agent format and directories checked against official docs (2026-11-25), **not run on a real machine** |
-| DeepSeek backend · path 1: Claude Code with DeepSeek | `hosts/deepseek.md` | Tiers collapse to flash/pro; cloud sub-sessions (B) still use Claude models |
-| DeepSeek backend · path 2: Codex with DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | Config example from official summaries, to be tested |
+| **DeepSeek Harness (dsh) · recommended DeepSeek path** | `hosts/dsh.md` | Native host: `subagent` sets provider/model/reasoning effort per call; **only the official docs were read, not run on a real machine** |
+| DeepSeek backend · path 2: Claude Code with DeepSeek | `hosts/deepseek.md` | Tiers collapse to flash/pro; cloud sub-sessions (B) still use Claude models |
+| DeepSeek backend · path 3: Codex with DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | Config example from official summaries, to be tested |
 | Other tools that support SKILL.md (OpenCode, Gemini CLI, Cursor, ...) | none | With a shell, use the W channel; otherwise **degraded mode**: the main session executes serially itself with the same plan, ledger and quality gates |
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.3.0)
+.claude-plugin/plugin.json             plugin manifest (v0.3.1)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
 skills/hq/references/runtimes.md       abstract capabilities, general rules for dispatch channels (A/B/C/D/W) and host index
-skills/hq/references/hosts/*.md        per-host capability table, tier mapping, install/invocation, open items (claude-code / codex / deepseek)
+skills/hq/references/hosts/*.md        per-host capability table, tier mapping, install/invocation, open items (claude-code / codex / dsh / deepseek)
 skills/hq/references/brief-template.md task brief template for sub-sessions (with verification level and checkpoints) and delivery format
 skills/hq/references/metrics-schema.md run-data format (JSONL, v1) and usage definitions
 skills/hq/references/playbook-template.md template for the project playbook .hq/PLAYBOOK.md (including authorization settings)
@@ -42,17 +43,19 @@ tests/                                 self-tests for resources.sh, cli-worker.s
 
 ## Installation
 
-**Option 0: install.sh (works for Claude Code and Codex)**
+**Option 0: install.sh (works for Claude Code, Codex and dsh)**
 ```bash
-./install.sh --host claude|codex|both [--scope user|project] [--project-dir <path>] [--with-codex-agents] [--force] [--dry-run]
+./install.sh --host claude|codex|dsh|all [--scope user|project] [--project-dir <path>] [--with-codex-agents] [--force] [--dry-run]
 ```
 | Host | Personal scope (`--scope user`, default) | Project scope (`--scope project`) |
 |---|---|---|
 | claude | `~/.claude/skills/{hq,hq-retro}` | `<project>/.claude/skills/` |
 | codex | `~/.agents/skills/{hq,hq-retro}` | `<project>/.agents/skills/` |
+| dsh | `${DSH_HOME:-~/.dsh}/skills/{hq,hq-retro}` | `<project>/.dsh/skills/` |
+| all | all three of the above (`both` is the old spelling, equal to claude + codex, still accepted) | same |
 | `--with-codex-agents` | `~/.codex/agents/hq-t*.toml` | `<project>/.codex/agents/` |
 
-It only copies files and changes no config. Exit code 3 if a target exists (add `--force` to overwrite), 2 for invalid arguments; all targets are checked first, so it never installs halfway. After installing the agent templates you must replace their `model` placeholders as described in `adapters/codex/README.md`. How to invoke in Codex: see `hosts/codex.md`.
+It only copies files and changes no config. Exit code 3 if a target exists (add `--force` to overwrite), 2 for invalid arguments; all targets are checked first, so it never installs halfway. After installing the agent templates you must replace their `model` placeholders as described in `adapters/codex/README.md`. How to invoke in Codex: see `hosts/codex.md`. dsh also reads `~/.agents/skills` and `<project>/.agents/skills`, so if you already installed with `--host codex` you do not need to install for dsh; first-run steps for dsh are in `hosts/dsh.md`.
 
 **Option 1: personal skill (simplest locally)**
 ```bash
@@ -135,11 +138,12 @@ python3 -m unittest discover tests
 
 ## Open items and on-machine verification checklist
 
-codex cannot be installed in this repository's development environment, so the items below need testing on your machine. Please record results in the project's `.hq/PLAYBOOK.md` (host mapping) or open an issue.
+codex and dsh cannot be installed in this repository's development environment, so the items below need testing on your machine. Please record results in the project's `.hq/PLAYBOOK.md` (host mapping) or open an issue.
 
 **To be verified** (details in section 5 of each host doc):
 - Codex: the `-m`, `-c model_reasoning_effort=…` and `-s` flags of `codex exec`; whether the agent templates actually load; the concurrency-limit config name; whether `codex cloud` honors model/effort; monitoring, stopping and usage of native sub-agents.
-- DeepSeek: whether `CLAUDE_CODE_EFFORT_LEVEL=max` overrides the per-tier effort hq sets; whether `ANTHROPIC_DEFAULT_OPUS_MODEL` can be set to `deepseek-v4-pro`; whether `deepseek-flash` and `deepseek-v4-flash` are equivalent.
+- dsh: where the desktop app's sub-agent model-routing setting is; the concurrency-limit config key; the non-interactive CLI command (whether it can be a W-channel worker); the range of `reasoning_effort`; how to read usage and cost; how to stop a sub-agent; the tool name for Schedule.
+- DeepSeek (paths 2 and 3): whether `CLAUDE_CODE_EFFORT_LEVEL=max` overrides the per-tier effort hq sets; whether `ANTHROPIC_DEFAULT_OPUS_MODEL` can be set to `deepseek-v4-pro`; whether `deepseek-flash` and `deepseek-v4-flash` are equivalent.
 - Claude Code: the flags for starting cloud tasks from the local CLI (channel D).
 
 **After installing codex, run these to check the flags**:
@@ -154,13 +158,18 @@ bash <path>/cli-worker.sh status --id smoke; bash <path>/cli-worker.sh usage --i
 ```
 Ask codex to list the available agents and confirm hq-t0…hq-t4 are recognized.
 
-**Run one small task on the DeepSeek backend** (path 1): set the environment variables per `hosts/deepseek.md`, run `/hq` in a small repository with one T0 task and one T3 task, then check:
+**Run one small task in dsh** (DeepSeek path 1, recommended): `./install.sh --host dsh` (skip if codex is already installed), then:
+- enable sub-agent model selection in the desktop app;
+- run `list_subagent_models` and map T0–T4 to the returned routes per section 3 of `hosts/dsh.md`, writing them into `.hq/PLAYBOOK.md`;
+- run `/hq` on a small task (one T0, one T3) and check that the model and reasoning effort sub-agents actually used match the tier mapping, and note whether usage can be read.
+
+**Run one small task on the DeepSeek backend** (path 2): set the environment variables per `hosts/deepseek.md`, run `/hq` in a small repository with one T0 task and one T3 task, then check:
 - the model sub-agents actually used: flash for T0, pro for T3 (do not set `CLAUDE_CODE_SUBAGENT_MODEL`);
 - effort: run once with and once without `CLAUDE_CODE_EFFORT_LEVEL=max` and compare time and usage, to tell whether per-tier effort is overridden;
 - usage: whether tokens in `.hq/runs/*.jsonl` match the DeepSeek console bill (cost_usd is computed at Claude prices and is not reliable).
 
 ## Known limitations
-- The Codex adaptation and the DeepSeek backend have no real-machine run data yet; see the previous section.
+- The Codex adaptation, dsh and the DeepSeek backend have no real-machine run data yet; see the previous section.
 - Whether the local CLI can create cloud sub-sessions directly depends on the CLI version (see channel D in runtimes.md). Monitoring these sub-sessions is weaker. When you need strong monitoring, put the main session in the cloud and handle local tasks through "connect computer".
 - In-process sub-agents share the same machine as the main session. Resource protection can only control dispatch pacing and cannot limit processes that sub-agents start themselves. So the parallelism limits in task briefs matter.
 - In-process sub-agents only report a token total that cannot be split out from cache reads, so `tokens` is left empty for those tasks; cost comparisons rely mainly on `cost_usd` from cloud sub-sessions.

@@ -35,6 +35,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - **识别宿主**（按特征判断，结果写进台账头部）：
   - **claude-code**：工具列表里有名为 Agent 的子代理工具，或有 Claude Code 远程会话工具（工具名以 claude-code-remote 开头）。若环境变量 `ANTHROPIC_BASE_URL` 指向 deepseek，另读 `references/hosts/deepseek.md`。
   - **codex**：能看到 `~/.codex/`、能用 codex 的子代理功能。读 `references/hosts/codex.md`（接 DeepSeek 后端时另读 `hosts/deepseek.md`）。
+  - **dsh**（DeepSeek Harness）：工具列表里有 `subagent`、`list_subagent_models`、`list_agents`，或存在 `~/.dsh/`、`$DSH_HOME`。读 `references/hosts/dsh.md`；`$DSH_HOME` 非默认时把上面 find 的 `~/.dsh/skills` 换成 `$DSH_HOME/skills`。
   - 识别后读对应的 `references/hosts/<host>.md`，按其能力表使用下面的抽象能力；**识别不了**（OpenCode、Gemini CLI、Cursor 等）：有 shell 就用 W，否则用降级模式。
 - **我在哪**：宿主文档说明怎样判断云端会话还是本地；只有云端会话通常才有 remote_workers 和 local_machine。
 - **有哪些派发通道**（通用规则见 `references/runtimes.md`，具体调用见宿主文档）：
@@ -45,7 +46,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
-- **资源基线**：用 shell 查找脚本：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills .claude/skills .agents/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`，执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **资源基线**：用 shell 查找脚本：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills .claude/skills .agents/skills .dsh/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`，执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
 - **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
@@ -183,7 +184,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 ```markdown
 # HQ 台账 — <目标>
 run_id: <run_id> | 自主级别: 自动（停止条件 1–3）| merge_default: ask | open_pr: ask | budget_usd: -
-宿主: claude-code/codex/other（降级） | 环境: 云端/本地 | 通道: A,B,C,W | 仓库: <remote> 基线 <branch>@<sha> | 预算: 远程≤4 失败≤2
+宿主: claude-code/codex/dsh/other（降级） | 环境: 云端/本地 | 通道: A,B,C,W | 仓库: <remote> 基线 <branch>@<sha> | 预算: 远程≤4 失败≤2
 资源基线: <resources.sh 输出>
 
 | id | 标题 | 依赖 | 档位 | 模型/深度 | 位置 | 验证级别 | 状态 | worker id | 分支 | 尝试 | 预计/实际(分) | 备注 |

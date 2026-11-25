@@ -2,6 +2,7 @@
 # install.sh 自测：临时 HOME 和临时项目目录。
 INST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/install.sh"
 pass=0; fail=0
+unset DSH_HOME DSH_AGENTS_HOME   # 不受调用者环境影响
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1 ($2)"; fail=$((fail+1)); }
 
@@ -23,8 +24,27 @@ done; done
 fresh; inst --host both; rc=$?
 [ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && ok "both 两处都装" || bad "both" "rc=$rc"
 
+# 5b. dsh：个人范围 -> ${DSH_HOME:-~/.dsh}/skills，项目范围 -> <项目>/.dsh/skills
+fresh; inst --host dsh; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.dsh/skills/hq/SKILL.md" ] && [ -f "$T/h/.dsh/skills/hq-retro/SKILL.md" ] && [ ! -e "$T/h/.agents" ] && ok "dsh/user 装到 ~/.dsh/skills" || bad "dsh/user" "rc=$rc"
+fresh; HOME="$T/h" DSH_HOME="$T/dh" bash "$INST" --host dsh >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/dh/skills/hq/SKILL.md" ] && [ ! -e "$T/h/.dsh" ] && ok "dsh/user 遵从 DSH_HOME" || bad "dsh DSH_HOME" "rc=$rc"; rm -rf "$T/dh"
+fresh; HOME="$T/h" DSH_HOME="$T/dh" bash "$INST" --host dsh --scope project --project-dir "$T/p" >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ -f "$T/p/.dsh/skills/hq/SKILL.md" ] && [ ! -e "$T/dh" ] && ok "dsh/project 装到 <项目>/.dsh/skills" || bad "dsh/project" "rc=$rc"
+
+# 5c. all 三处都装
+fresh; inst --host all; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq/SKILL.md" ] && [ -f "$T/h/.agents/skills/hq/SKILL.md" ] && [ -f "$T/h/.dsh/skills/hq/SKILL.md" ] && ok "all 三处都装" || bad "all" "rc=$rc"
+
+# 5d. both 仍兼容：只装 claude + codex
+fresh; inst --host both; rc=$?
+[ $rc = 0 ] && [ ! -e "$T/h/.dsh" ] && ok "both 兼容且不装 dsh" || bad "both compat" "rc=$rc"
+
+# 5e. usage 说明 dsh 读 ~/.agents/skills
+inst --help; grep -q "dsh 也会读取 ~/.agents/skills" "$T/out" && ok "usage 说明 dsh 共享 ~/.agents/skills" || bad "usage dsh note" "missing"
+
 # 6. dry-run 不写入
-fresh; inst --host both --scope project --project-dir "$T/p" --dry-run --with-codex-agents; rc=$?
+fresh; inst --host all --scope project --project-dir "$T/p" --dry-run --with-codex-agents; rc=$?
 n=$(find "$T/h" "$T/p" "$T/ag" -type f 2>/dev/null | wc -l)
 [ $rc = 0 ] && [ "$n" = 0 ] && [ ! -e "$T/ag" ] && ok "dry-run 不写入" || bad "dry-run" "rc=$rc files=$n"
 
