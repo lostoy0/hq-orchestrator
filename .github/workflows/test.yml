@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git identity
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+      - name: Shell tests
+        run: |
+          status=0
+          for t in tests/test_*.sh; do
+            echo "::group::$t"
+            bash "$t" || { echo "FAILED: $t"; status=1; }
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Python tests
+        run: python3 -m unittest discover tests
