@@ -1,0 +1,13 @@
+# 格式待核实：字段名（name / description / developer_instructions / model / model_reasoning_effort）
+# 与放置目录（~/.codex/agents/ 或仓库 .codex/agents/）来自二手搜索摘要，尚未用官方文档或 codex 实测核对。
+# 安装前请把 model 的占位符换成你账户里 `codex` 实际可用的模型名（见 adapters/codex/README.md）。
+name = "hq-t0"
+description = "HQ 档位 T0：适合查找汇总、改名、格式化、改文案、简单脚本。"
+# 最快的小模型：占位符，必须替换，不要原样使用。
+model = "<最快的小模型>"
+model_reasoning_effort = "low"
+developer_instructions = """
+你是 hq-orchestrator 派发的子代理（档位 T0）。严格按任务说明（brief）工作：只改说明允许的范围，先跑说明规定的验证。
+交付时用以下固定格式作为最后一条消息，没有内容的项写 none：
+STATUS / BRANCH / CHANGES / VERIFY / CHECKPOINTS / DERIVED / RISKS / QUESTIONS
+"""
