@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "hq-orchestrator-marketplace": {
+      "source": { "source": "github", "repo": "lostoy0/hq-orchestrator" }
+    }
+  },
+  "enabledPlugins": {
+    "hq-orchestrator@hq-orchestrator-marketplace": true
+  }
+}
