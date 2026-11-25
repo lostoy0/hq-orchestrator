@@ -1,9 +1,16 @@
-# codex 后端：codex exec。参数 --json、"-"（stdin）已按官方文档核对；-m、-c、-s 待 `codex exec --help` 核对。
+# codex 后端：codex exec。已实机核实（codex-cli 0.172.0，macOS 26.6.2，2026-11-25）：-m、-c model_reasoning_effort=、
+# -s read-only/workspace-write（danger-full-access 只在 --help 里核对，未实跑）、--json、"-"（stdin）均被接受；生效的 model/effort 见 ~/.codex/sessions 的 turn_context；turn.completed.usage 字段与下方解析一致。
 be_argv() {
   # 简报经 stdin 传入（codex exec 的 PROMPT 为 "-" 时读 stdin），避免超长命令行
   argv=(codex exec -m "$MODEL")
   [ -n "$EFFORT" ] && argv+=(-c "model_reasoning_effort=$EFFORT")
   argv+=(-s "$SANDBOX" --json -)
+  if [ "$SANDBOX" = workspace-write ]; then
+    # 实测：workspace-write 沙箱把 .git 当受保护路径（worktree 的 git 目录在主仓库 .git/worktrees/<id>），
+    # git add 建不了 index.lock；--add-dir 主仓库 .git 也无效。改由 cli-worker 在沙箱外代提交。
+    BE_COMMIT=1
+    NOTES="${NOTES}codex 沙箱不能写 .git，worker 无法自行提交：退出码 0 时由 cli-worker 在沙箱外把 worktree 改动提交到 hq/<id>；"
+  fi
   STDIN_SRC=brief
 }
 be_usage() {
