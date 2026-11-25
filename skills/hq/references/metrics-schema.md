@@ -80,6 +80,7 @@
 | decisions | 整数 | 主会话自行做出的重要决定数 |
 | integration_pass | 布尔 | 最终合并验证是否通过 |
 | plugin_version | 字符串 | hq 插件版本 |
+| standing_seq | 整数（可选） | 常驻模式下本会话的第几批；非常驻不写 |
 
 示例：
 
