@@ -55,6 +55,12 @@ install.sh                             一键安装：自动检测工具、按�
 docs/design-more-hosts.md              支持更多宿主的设计草案与路线（v0.4.x）
 tests/                                 resources.sh、cli-worker.sh、install.sh、runs-persist.sh、metrics.py 的自测
 .github/ISSUE_TEMPLATE/retro-data.md   分享脱敏运行数据用的 issue 模板
+.github/ISSUE_TEMPLATE/bug_report.md   问题报告模板
+.github/PULL_REQUEST_TEMPLATE.md       PR 检查清单
+.github/workflows/test.yml             CI：在 Linux 和 macOS 上跑全部自测
+LICENSE                                Apache-2.0 加 Commons Clause（可免费使用，不可出售）
+CONTRIBUTING.md                        贡献指南和贡献授权条款
+SECURITY.md                            安全问题的私密报告方式
 ```
 
 ## 安装
@@ -328,3 +334,14 @@ bash <路径>/cli-worker.sh status --id smoke; bash <路径>/cli-worker.sh usage
 - 进程内子代理和主会话共享同一台机器，资源保护只能控制派发节奏，没法限制子代理自己调用的进程。所以任务说明里的并行度限制很重要。
 - 进程内子代理的返回结果只有 token 总数、分不出缓存读取，这类任务的 `tokens` 记为空，成本比较以云端子会话的 `cost_usd` 为主。
 - 难度分档表是经验默认值，可以按你的账户和实际体验在 `skills/hq/calibration.md` 里调整；更推荐用 `/hq-retro` 按数据调整。
+
+## 许可与商用
+
+本项目以 [Apache License 2.0](LICENSE) 加 [Commons Clause](https://commonsclause.com/) 条件授权。下面是通俗摘要，**以 [LICENSE](LICENSE) 正文（英文）为准**。
+
+- **任何人都可以免费使用**：个人、公司内部、商业项目都行。可以修改，也可以免费再分发，分发时保留许可文本和版权声明，并带上 Commons Clause 条件。
+- **不可出售**：不得把本项目（或基于它的衍生品）打包出售，也不得收费提供价值主要来自本项目的产品或服务，包括收费的托管、咨询和技术支持。
+- **作者不受此限**：作者自己可以出售、上架插件或技能市场、收费提供技术支持。想合作或购买服务，请在 [Issues](https://github.com/lostoy0/hq-orchestrator/issues) 联系作者。
+- **不是 OSI 意义上的“开源”**：因为有上面的限制，本项目属于源码公开（source-available）。
+
+参与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题见 [SECURITY.md](SECURITY.md)。

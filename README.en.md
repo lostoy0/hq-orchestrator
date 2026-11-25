@@ -55,6 +55,12 @@ install.sh                             one-command install: detects tools, copie
 docs/design-more-hosts.md              design draft and roadmap for more hosts (v0.4.x, in Chinese)
 tests/                                 self-tests for resources.sh, cli-worker.sh, install.sh, runs-persist.sh and metrics.py
 .github/ISSUE_TEMPLATE/retro-data.md   issue template for sharing anonymized run data
+.github/ISSUE_TEMPLATE/bug_report.md   bug report template
+.github/PULL_REQUEST_TEMPLATE.md       PR checklist
+.github/workflows/test.yml             CI: runs all self-tests on Linux and macOS
+LICENSE                                Apache-2.0 with Commons Clause (free to use, no selling)
+CONTRIBUTING.md                        contribution guide and contribution license terms
+SECURITY.md                            how to report security issues privately
 ```
 
 ## Installation
@@ -328,3 +334,14 @@ Ask codex to list the available agents and confirm hq-t0…hq-t4 are recognized.
 - In-process sub-agents share the same machine as the main session. Resource protection can only control dispatch pacing and cannot limit processes that sub-agents start themselves. So the parallelism limits in task briefs matter.
 - In-process sub-agents only report a token total that cannot be split out from cache reads, so `tokens` is left empty for those tasks; cost comparisons rely mainly on `cost_usd` from cloud sub-sessions.
 - The tier table is an empirical default. You can adjust it in `skills/hq/calibration.md` based on your account and actual experience; adjusting it from data via `/hq-retro` is preferred.
+
+## License and commercial use
+
+This project is licensed under the [Apache License 2.0](LICENSE) with the [Commons Clause](https://commonsclause.com/) condition. The summary below is informal; **the [LICENSE](LICENSE) text governs**.
+
+- **Anyone can use it for free**: individuals, companies internally, commercial projects. You may modify it and redistribute it free of charge, as long as you keep the license text and copyright notice and include the Commons Clause condition.
+- **No selling**: you may not sell this project (or works derived from it), or charge for a product or service whose value derives mainly from it, including paid hosting, consulting and support.
+- **The author is not bound by this**: the author may sell it, list it on plugin or skill marketplaces and charge for support. To work together or buy services, contact the author through [Issues](https://github.com/lostoy0/hq-orchestrator/issues).
+- **Not "open source" in the OSI sense**: because of the restriction above, this project is source-available.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contributing and [SECURITY.md](SECURITY.md) for security reports.

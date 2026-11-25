@@ -1,6 +1,7 @@
 ---
 name: hq-retro
 description: HQ 复盘。读取 /hq 记录的运行数据（.hq/runs/*.jsonl），用 metrics.py 出指标，验证上次改动是否达到预期，产出有证据支撑的改进建议，并生成一段可直接复制到 hq-orchestrator 插件仓库执行的提示词。用户输入 /hq-retro，或 /hq 汇报中提示“该复盘了”（累计约 5 次运行或 20 个任务）时使用；`/hq-retro --export` 或用户想把数据分享给插件作者时，只导出脱敏数据。没有运行数据时不要用。
+license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
 
 # HQ 复盘
