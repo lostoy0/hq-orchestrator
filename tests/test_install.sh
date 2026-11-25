@@ -49,7 +49,7 @@ inst --help; grep -q "dsh 也会读取 ~/.agents/skills" "$T/out" && ok "usage �
 
 # 6. dry-run 不写入
 fresh; inst --host all --scope project --project-dir "$T/p" --dry-run --with-codex-agents; rc=$?
-n=$(find "$T/h" "$T/p" "$T/ag" -type f 2>/dev/null | wc -l)
+n=$(find "$T/h" "$T/p" "$T/ag" -type f 2>/dev/null | wc -l | tr -d ' ')
 [ $rc = 0 ] && [ "$n" = 0 ] && [ ! -e "$T/ag" ] && ok "dry-run 不写入" || bad "dry-run" "rc=$rc files=$n"
 
 # 7. 已存在无 --force => 3，且不覆盖
@@ -129,7 +129,7 @@ fresh; inst --host codex --scope project --project-dir "$T/p"
 
 # 16. --list 不写入
 fresh; mkdir -p "$T/h/.gemini"; HOME="$T/h" HQ_NO_CMD_DETECT=1 bash "$INST" --list >"$T/out" 2>&1; rc=$?
-[ $rc = 0 ] && grep -q "✓ gemini" "$T/out" && grep -q "\.gemini/skills" "$T/out" && [ "$(find "$T/h" -type f | wc -l)" = 0 ] && ok "--list 显示检测和计划且不写入" || bad "--list" "rc=$rc"
+[ $rc = 0 ] && grep -q "✓ gemini" "$T/out" && grep -q "\.gemini/skills" "$T/out" && [ "$(find "$T/h" -type f | wc -l | tr -d ' ')" = 0 ] && ok "--list 显示检测和计划且不写入" || bad "--list" "rc=$rc"
 
 # 17. --update：只更新有安装记录的副本
 fresh; inst --host claude; inst --host codex
@@ -193,7 +193,7 @@ for f in "$REPO"/adapters/opencode/agents/hq-t*.md; do
   echo "$fm" | grep -qx 'mode: subagent' || bad24="$bad24 $(basename "$f"):mode"
   echo "$fm" | grep -Eq '^(tools|permission|temperature|maxSteps|prompt|disable|name|model):' && bad24="$bad24 $(basename "$f"):v1-or-model"
 done
-[ -z "$bad24" ] && [ "$(ls "$REPO"/adapters/opencode/agents/hq-t*.md | wc -l)" = 5 ] && ok "opencode 模板为 V2 subagent 格式" || bad "opencode fmt" "$bad24"
+[ -z "$bad24" ] && [ "$(ls "$REPO"/adapters/opencode/agents/hq-t*.md | wc -l | tr -d ' ')" = 5 ] && ok "opencode 模板为 V2 subagent 格式" || bad "opencode fmt" "$bad24"
 # 25. --model-map：opencode 自动追加 #<思考深度>，显式 variant 保留；codex 填模型名
 rm -rf "$T/r"; bash "$R" --format opencode --out "$T/r" --model-map 'T0=openai/m-small,T4=anthropic/m-big#max' >/dev/null 2>&1
 grep -qx 'model: openai/m-small#low' "$T/r/hq-t0.md" && grep -qx 'model: anthropic/m-big#max' "$T/r/hq-t4.md" && ! grep -q '^model:' "$T/r/hq-t2.md" && ok "opencode --model-map 生成 provider/model#variant" || bad "opencode map" "$(grep -h model "$T/r"/*.md)"
@@ -205,7 +205,7 @@ for m in 'T9=a/b' 'T0=' 'T0=nomodelslash' 'T0=a/b c'; do
 done
 # 26. install --with-agents：opencode 模板进 ~/.config/opencode/agents / <项目>/.opencode/agents
 fresh; HOME="$T/h" bash "$INST" --host opencode --with-agents >"$T/out" 2>&1; rc=$?
-[ $rc = 0 ] && [ "$(ls "$T/h/.config/opencode/agents"/hq-t*.md 2>/dev/null | wc -l)" = 5 ] && [ ! -e "$T/h/.codex" ] && grep -q "档位不生效" "$T/out" && ok "opencode --with-agents 个人范围" || bad "opencode agents user" "rc=$rc"
+[ $rc = 0 ] && [ "$(ls "$T/h/.config/opencode/agents"/hq-t*.md 2>/dev/null | wc -l | tr -d ' ')" = 5 ] && [ ! -e "$T/h/.codex" ] && grep -q "档位不生效" "$T/out" && ok "opencode --with-agents 个人范围" || bad "opencode agents user" "rc=$rc"
 fresh; HOME="$T/h" bash "$INST" --host opencode --scope project --project-dir "$T/p" --with-agents --model-map 'T0=x/y,T1=x/y,T2=x/y,T3=x/z,T4=x/z' >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && grep -qx 'model: x/z#high' "$T/p/.opencode/agents/hq-t4.md" && [ ! -e "$T/h/.config/opencode/agents" ] && ok "opencode --with-agents --model-map 项目范围" || bad "opencode agents project" "rc=$rc $(tail -2 "$T/out")"
 # 27. --with-agents 对多个宿主：codex + opencode 都装；对没有模板的宿主给提示
@@ -258,7 +258,7 @@ rm -rf "$T/r"; bash "$R" --format gemini --out "$T/r" --model-map 'T0=g-small,T4
 grep -qx 'model: g-small' "$T/r/hq-t0.md" && grep -qx 'model: g-pro' "$T/r/hq-t4.md" && ! grep -q '^model:' "$T/r/hq-t2.md" && ok "gemini --model-map 填模型名" || bad "gemini map" "$(grep -h '^model' "$T/r"/*.md)"
 # 32. install --host gemini --with-agents；已装扩展时提示
 fresh; HOME="$T/h" bash "$INST" --host gemini --with-agents --model-map 'T0=a,T1=b,T2=b,T3=c,T4=c' >"$T/out" 2>&1; rc=$?
-[ $rc = 0 ] && [ "$(ls "$T/h/.gemini/agents"/hq-t*.md 2>/dev/null | wc -l)" = 5 ] && grep -qx 'model: c' "$T/h/.gemini/agents/hq-t3.md" && [ -f "$T/h/.gemini/skills/hq/SKILL.md" ] && ok "gemini --with-agents 装到 ~/.gemini/agents" || bad "gemini agents" "rc=$rc $(tail -2 "$T/out")"
+[ $rc = 0 ] && [ "$(ls "$T/h/.gemini/agents"/hq-t*.md 2>/dev/null | wc -l | tr -d ' ')" = 5 ] && grep -qx 'model: c' "$T/h/.gemini/agents/hq-t3.md" && [ -f "$T/h/.gemini/skills/hq/SKILL.md" ] && ok "gemini --with-agents 装到 ~/.gemini/agents" || bad "gemini agents" "rc=$rc $(tail -2 "$T/out")"
 fresh; mkdir -p "$T/h/.gemini/extensions/hq-orchestrator"; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && grep -q "已装 Gemini 扩展" "$T/out" && ok "已装 Gemini 扩展时提示重复" || bad "gemini ext notice" "rc=$rc"
 fresh; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1

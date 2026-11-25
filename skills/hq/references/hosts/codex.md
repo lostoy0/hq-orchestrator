@@ -46,11 +46,11 @@
 
 ## 5. 已知限制与待核实项
 
-1. `codex exec` 的 `-m`、`-c model_reasoning_effort=`、`-s` 未经 `codex exec --help` 核对（`--json`、`-` 读 stdin 已按官方文档核对）；cli-worker.sh 的 codex 分支只在假 CLI 上测过。
+1. **已实机核实**（codex-cli 0.172.0，macOS 26.6.2，2026-11-25）：`codex exec` 的 `-m`、`-c model_reasoning_effort=low|medium`、`-s read-only|workspace-write`、`--json`、`-` 读 stdin 都被接受，经 cli-worker.sh 实跑通过；生效的 model、effort 可在 `~/.codex/sessions/**/rollout-*.jsonl` 的 `turn_context` 里看到。`-s danger-full-access` 只在 `--help` 里核对，未实跑。worktree 本身是 git 仓库，不需要 `--skip-git-repo-check`；`codex exec` 非交互运行，无需额外的自动批准参数。
 2. agent TOML 的字段名和放置目录已按官方文档核对，未实机运行。
-3. usage 字段名已按官方文档核对；恢复会话（`exec resume`）时 usage 是累计值，cli-worker.sh 不处理 resume，用到时需自行做差。
+3. usage 字段已实机核实：`turn.completed.usage` 含 `input_tokens`、`cached_input_tokens`、`cache_write_input_tokens`、`output_tokens`、`reasoning_output_tokens`，`be_usage` 的口径（input − cached + output）不变；恢复会话（`exec resume`）时 usage 是累计值，cli-worker.sh 不处理 resume，用到时需自行做差。
 4. 原生子代理的监控、补充信息、中止、用量取法待核实。
 5. 是否有定时唤醒能力待核实，暂按没有处理。
 6. `codex cloud` 的 model/effort 可能不生效；`xhigh` 是否支持待核实。
-7. W 通道 sandbox 默认 workspace-write；worktree 在仓库内 `.hq/worktrees/`，沙箱能否写主仓库 `.git`（提交需要）待核实。
+7. W 通道 sandbox 默认 workspace-write。**实测沙箱不能写 `.git`**：worktree 的 git 目录在主仓库 `.git/worktrees/<id>`，`git add` 建不了 `index.lock`，worker 自己提交会失败；用 `--add-dir` 把主仓库 `.git` 加为可写目录也无效（Codex 把 `.git` 当受保护路径）。因此 `backends/codex.sh` 在 workspace-write 下让 cli-worker 在 Codex 正常退出（退出码 0）后、沙箱外把 worktree 里的改动提交到 `hq/<id>`（提交信息“<id>: worker 交付（cli-worker 代提交）”，失败只写进 `log`）。read-only 和失败的 worker 不代提交。简报里可以写“不必自己提交”，省掉一次失败的尝试。
 8. 旧名 `agents.max_threads` 与新名并存的行为待核实。

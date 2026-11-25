@@ -54,7 +54,7 @@
 - 各 CLI 的映射：
 | `--cli` | 实际命令 | read-only | workspace-write（默认） | danger-full-access（需 `--allow-dangerous`） | `--effort` | 用量 | 核实状态 |
 |---|---|---|---|---|---|---|---|
-| codex | `codex exec -m … --json -`（简报走 stdin） | `-s read-only` | `-s workspace-write` | `-s danger-full-access` | `-c model_reasoning_effort=…` | tokens | 官方文档，未实机 |
+| codex | `codex exec -m … --json -`（简报走 stdin） | `-s read-only` | `-s workspace-write` | `-s danger-full-access` | `-c model_reasoning_effort=…` | tokens | 已实机核实（codex-cli 0.172.0，2026-11-25）；沙箱不能写 `.git`，workspace-write 由 cli-worker 代提交 |
 | claude | `claude -p --model … --output-format stream-json` | `--permission-mode plan` | `--permission-mode acceptEdits` | `--dangerously-skip-permissions` | `--effort` | tokens + cost | `claude --help` 已核实 |
 | opencode | `opencode run --model p/m#variant --format json`（stdin） | `--agent plan` | `--auto`（**比工作区宽**：批准全部未拒绝权限） | `--auto` | 追加为 `#variant` | tokens + cost（逐步相加） | V2 源码/帮助，未实机 |
 | gemini | `gemini -m … --output-format stream-json -p …`（简报走 stdin） | `--approval-mode plan` | `--approval-mode auto_edit`（shell 可能不可用） | `--approval-mode yolo` | 不支持，记入 notes | tokens | 官方文档/源码，未实机 |

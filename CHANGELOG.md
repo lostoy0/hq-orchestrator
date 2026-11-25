@@ -27,6 +27,13 @@
 - **状态**：待验证
 - **复盘报告**：无（人工改动）
 
+### Codex 辅助执行者实机核实；修 macOS 上 W 通道起不来、Codex worker 提交不了
+- **改动**：`scripts/cli-worker.sh` 启动 runner 时，没有 `setsid`（macOS）就改用 `python3` 的 `os.setsid()` + exec；runner 新增第 5 个参数，后端设 `BE_COMMIT=1` 时，CLI 退出码为 0 且 worktree 有改动，就在沙箱外 `git add -A && git commit` 到 `hq/<id>`（失败只写 `log`）。`scripts/backends/codex.sh` 在 `workspace-write` 下设 `BE_COMMIT=1` 并写 notes，文件头改为“已实机核实”。`tests/fixtures/fake-cli/codex` 按实测事件格式补 `thread.started`、`error` 警告项、`agent_message`、`cache_write_input_tokens`，新增 `FAKE_WRITE`；`tests/test_cli_worker.sh` 新增代提交 5 项用例；`tests/test_install.sh` 的 `wc -l` 去掉 BSD 前导空格。`references/hosts/codex.md` §5 第 1、3、7 条、`references/runtimes.md` W 节 codex 行的核实状态同步更新。
+- **原因/假设**：2026-11-25 在 macOS 26.6.2 上用 codex-cli 0.172.0（模型 gpt-6.2-sol）实跑：① macOS 没有 `setsid`，`cli-worker.sh start` 后 runner 根本没起来，状态一直是 `unknown`（`test_cli_worker.sh` 27 项失败）；② Codex `workspace-write` 沙箱把 `.git` 当受保护路径，worktree 里 `git add` 建不了 `index.lock`，worker 无法提交，`--add-dir` 主仓库 `.git` 也无效。`-m`、`-c model_reasoning_effort=low|medium`、`-s read-only|workspace-write`、`--json`、`-` 都被接受（会话记录 `turn_context` 显示生效），usage 字段与 `be_usage` 一致，无需改。假设：代提交后，Codex 辅助任务在 macOS 上能按 `hq/<id>` 分支交付，主宿主照常审核。
+- **验收指标**：开启 `assist: [codex]` 的运行里，codex 辅助任务因“分支上没有提交”而回收的次数 = 0；W 通道在 macOS 上 `state: unknown` 的 worker 数 = 0。
+- **状态**：待验证（三套自测通过；smoke1c / smoke2 / smoke3 与 3 任务端到端（assist: codex，metrics 出现 3d）已实跑；`danger-full-access` 只在 `--help` 里核对，未实跑）
+- **复盘报告**：无（人工改动）
+
 ## v0.5.0（2026-11-25）
 
 ### 辅助执行者：主宿主主攻难点，Codex / Kimi 承接中低难度
