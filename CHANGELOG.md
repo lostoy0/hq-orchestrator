@@ -18,9 +18,18 @@
 
 ---
 
-## 未发布
+## v0.5.0（2026-11-25）
 
-补充 B 通道（云端子会话）通信能力的实测结论。只改文档，未升版本号。
+### 辅助执行者：主宿主主攻难点，Codex / Kimi 承接中低难度
+- **改动**：`calibration.md` 新增规则 10“分工路由”；`SKILL.md` 新增“辅助执行者”一节，第 1、3、4、8、9 步和授权配置、台账头部相应补充，支持 `/hq --assist <名单> [--assist-max T0|T1|T2]` 和 PLAYBOOK `assist`；`scripts/cli-worker.sh` 新增 `--env-file`（只注入 worker 进程，文件须 600，值不进 cmd/notes/输出）和 `--label`（写进 status/usage）；新建 `references/hosts/kimi.md`；`metrics-schema.md` task 新增可选字段 `assist`；`metrics.py` 新增“3d 辅助执行者 vs 主宿主”分组，脱敏导出保留 `assist`；`hq-retro` 复盘清单新增第 10 项；README 中英文、PROMPT.md 同步。
+- **原因/假设**：用户希望大目标里难的、重要的任务由 Claude 自己做，其余交给 Codex、Kimi 等更便宜的模型并由 Claude 审核，以节省 Claude 额度、加快交付且不降质量。原来的 `worker_clis` 只是“允许用”，选档不会主动分流，也接不了 Kimi。假设：只把需求明确、低风险、易验证的 T0–T2 交出去，审核不降档、失败即收回，质量门槛不变，主宿主 tokens 明显下降。
+- **验收指标**：开启 `assist` 的运行里（每组至少 5 个任务）：辅助各档一次通过率与主宿主同档相差不超过 20 个百分点；回收率（辅助任务的交接率）≤ 30%；返工率、合并通过率不劣于未开启时；主宿主侧每任务平均 tokens 下降。
+- **状态**：待验证（`cli-worker.sh` 新参数和 metrics 分组已有自测；Kimi 接口、Codex 实际调用未实机运行）
+- **复盘报告**：无（人工改动）
+
+### 随 0.5.0 发布的此前未发布改动
+
+补充 B 通道（云端子会话）通信能力的实测结论。只改文档。
 
 ### 子会话汇报在 auto 模式下不可用，补降级写法
 - **改动**：`skills/hq/references/hosts/claude-code.md` §2 `message_worker` 行补主会话向子会话发消息的实测行为和 `priority` 三档，§5 新增“auto 模式下子会话主动汇报不可用”及巡检识别方法；`runtimes.md` B 通道补“回报可能发不出去”；`brief-template.md` 补“回报发不出去时不要停下，以交付格式和分支为准”；`SKILL.md` 监控一节补“`blocked` 且 `need_input` 多半是在等批准”。

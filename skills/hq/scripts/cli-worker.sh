@@ -4,6 +4,10 @@
 # 用法:
 #   cli-worker.sh start --id <id> --cli <cli> --model <m> [--effort <e>] --brief <文件> [--base <分支>]
 #                       [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
+#                       [--env-file <文件>] [--label <名称>]
+#   --env-file：KEY=VALUE 文件，只注入这个 worker 进程（如 Kimi 的 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN）；
+#               不能被同组或其他用户读取（chmod 600），值不写进 cmd/notes/输出。
+#   --label：辅助执行者名称（如 kimi、codex），写进 status/usage 的 label 字段，供记录 model 为 <label>:<模型>。
 #   默认 sandbox 为 workspace-write。danger-full-access 必须同时加 --allow-dangerous，否则报错退出（码 2）。
 #   cli-worker.sh status|stop|usage --id <id>
 #   cli-worker.sh list
@@ -17,7 +21,7 @@ for f in "$BE_DIR"/*.sh; do [ -e "$f" ] && CLIS="$CLIS${CLIS:+|}$(basename "$f" 
 usage() {
   cat >&2 <<U
 用法:
-  cli-worker.sh start --id <id> --cli <$CLIS> --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
+  cli-worker.sh start --id <id> --cli <$CLIS> --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous] [--env-file <文件>] [--label <名称>]
   （danger-full-access 必须同时加 --allow-dangerous）
   cli-worker.sh status --id <id>
   cli-worker.sh stop --id <id>
@@ -30,13 +34,14 @@ die() { echo "cli-worker: $*" >&2; exit 1; }
 
 [ $# -ge 1 ] || usage
 CMD=$1; shift
-ID=""; CLI=""; MODEL=""; EFFORT=""; BRIEF=""; BASE=""; SANDBOX="workspace-write"; ALLOW_DANGER=0
+ID=""; CLI=""; MODEL=""; EFFORT=""; BRIEF=""; BASE=""; SANDBOX="workspace-write"; ALLOW_DANGER=0; ENV_FILE=""; LABEL=""
 while [ $# -gt 0 ]; do
   if [ "$1" = --allow-dangerous ]; then ALLOW_DANGER=1; shift; continue; fi
   [ $# -ge 2 ] || usage
   case $1 in
     --id) ID=$2;; --cli) CLI=$2;; --model) MODEL=$2;; --effort) EFFORT=$2;;
     --brief) BRIEF=$2;; --base) BASE=$2;; --sandbox) SANDBOX=$2;;
+    --env-file) ENV_FILE=$2;; --label) LABEL=$2;;
     *) usage;;
   esac
   shift 2
@@ -53,24 +58,24 @@ rd() { [ -r "$1" ] && cat "$1" || true; }
 alive() { local p; p=$(rd "$WDIR/$ID/pid"); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 
 do_status() {
-  local d="$WDIR/$ID" pid ec st en state="unknown" minutes=null
-  [ -d "$d" ] || { echo "{\"id\":\"$ID\",\"state\":\"unknown\",\"pid\":null,\"exit_code\":null,\"started_at\":null,\"ended_at\":null,\"minutes\":null}"; return 0; }
-  pid=$(rd "$d/pid"); ec=$(rd "$d/exit_code"); st=$(rd "$d/started_at"); en=$(rd "$d/ended_at")
+  local d="$WDIR/$ID" pid ec st en lb state="unknown" minutes=null
+  [ -d "$d" ] || { echo "{\"id\":\"$ID\",\"state\":\"unknown\",\"pid\":null,\"exit_code\":null,\"started_at\":null,\"ended_at\":null,\"minutes\":null,\"label\":null}"; return 0; }
+  pid=$(rd "$d/pid"); ec=$(rd "$d/exit_code"); st=$(rd "$d/started_at"); en=$(rd "$d/ended_at"); lb=$(rd "$d/label")
   if [ -n "$ec" ]; then
     if [ "$ec" = 0 ]; then state=done; else state=failed; fi
   elif alive; then state=running
   else state=unknown   # 进程没了也没有退出码（被 KILL 或宿主重启）
   fi
-  python3 - "$ID" "$state" "$pid" "$ec" "$st" "$en" <<'PY'
+  python3 - "$ID" "$state" "$pid" "$ec" "$st" "$en" "$lb" <<'PY'
 import sys,json,datetime
-i,state,pid,ec,st,en=sys.argv[1:7]
+i,state,pid,ec,st,en,lb=sys.argv[1:8]
 def p(s):
     return datetime.datetime.strptime(s,"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc) if s else None
 a,b=p(st),p(en)
 if a and not b and state=="running": b=datetime.datetime.now(datetime.timezone.utc)
 m=round((b-a).total_seconds()/60,1) if a and b else None
 print(json.dumps({"id":i,"state":state,"pid":int(pid) if pid else None,"exit_code":int(ec) if ec!="" else None,
- "started_at":st or None,"ended_at":en or None,"minutes":m}))
+ "started_at":st or None,"ended_at":en or None,"minutes":m,"label":lb.strip() or None}))
 PY
 }
 
@@ -86,6 +91,14 @@ do_start() {
   fi
   [ -r "$BRIEF" ] || { echo "cli-worker: brief 文件不可读: $BRIEF" >&2; exit 2; }
   BRIEF=$(cd "$(dirname "$BRIEF")" && pwd)/$(basename "$BRIEF")
+  if [ -n "$LABEL" ] && ! [[ $LABEL =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]; then usage; fi
+  if [ -n "$ENV_FILE" ]; then
+    [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ] || { echo "cli-worker: env 文件不可读: $ENV_FILE" >&2; exit 2; }
+    # 密钥文件不能被同组或其他用户读取
+    python3 -c 'import os,sys,stat;sys.exit(1 if os.stat(sys.argv[1]).st_mode & (stat.S_IRWXG|stat.S_IRWXO) else 0)' "$ENV_FILE" \
+      || { echo "cli-worker: env 文件权限过宽（需 chmod 600）: $ENV_FILE" >&2; exit 2; }
+    ENV_FILE=$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE")
+  fi
   [ -n "$BASE" ] || BASE=HEAD
   # 先拼好命令（后端可能拒绝某些组合），再建 worktree，避免失败时留下分支
   local -a argv; STDIN_SRC=brief; NOTES=""
@@ -106,22 +119,25 @@ do_start() {
   git -C "$ROOT" worktree add -q -b "$br" "$wt" "$BASE" || die "创建 worktree 失败"
   mkdir -p "$d"
 
-  { printf '%q ' "${argv[@]}"; printf '< %q\n' "$stdin_file"; } > "$d/cmd"
+  { [ -n "$ENV_FILE" ] && printf 'env_file=%q ' "$ENV_FILE"; printf '%q ' "${argv[@]}"; printf '< %q\n' "$stdin_file"; } > "$d/cmd"
+  [ -n "$LABEL" ] && printf '%s\n' "$LABEL" > "$d/label"
   [ -n "$NOTES" ] && printf '%s\n' "$NOTES" > "$d/notes"
   : > "$d/out.jsonl"; : > "$d/log"
   now > "$d/started_at"; printf '%s\n' "$CLI" > "$d/cli"
   # runner：在 worktree 里执行 CLI，结束后写 exit_code 与 ended_at
   cat > "$d/run.sh" <<'R'
 #!/usr/bin/env bash
-d=$1; wt=$2; brief=$3; shift 3
+d=$1; wt=$2; brief=$3; envf=$4; shift 4
+# env 文件只在本进程内生效，不回显
+if [ -n "$envf" ]; then set -a; . "$envf" || { echo 126 > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"; exit 126; }; set +a; fi
 cd "$wt" || { echo 127 > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"; exit 127; }
 "$@" < "$brief" > "$d/out.jsonl" 2> "$d/log"
 ec=$?
 echo "$ec" > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"
 R
-  setsid nohup bash "$d/run.sh" "$d" "$wt" "$stdin_file" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
+  setsid nohup bash "$d/run.sh" "$d" "$wt" "$stdin_file" "$ENV_FILE" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
   echo $! > "$d/pid"
-  python3 -c 'import json,sys;print(json.dumps({"id":sys.argv[1],"branch":sys.argv[2],"worktree":sys.argv[3],"pid":int(sys.argv[4]),"notes":sys.argv[5] or None},ensure_ascii=False))' "$ID" "$br" "$wt" "$(cat "$d/pid")" "$NOTES"
+  python3 -c 'import json,sys;print(json.dumps({"id":sys.argv[1],"branch":sys.argv[2],"worktree":sys.argv[3],"pid":int(sys.argv[4]),"notes":sys.argv[5] or None,"label":sys.argv[6] or None},ensure_ascii=False))' "$ID" "$br" "$wt" "$(cat "$d/pid")" "$NOTES" "$LABEL"
 }
 
 do_stop() {
@@ -149,7 +165,7 @@ do_usage() {
     . "$BE_DIR/$cli.sh"; be_usage "$f"
   else
     echo '{"tokens":null,"cost_usd":null,"source":null}'
-  fi
+  fi | python3 -c 'import json,sys;o=json.loads(sys.stdin.read());o["label"]=sys.argv[1] or None;print(json.dumps(o,ensure_ascii=False))' "$(rd "$WDIR/$ID/label" | tr -d '\n')"
 }
 
 do_list() {

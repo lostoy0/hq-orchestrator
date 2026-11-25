@@ -51,6 +51,7 @@
 | issues | `{review,integration,user,severity_max}` | 问题数：审核发现 / 合并时发现 / 用户反馈（整数）；`severity_max` 取 `none`/`minor`/`major` | 审核、合并、用户反馈时更新 |
 | review_outcome | `pass`/`pass_with_fixes`/`rework`/`failed` | 审核结论 | 审核时 |
 | user_corrections | 整数 | 用户纠正次数 | 发生时累加 |
+| assist | 字符串或 null | 可选（v0.5.0 起）。由辅助执行者完成时写 profile 名（如 `kimi`、`codex`），主宿主自己做的写 null 或省略。辅助失败被主宿主接手时仍写原 profile，靠 `handoffs` 区分 | 任务结束时 |
 | notes | 字符串 | 备注。没有专门字段的问题原因写在这里，便于复盘检索（如 `worktree 未忽略`、`删远程分支失败`） | 任意 |
 
 示例：

@@ -15,6 +15,18 @@ autonomy: auto            # auto | confirm-plan：默认 auto；confirm-plan 表
 worker_clis: []           # 跨厂商 worker（W 通道）可用的 CLI，可选 codex、claude、opencode、gemini、cursor。默认空，即关闭；宿主自己的 CLI 不需要列
 runs_persist: off         # off | branch | commit：运行记录是否保存进仓库。branch 写进专用分支 hq/runs（推荐，云端必开）；commit 随本批改动提交；本地默认 off，云端没写时 /hq 问一次
 share_hint: pending       # pending | shown：/hq-retro 是否已提示过“可导出脱敏数据帮助改进插件”。只提示一次
+assist:                   # 辅助执行者（calibration.md 规则 10），默认关闭。/hq --assist … 可在单次运行覆盖
+  use: []                 # 按优先顺序，如 [codex, kimi]；空表示关闭
+  max_tier: T2            # 辅助最多承接到哪一档，只能是 T0、T1 或 T2
+  profiles:               # 每个辅助执行者一项；模型名填你账户里实际可用的
+    codex:
+      cli: codex          # W 通道用哪个 CLI：codex | claude | opencode | gemini | cursor
+      models: {T0: <模型>, T1: <模型>, T2: <模型>}
+      effort: {T0: low, T1: low, T2: medium}
+    kimi:
+      cli: claude         # 经 claude CLI 接 Kimi 的 Anthropic 兼容接口，见 references/hosts/kimi.md
+      env_file: ~/.hq/env/kimi.env   # 只写路径；文件里放 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN，chmod 600
+      models: {T0: <模型>, T1: <模型>, T2: <模型>}
 cost_weight:              # 按计费方的额度成本，影响 calibration.md 规则 9（拿不准时是否上调一档）。默认如下
   claude-code: high
   codex: low

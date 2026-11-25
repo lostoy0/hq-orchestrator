@@ -21,6 +21,13 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 6. **权限边界**：推送 `hq/*` 分支、合并到集成分支 `hq/integration` 默认自动。合入默认分支、开 PR 按 PLAYBOOK“授权”区（默认都要问）。删除数据或分支、部署、强制推送、对外发布、改权限或配置，没有事先授权就不做。
 7. **思考深度 `max` 只在用户明确要求时使用。**
 
+## 辅助执行者（可选，默认关闭）
+
+让主宿主（如 Claude）只做难的、重要的任务，把需求明确的中低难度任务交给更便宜的辅助模型（如 Codex、Kimi），产出一律由主宿主审核后才归并。
+- **开启**：命令参数 `/hq --assist codex,kimi [--assist-max T1] <目标>`（按顺序优先），或 PLAYBOOK 授权区的 `assist.use`；命令参数优先，只影响本次运行。`--assist off` 本次关闭。`--stay` 可以和它连用。
+- **配置**：每个辅助执行者是 PLAYBOOK `assist.profiles` 里的一项：用哪个 CLI（W 通道）、T0–T2 各用什么模型、可选 `env_file`（接口地址和密钥，权限 600；只写路径，密钥绝不写进 PLAYBOOK、台账或说明）。Kimi 的接法见 `references/hosts/kimi.md`。PLAYBOOK 里没有同名 profile 时：名字正好是 W 通道支持的 CLI（codex、claude、opencode、gemini、cursor）就直接用这个 CLI、按其宿主文档第 3 节的档位映射选模型；否则这个名字本次不可用。
+- **路由、审核、回收**：只按 `calibration.md` 规则 10 执行。第 1 步把生效的设置写进台账头部 `assist:`，例如 `assist: codex,kimi ≤T2`。
+
 ## 常驻模式（可选）
 
 默认一次 `/hq <目标>` 只管一批：跑完第 10 步就回到普通会话。常驻模式让**同一个会话**一直当总指挥：一批做完，等用户下一句话，再规划下一批。适合已经积累了大量上下文、不想换新会话的场景。
@@ -92,6 +99,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
 - **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **辅助执行者**（开启时）：逐个检查 `assist` 里的 profile 能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
 - **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
@@ -111,6 +119,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - 选档算上失败重来的成本：需求明确的选最低能胜任的档位；模糊或高风险的直接用够强的档位，争取一次做对。
 - 难度看不准（模糊度 2 分）时，先派短小的调研子会话消除不确定性，再按实际难度派实现任务。
 - 选档理由在台账备注里写一句，方便用户纠正。
+- **辅助执行者开启时**：打完分、选好档后，按 `calibration.md` 规则 10 决定这个任务给主宿主还是给辅助；给辅助的，模型取该 profile 对应档位的模型，台账“模型/深度”列写 `<profile>:<模型>`。
 - 档位表和修正规则只在 `calibration.md` 里维护，复盘只调那个文件，本文件不重复。
 
 ## 第 4 步：选运行位置
@@ -120,7 +129,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 1. **必须在本地执行**：需要用户电脑上才有的东西（仓库外的本地文件、本地数据库或服务、GUI、模拟器、USB、GPU、VPN 或内网、本机登录态、只能在 macOS/Windows 构建、未推送的本地改动）。主会话在本地用 A 或 W；在云端用 C，连不上就标 `BLOCKED`，其余照常推进。
 2. **适合远程（B）**：耗时长、能并行、仓库在 GitHub、只依赖已推送的代码。
 3. **适合进程内（A）**：小任务（约 10 分钟内）、需要和主会话紧密往返、需要当前工作区状态、没有 B。
-4. **适合 W**：宿主没有合适的子代理能力、需要真正的进程隔离，或要用跨厂商模型（需 `worker_clis` 授权）。
+4. **适合 W**：宿主没有合适的子代理能力、需要真正的进程隔离，或要用跨厂商模型（需 `worker_clis` 授权，或第 3 步按规则 10 派给了辅助执行者）。辅助任务一律走 W：`cli-worker.sh start … --cli <profile.cli> --model <模型> --label <profile> [--env-file <profile.env_file>]`。
 5. 其余：主会话在云端优先 B，在本地优先 A；都没有就 W，再没有就降级模式。
 
 ## 第 5 步：并发控制
@@ -182,7 +191,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 步骤：
 1. **看报告**：必须按模板交付，缺验证证据的视为没完成。
 2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才由主会话逐个复跑验收命令。
-3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
+3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行；辅助执行者的产出超过约 150 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
 4. **归并**：按 DAG 拓扑顺序合进 `hq/integration`，然后主会话统一跑一次全量测试（有 e2e 的也在这时跑）。小冲突自己解决，大冲突派子任务。
 5. **收尾**：通过的标 `DONE`，按宿主文档归档或停止 worker（B 归档会话，W 用 `cli-worker.sh stop`），worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
    - **远程 `hq/*` 分支**：确认已完全合入（`git merge-base --is-ancestor origin/hq/<id> <目标分支>`）后再删。有的宿主可能不允许删除远程分支（如云端会话报 `unexpected disconnect` 或 `remote end hung up`），试一次就停，不要反复重试或绕路，把没删掉的分支列进汇报，交给用户删除。
@@ -195,6 +204,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
   - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
+  - 辅助执行者：task 记录写 `assist: <profile>`（主宿主自己做的写 null），model 写成 `<profile>:<模型名>`；辅助失败被主宿主接手时，这条 task 的 `handoffs` 加 1、`tier_changes` 记一次，`assist` 仍写原来的 profile。
 - 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积。
 - **保存进仓库**（PLAYBOOK `runs_persist`）：`branch` 时整批结束后运行同目录的 `scripts/runs-persist.sh save branch`（写进专用分支 `hq/runs` 并推送，不碰工作区）；退出码 3（推不上去）就改用 `save commit`，并把 PLAYBOOK 改成 `runs_persist: commit`。`commit` 时直接 `save commit`（提交到当前分支，随本批改动一起推）。云端运行且 PLAYBOOK 没写这项时，第一次汇报里问用户一次（推荐 `branch`），答案写进 PLAYBOOK，不再问；本地没写就是 `off`。
 - **小结**：每批结束后在台账“小结”区写 3 到 5 行要点，并把本项目特有的经验更新进 `.hq/PLAYBOOK.md`（模板 `references/playbook-template.md`；最多 30 条，每条附证据，新的替换旧的）。
@@ -226,13 +236,14 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 - `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
 - `runs_persist: off | branch | commit`（本地默认 `off`，云端没写时问一次）：运行记录是否保存进仓库，见第 9 步。
+- `assist`（默认关闭）：辅助执行者的名单、最高档位和各自的 CLI、模型、`env_file`，见上文“辅助执行者”和 `calibration.md` 规则 10。`assist.use` 里的 profile 视为已授权，它用的 CLI 不必再列进 `worker_clis`。
 
 ## 台账格式（`.hq/LEDGER.md`）
 
 ```markdown
 # HQ 台账 — <目标>
 mode: single/standing | skill_path: <常驻时填> | batch: <常驻时填> | 总目标: <常驻时填>
-run_id: <run_id> | 自主级别: 自动（停止条件 1–3）| merge_default: ask | open_pr: ask | budget_usd: -
+run_id: <run_id> | 自主级别: 自动（停止条件 1–3）| merge_default: ask | open_pr: ask | budget_usd: - | assist: off
 宿主: claude-code/codex/dsh/opencode/cursor/gemini/other（降级） | 环境: 云端/本地 | 通道: A,B,C,W | 仓库: <remote> 基线 <branch>@<sha> | 预算: 远程≤4 失败≤2
 资源基线: <resources.sh 输出>
 
