@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# 假 codex：打印参数与 stdin，输出模拟 JSON 事件；FAKE_EXIT 控制退出码，FAKE_NO_USAGE=1 不输出 usage，FAKE_SLEEP 控制时长
+echo "{\"type\":\"args\",\"argv\":\"$*\"}"
+echo "{\"type\":\"stdin\",\"text\":\"$(cat | tr '\n"' '  ')\"}"
+echo '{"type":"turn.started"}'
+[ "${FAKE_NO_USAGE:-0}" = 1 ] || echo '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50}}'
+sleep "${FAKE_SLEEP:-1}"
+exit "${FAKE_EXIT:-0}"
