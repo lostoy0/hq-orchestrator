@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# 假 opencode（V2 run --format json）：两步 step_finish，各带 tokens/cost
+echo "{\"type\":\"args\",\"argv\":\"$*\"}"
+echo "{\"type\":\"stdin\",\"text\":\"$(cat | tr '\n"' '  ')\"}"
+if [ "${FAKE_NO_USAGE:-0}" != 1 ]; then
+  echo '{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","cost":0.01,"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":900,"write":30}}}}'
+  echo '{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","cost":0.02,"tokens":{"input":50,"output":10,"reasoning":0,"cache":{"read":1000,"write":0}}}}'
+fi
+sleep "${FAKE_SLEEP:-1}"
+exit "${FAKE_EXIT:-0}"

@@ -18,6 +18,18 @@
 
 ---
 
+## v0.4.2（2026-11-25）
+
+### W 通道后端化，新增 opencode、gemini、cursor
+- **改动**：`skills/hq/scripts/cli-worker.sh` 拆成公共框架 + `scripts/backends/<cli>.sh`（`be_argv` 拼命令、`be_usage` 解析用量，接口见 `backends/README.md`）；codex、claude 行为不变。新增三个后端：opencode（`opencode run --model p/m#variant --format json`，简报走 stdin，`--effort` 追加为 variant，用量为 `step_finish` 的 input+output+reasoning+cache.write 逐步相加、cost 相加）、gemini（`gemini -m … --output-format stream-json --approval-mode … -p …`，简报走 stdin，用量取 `result.stats` 的 input_tokens−cached+output_tokens，不支持思考深度）、cursor（`cursor-agent -p --output-format stream-json --model … [--force] "<简报>"`，用量字段待核实）。后端可在建 worktree 前拒绝组合；映射有出入时写 `.hq/workers/<id>/notes` 并在 `start` 输出里返回。`--allow-dangerous` 闸门对所有 CLI 统一生效。`runtimes.md` W 节加各 CLI 映射表；`worker_clis` 可选值扩为五个，宿主自己的 CLI 不需授权；`generic.md` 让 Cursor、Gemini CLI 宿主经 W 用自己的 CLI 让档位生效；`opencode.md` 加 W 用法。假 CLI 加 opencode、gemini、cursor-agent；`tests/test_cli_worker.sh` 增至 53 项。
+- **原因/假设**：Cursor、Gemini CLI 的原生子代理还不能按任务选模型，用它们自己的无界面命令做 worker 就能让档位生效；后端文件化后新增 CLI 只加一个文件。
+- **依据**：opencode 来自 GitHub sst/opencode（2026-11-25）的 `run` 帮助夹具和 `run.rs`/`prompt.rs`；gemini 来自 google-gemini/gemini-cli 的 `docs/cli/headless.md`、`cli-reference.md` 和 `packages/core/src/output/types.ts`（2026-11-24）；cursor 来自官方参数页的检索摘要。**三者都未实机运行。**
+- **验收指标**：`tests/test_cli_worker.sh` 全部通过；3c 按宿主/通道 → W 通道下 opencode/gemini/cursor 各组有 ≥3 个任务时一次通过率 ≥ 70%，`usage` 的 tokens 非 null 占比 ≥ 80%（cursor 除外，字段待核实）；问题数里“W worker 越界改主工作区” = 0。
+- **状态**：待验证
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.4.1（2026-11-25）
 
 本版本把 OpenCode（V2）升级为原生宿主，并让子代理档位模板由一份档位表生成。OpenCode 部分**只读过官方文档源码（GitHub sst/opencode，2026-11-25），没有实机运行**。

@@ -12,7 +12,7 @@ merge_default: ask        # ask | auto-if-gates-pass：合入默认分支。默�
 open_pr: ask              # ask | auto：开 PR。默认 ask
 budget_usd: <数额>        # 本项目单次运行的预算上限（美元）。超出前必须停下来问用户
 autonomy: auto            # auto | confirm-plan：默认 auto；confirm-plan 表示派发前计划必须经用户确认
-worker_clis: []           # 跨厂商 worker（W 通道）可用的 CLI，如 [codex, claude]。默认空，即关闭
+worker_clis: []           # 跨厂商 worker（W 通道）可用的 CLI，可选 codex、claude、opencode、gemini、cursor。默认空，即关闭；宿主自己的 CLI 不需要列
 cost_weight:              # 按计费方的额度成本，影响 calibration.md 规则 9（拿不准时是否上调一档）。默认如下
   claude-code: high
   codex: low

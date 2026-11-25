@@ -11,7 +11,7 @@
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | `subagent` 工具：agent 填 `hq-t0`…`hq-t4`（按档位），`description` 写任务标题，`prompt` 写完整任务说明。调用立即返回 `sessionID`，子代理在后台运行。只有 `mode: subagent` 的 agent 能被派发；默认嵌套深度 1（子代理不能再派子代理，正合 hq）。**首次运行先确认 `hq-t*` 存在**（见第 4 节），不存在时用内置 `general`（档位不生效，notes 记 `tier:not-applied`） | 子代理不可用：W 通道或降级模式（见 `generic.md`） |
+| spawn_worker | `subagent` 工具：agent 填 `hq-t0`…`hq-t4`（按档位），`description` 写任务标题，`prompt` 写完整任务说明。调用立即返回 `sessionID`，子代理在后台运行。只有 `mode: subagent` 的 agent 能被派发；默认嵌套深度 1（子代理不能再派子代理，正合 hq）。**首次运行先确认 `hq-t*` 存在**（见第 4 节），不存在时用内置 `general`（档位不生效，notes 记 `tier:not-applied`） | 子代理不可用：W 通道（`cli-worker.sh start --cli opencode ...`）或降级模式（见 `generic.md`） |
 | monitor | 子代理空闲时父会话会收到 `<subagent>` 消息，之后每轮工作结束再收到一次；**不要轮询**。需要总览时用 shell：`opencode session list --format json` | 等通知 |
 | message_worker | 再次调用 `subagent`，带上返回的 `sessionID`，就是给同一个子会话发后续消息；子代理还在运行时，消息并入它当前这一轮。用于回答 CHECKPOINT、纠偏 | — |
 | stop_worker | 待核实：文档没有写中止单个子代理的工具。`opencode session delete <id>` 会删除会话及其子会话，是否能中止运行中的子代理未写明，**不要默认使用**（不可逆） | 不再给它发消息，等它结束后不合并其结果；需要时请用户在界面里停止 |
@@ -54,7 +54,7 @@
   2. 确认各档的 `model` 和 variant 能解析（每档派一个只回复 OK 的小任务）；
   3. 把映射写进 `.hq/PLAYBOOK.md`。
 - 权限：模板没有写 `permissions`，子代理沿用全局权限。全局把 `edit`、`shell` 设为 `ask` 时，后台子代理的审批会打断用户；需要无人值守时在 OpenCode 配置里为 `hq-t*` 单独放行（由用户决定，安装脚本不改配置）。
-- **W 通道**：`cli-worker.sh` 暂未接入 `opencode run`（计划 v0.4.2：`opencode run --model <p/m#variant> --format json --dir <worktree> "<说明>"`，参数来自 V2 文档，待实测）。
+- **W 通道**（v0.4.2）：`cli-worker.sh start --cli opencode --model <provider/model> [--effort <variant>] --brief <文件>`，实际运行 `opencode run --model <p/m#variant> --format json --title hq/<id> [--auto|--agent plan]`，简报走 stdin，用量从 `step_finish` 事件逐步相加。需要真正的进程和目录隔离时用它代替子代理（各自在 `.hq/worktrees/<id>` 里运行）。注意 `--auto` 会批准全部未拒绝的权限，比 codex 的 workspace-write 宽。参数依据 V2 源码和帮助，未实机运行。
 
 ## 5. 已知限制与待核实项
 

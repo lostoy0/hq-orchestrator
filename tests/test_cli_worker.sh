@@ -70,6 +70,44 @@ s=$(wait_state da2 done); grep -q -- '-s danger-full-access' .hq/workers/da2/out
 n=$(W list | wc -l); [ "$n" -ge 4 ] && ok "list shows workers" || bad "list" "$n"
 [ "$(jget "$(W status --id nope)" state)" = unknown ] && ok "status unknown for missing id" || bad "status unknown" ""
 
+# 8 v0.4.2 新后端：opencode / gemini / cursor
+W start --id o1 --cli opencode --model prov/mod --effort medium --brief "$T/brief.md" >"$T/o1.out" 2>&1
+s=$(wait_state o1 done); [ "$s" = done ] && ok "opencode worker done" || bad "opencode done" "$s"
+grep -q -- 'run --model prov/mod#medium --format json --title hq/o1 --auto' .hq/workers/o1/out.jsonl && grep -q 'do the task' .hq/workers/o1/out.jsonl && ok "opencode args (#effort, --auto) and stdin brief" || bad "opencode args" "$(head -1 .hq/workers/o1/out.jsonl)"
+grep -q '"notes"' "$T/o1.out" && grep -q 'auto' .hq/workers/o1/notes && ok "opencode workspace-write writes notes" || bad "opencode notes" "$(cat "$T/o1.out")"
+# (100+20+5+30)+(50+10+0+0)=215，cache.read 不计；cost 0.03
+u=$(W usage --id o1); [ "$(jget "$u" tokens)" = 215 ] && [ "$(jget "$u" cost_usd)" = 0.03 ] && ok "usage opencode summed over steps" || bad "usage opencode" "$u"
+W start --id o2 --cli opencode --model p/m#max --effort low --sandbox read-only --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state o2 done); grep -q -- '--model p/m#max ' .hq/workers/o2/out.jsonl && grep -q -- '--agent plan' .hq/workers/o2/out.jsonl && ! grep -q -- '--auto' .hq/workers/o2/out.jsonl && ok "opencode read-only -> --agent plan, explicit variant kept" || bad "opencode ro" "$(head -1 .hq/workers/o2/out.jsonl)"
+
+W start --id g1 --cli gemini --model gm --effort high --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state g1 done); [ "$s" = done ] && ok "gemini worker done" || bad "gemini done" "$s"
+grep -q -- '-m gm --output-format stream-json --approval-mode auto_edit -p' .hq/workers/g1/out.jsonl && grep -q 'do the task' .hq/workers/g1/out.jsonl && ok "gemini args and stdin brief" || bad "gemini args" "$(head -1 .hq/workers/g1/out.jsonl)"
+grep -q '忽略 --effort high' .hq/workers/g1/notes && ok "gemini notes effort ignored" || bad "gemini notes" "$(cat .hq/workers/g1/notes 2>&1)"
+# (1200-800)+100=500
+u=$(W usage --id g1); [ "$(jget "$u" tokens)" = 500 ] && [ "$(jget "$u" cost_usd)" = null ] && ok "usage gemini (cached excluded)" || bad "usage gemini" "$u"
+W start --id g2 --cli gemini --model gm --sandbox read-only --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state g2 done); grep -q -- '--approval-mode plan' .hq/workers/g2/out.jsonl && ok "gemini read-only -> plan" || bad "gemini ro" "$s"
+
+W start --id u1 --cli cursor --model cm --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state u1 done); [ "$s" = done ] && ok "cursor worker done" || bad "cursor done" "$s"
+grep -q -- '-p --output-format stream-json --model cm --force' .hq/workers/u1/out.jsonl && grep -q '"prompt","text":"do the task' .hq/workers/u1/out.jsonl && grep -q '"stdin","text":""' .hq/workers/u1/out.jsonl && ok "cursor args, brief as positional prompt, no stdin" || bad "cursor args" "$(head -3 .hq/workers/u1/out.jsonl)"
+u=$(W usage --id u1); [ "$(jget "$u" tokens)" = 350 ] && ok "usage cursor (cache read excluded)" || bad "usage cursor" "$u"
+W start --id u2 --cli cursor --model cm --sandbox read-only --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state u2 done); ! grep -q -- '--force' .hq/workers/u2/out.jsonl && ok "cursor read-only -> no --force" || bad "cursor ro" "$s"
+
+for c in opencode gemini cursor; do
+  W start --id dd-$c --cli $c --model m/m --brief "$T/brief.md" --sandbox danger-full-access >/dev/null 2>&1; rc=$?
+  [ $rc -eq 2 ] && [ ! -e .hq/worktrees/dd-$c ] && ok "$c danger without --allow-dangerous -> exit 2" || bad "$c danger gate" "rc=$rc"
+done
+W start --id dg --cli gemini --model m --brief "$T/brief.md" --sandbox danger-full-access --allow-dangerous >/dev/null 2>&1
+s=$(wait_state dg done); grep -q -- '--approval-mode yolo' .hq/workers/dg/out.jsonl && ok "gemini danger -> yolo with --allow-dangerous" || bad "gemini danger" "$s"
+FAKE_NO_USAGE=1 W start --id on --cli opencode --model p/m --brief "$T/brief.md" >/dev/null 2>&1
+s=$(wait_state on done); u=$(W usage --id on); [ "$(jget "$u" tokens)" = null ] && ok "usage opencode null without step_finish" || bad "usage opencode null" "$u"
+# 后端目录里每个 CLI 都有假 CLI（测试覆盖约定）
+miss=""; for f in "$HERE"/skills/hq/scripts/backends/*.sh; do c=$(basename "$f" .sh); b=$c; [ $c = cursor ] && b=cursor-agent; [ -x "$HERE/tests/fixtures/fake-cli/$b" ] || miss="$miss $c"; done
+[ -z "$miss" ] && ok "every backend has a fake CLI" || bad "fake CLI missing" "$miss"
+
 # 7 非法参数 → 2
 chk() { local name=$1; shift; W "$@" >/dev/null 2>&1; local rc=$?; [ $rc -eq 2 ] && ok "invalid args exit 2: $name" || bad "invalid args exit 2: $name" "rc=$rc"; }
 chk "no command"

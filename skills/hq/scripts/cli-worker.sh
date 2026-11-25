@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# HQ W 通道：在独立 git worktree 里后台启动 codex exec / claude -p 作为 worker 进程。
+# HQ W 通道：在独立 git worktree 里后台启动 CLI worker 进程（codex exec / claude -p / opencode run / gemini / cursor-agent）。
+# 每个 CLI 的参数拼装和用量解析在 backends/<cli>.sh（接口见 backends/README.md）。
 # 用法:
-#   cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>]
+#   cli-worker.sh start --id <id> --cli <cli> --model <m> [--effort <e>] --brief <文件> [--base <分支>]
 #                       [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
 #   默认 sandbox 为 workspace-write。danger-full-access 必须同时加 --allow-dangerous，否则报错退出（码 2）。
 #   cli-worker.sh status|stop|usage --id <id>
 #   cli-worker.sh list
-# 状态目录 .hq/workers/<id>/: out.jsonl log cmd pid exit_code started_at ended_at meta
+# 状态目录 .hq/workers/<id>/: out.jsonl log cmd pid exit_code started_at ended_at cli notes
 # worktree: .hq/worktrees/<id>，分支 hq/<id>。只依赖 bash、coreutils、git、python3。
 set -u
+BE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backends"
+CLIS=""
+for f in "$BE_DIR"/*.sh; do [ -e "$f" ] && CLIS="$CLIS${CLIS:+|}$(basename "$f" .sh)"; done
 
 usage() {
-  cat >&2 <<'U'
+  cat >&2 <<U
 用法:
-  cli-worker.sh start --id <id> --cli codex|claude --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
+  cli-worker.sh start --id <id> --cli <$CLIS> --model <m> [--effort <e>] --brief <文件> [--base <分支>] [--sandbox read-only|workspace-write|danger-full-access] [--allow-dangerous]
   （danger-full-access 必须同时加 --allow-dangerous）
   cli-worker.sh status --id <id>
   cli-worker.sh stop --id <id>
@@ -73,9 +77,9 @@ PY
 do_start() {
   need_id
   [ -n "$CLI" ] && [ -n "$MODEL" ] && [ -n "$BRIEF" ] || usage
-  case $CLI in codex|claude) ;; *) usage;; esac
+  case "|$CLIS|" in *"|$CLI|"*) ;; *) usage;; esac
   case $SANDBOX in read-only|workspace-write|danger-full-access) ;; *) usage;; esac
-  # 高风险：codex 的 danger-full-access 与 claude 的 --dangerously-skip-permissions 都关闭全部防护，
+  # 高风险：各 CLI 的 danger-full-access 映射（codex 原样、claude --dangerously-skip-permissions、opencode/cursor 的全自动批准、gemini yolo）都关闭全部防护，
   # 只能由调用方显式确认，不能靠默认值或单个参数开启
   if [ "$SANDBOX" = danger-full-access ] && [ "$ALLOW_DANGER" != 1 ]; then
     echo "cli-worker: --sandbox danger-full-access 需要同时传 --allow-dangerous（会关闭全部沙箱/权限防护）" >&2; exit 2
@@ -83,6 +87,12 @@ do_start() {
   [ -r "$BRIEF" ] || { echo "cli-worker: brief 文件不可读: $BRIEF" >&2; exit 2; }
   BRIEF=$(cd "$(dirname "$BRIEF")" && pwd)/$(basename "$BRIEF")
   [ -n "$BASE" ] || BASE=HEAD
+  # 先拼好命令（后端可能拒绝某些组合），再建 worktree，避免失败时留下分支
+  local -a argv; STDIN_SRC=brief; NOTES=""
+  # shellcheck source=/dev/null
+  . "$BE_DIR/$CLI.sh"
+  be_argv || { echo "cli-worker: $CLI 不支持 --sandbox $SANDBOX 的组合${NOTES:+：$NOTES}" >&2; exit 2; }
+  local stdin_file=$BRIEF; [ "$STDIN_SRC" = null ] && stdin_file=/dev/null
   local br="hq/$ID" wt="$ROOT/.hq/worktrees/$ID" d="$WDIR/$ID"
   git -C "$ROOT" show-ref --verify --quiet "refs/heads/$br" && die "分支 $br 已存在"
   [ -e "$wt" ] && die "worktree 已存在: $wt"
@@ -96,22 +106,8 @@ do_start() {
   git -C "$ROOT" worktree add -q -b "$br" "$wt" "$BASE" || die "创建 worktree 失败"
   mkdir -p "$d"
 
-  local -a argv; local note=""
-  if [ "$CLI" = codex ]; then
-    # 简报经 stdin 传入（codex exec 的 PROMPT 为 "-" 时读 stdin），避免超长命令行
-    argv=(codex exec -m "$MODEL")
-    [ -n "$EFFORT" ] && argv+=(-c "model_reasoning_effort=$EFFORT")
-    argv+=(-s "$SANDBOX" --json -)
-  else
-    argv=(claude -p --model "$MODEL" --output-format stream-json --verbose)
-    if [ -n "$EFFORT" ]; then argv+=(--effort "$EFFORT"); fi
-    case $SANDBOX in
-      workspace-write) argv+=(--permission-mode acceptEdits);;
-      read-only) argv+=(--permission-mode plan);;
-      danger-full-access) argv+=(--dangerously-skip-permissions);;
-    esac
-  fi
-  { printf '%q ' "${argv[@]}"; printf '< %q\n' "$BRIEF"; } > "$d/cmd"
+  { printf '%q ' "${argv[@]}"; printf '< %q\n' "$stdin_file"; } > "$d/cmd"
+  [ -n "$NOTES" ] && printf '%s\n' "$NOTES" > "$d/notes"
   : > "$d/out.jsonl"; : > "$d/log"
   now > "$d/started_at"; printf '%s\n' "$CLI" > "$d/cli"
   # runner：在 worktree 里执行 CLI，结束后写 exit_code 与 ended_at
@@ -123,9 +119,9 @@ cd "$wt" || { echo 127 > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended
 ec=$?
 echo "$ec" > "$d/exit_code"; date -u +%Y-%m-%dT%H:%M:%SZ > "$d/ended_at"
 R
-  setsid nohup bash "$d/run.sh" "$d" "$wt" "$BRIEF" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
+  setsid nohup bash "$d/run.sh" "$d" "$wt" "$stdin_file" "${argv[@]}" > /dev/null 2>&1 < /dev/null &
   echo $! > "$d/pid"
-  echo "{\"id\":\"$ID\",\"branch\":\"$br\",\"worktree\":\"$wt\",\"pid\":$(cat "$d/pid")}"
+  python3 -c 'import json,sys;print(json.dumps({"id":sys.argv[1],"branch":sys.argv[2],"worktree":sys.argv[3],"pid":int(sys.argv[4]),"notes":sys.argv[5] or None},ensure_ascii=False))' "$ID" "$br" "$wt" "$(cat "$d/pid")" "$NOTES"
 }
 
 do_stop() {
@@ -147,36 +143,13 @@ do_usage() {
   need_id
   local f="$WDIR/$ID/out.jsonl"
   [ -f "$f" ] || die "worker 不存在: $ID"
-  python3 - "$f" "$(rd "$WDIR/$ID/cli")" <<'PY'
-import sys,json
-f,cli=sys.argv[1:3]
-def n(x): return x if isinstance(x,(int,float)) and not isinstance(x,bool) else None
-tokens=None; cost=None; source=None
-for line in open(f,encoding="utf-8",errors="replace"):
-    try: o=json.loads(line)
-    except Exception: continue
-    if not isinstance(o,dict): continue
-    if cli=="claude" and o.get("type")=="result":
-        u=o.get("usage") if isinstance(o.get("usage"),dict) else {}
-        c=n(o.get("total_cost_usd"))
-        if c is not None: cost=c; source="claude:result.total_cost_usd"
-        parts=[n(u.get("input_tokens")),n(u.get("output_tokens")),n(u.get("cache_creation_input_tokens"))]
-        if any(p is not None for p in parts):
-            tokens=int(sum(p for p in parts if p is not None)); source=source or "claude:result.usage"
-    elif cli=="codex":
-        u=o.get("usage")
-        if not isinstance(u,dict) and isinstance(o.get("msg"),dict): u=o["msg"].get("usage") or o["msg"].get("info")
-        if isinstance(u,dict):
-            # codex turn.completed.usage：input_tokens 已含 cached_input_tokens（cache_read），按口径扣除；
-            # output_tokens 已含 reasoning_output_tokens，不再相加；无 cache_write 概念。
-            # usage 是整个线程的累计值：单次 exec 取最后一条即可；恢复会话（exec resume）时需与上次的值做差。
-            i=n(u.get("input_tokens")); out=n(u.get("output_tokens")); cr=n(u.get("cached_input_tokens")) or 0
-            if i is not None or out is not None:
-                tokens=int(max((i or 0)-cr,0)+(out or 0)); source="codex:usage"
-            c=n(u.get("cost_usd"))
-            if c is not None: cost=c
-print(json.dumps({"tokens":tokens,"cost_usd":cost,"source":source}))
-PY
+  local cli; cli=$(rd "$WDIR/$ID/cli")
+  if [ -n "$cli" ] && [ -f "$BE_DIR/$cli.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$BE_DIR/$cli.sh"; be_usage "$f"
+  else
+    echo '{"tokens":null,"cost_usd":null,"source":null}'
+  fi
 }
 
 do_list() {

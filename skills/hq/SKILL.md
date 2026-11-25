@@ -45,7 +45,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
   - **B 云端子会话**：remote_workers，通常只在云端会话里有。
   - **C 用户电脑**：local_machine，云端会话连上用户电脑后在那里执行。
   - **D 从本地 CLI 发起云端任务**：先确认 CLI 支持再用，监控能力弱。
-  - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
+  - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 codex、claude、opencode、gemini 或 cursor 的命令行，任何有 shell 的宿主都能用（各 CLI 的沙箱映射见 `references/runtimes.md` W 节）。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
 - **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
@@ -179,7 +179,7 @@ description: 司令部模式（HQ）。把当前会话变成总指挥：先判�
 - `open_pr: auto | ask`（默认 `ask`）。
 - `budget_usd: <数额>`：单次运行的花费上限，超出前按停止条件 2 处理。
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
-- `worker_clis: [codex, claude]`（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker。
+- `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
 
 ## 台账格式（`.hq/LEDGER.md`）
 

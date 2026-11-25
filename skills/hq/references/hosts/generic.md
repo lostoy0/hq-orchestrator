@@ -17,7 +17,7 @@
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | 有 shell 且 PLAYBOOK `worker_clis` 允许时，用 W 通道：`cli-worker.sh start --cli codex|claude ...`（需要本机装了对应 CLI） | 降级模式：主会话按同样的计划**串行**亲自执行，channel 记 `main` |
+| spawn_worker | 有 shell 时用 W 通道。**优先用宿主自己的 CLI**（不需要 `worker_clis` 授权）：Gemini CLI 宿主用 `cli-worker.sh start --cli gemini --model <m> ...`，Cursor 宿主用 `--cli cursor`；能按任务指定模型，档位因此生效。其他 CLI（codex、claude、opencode）属跨厂商，需 `worker_clis` 授权 | 降级模式：主会话按同样的计划**串行**亲自执行，channel 记 `main` |
 | monitor | W：`cli-worker.sh status --id <id>` / `list` | 降级模式下不需要 |
 | message_worker | 不支持 | W 任务 `stop` 后带补充信息重新 `start` |
 | stop_worker | W：`cli-worker.sh stop --id <id>` | — |
@@ -29,6 +29,7 @@
 
 ## 3. 档位映射
 
+- 用 W 通道跑宿主自己的 CLI 时，档位按 `--model` 生效（Gemini、Cursor 命令行不支持思考深度，只能靠模型区分档位）；task 的 `channel` 记 `W`，`model` 记 `<cli>:<模型名>`。
 - 降级模式下档位**不改变模型**：主会话用的就是当前模型，task 的 `tier` 照常按 `calibration.md` 打分记录（复盘用来对照难度和返工），`model` 记当前模型名（不知道就记 `unknown`），notes 写 `tier:not-applied`。
 - W 通道的任务按目标 CLI 的映射选模型：`claude` 见 `hosts/claude-code.md` 第 3 节，`codex` 见 `hosts/codex.md` 第 3 节；model 记成 `<cli>:<模型名>`。
 - 成本系数（`calibration.md` 规则 9）：按实际计费方在 PLAYBOOK 写 `cost_weight`；没写时按 `high` 处理（不上调）。

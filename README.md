@@ -23,7 +23,7 @@
 
 ## 包含什么
 ```
-.claude-plugin/plugin.json             plugin 清单（v0.4.1）
+.claude-plugin/plugin.json             plugin 清单（v0.4.2）
 .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
 skills/hq/SKILL.md                     核心流程：要不要编排 → 侦察 → 规划 → 选档 → 选位置 → 控并发 → 派发 → 监控与调档 → 审核归并 → 记录数据 → 汇报
 skills/hq/calibration.md               选档校准表：5 维打分、T0–T4 档位、修正规则（复盘只调这个文件）
@@ -34,7 +34,8 @@ skills/hq/references/metrics-schema.md 运行数据格式（JSONL，v1）和用�
 skills/hq/references/playbook-template.md 项目经验手册 .hq/PLAYBOOK.md 的模板（含授权配置）
 skills/hq/scripts/resources.sh         资源探测（Linux/cgroup/macOS），输出还能新开几个本地任务
 skills/hq/scripts/metrics.py           把运行数据汇总成指标报告（只读）
-skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后台运行 codex exec / claude -p
+skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后台运行 codex / claude / opencode / gemini / cursor 的命令行
+skills/hq/scripts/backends/*.sh        W 通道各 CLI 的参数拼装和用量解析（新增 CLI 加一个文件）
 skills/hq-retro/SKILL.md               /hq-retro 复盘：验证上次改动、出有证据的建议、生成改插件的提示词
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词
@@ -54,9 +55,9 @@ tests/                                 resources.sh、cli-worker.sh、install.sh
 
 **方式 0：一行安装（推荐，所有宿主通用）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.1/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.2/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.4.1` 标签下载到 `~/.hq-orchestrator/v0.4.1`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
+不在仓库里运行时，脚本先用 git 把 `v0.4.2` 标签下载到 `~/.hq-orchestrator/v0.4.2`，再执行安装（`HQ_REF=<标签或分支>` 可换版本）。想先看再跑：下载 `install.sh` 后用 `--list` 或 `--dry-run`。已 clone 本仓库的直接运行 `./install.sh`：
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <路径>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -111,15 +112,16 @@ mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-ret
 
 ## W 通道与跨厂商 worker（默认关闭）
 
-`skills/hq/scripts/cli-worker.sh` 在独立 git worktree（`.hq/worktrees/<id>`，分支 `hq/<id>`）里后台运行 `codex exec` 或 `claude -p`，任何有 shell 的宿主都能用：
+`skills/hq/scripts/cli-worker.sh` 在独立 git worktree（`.hq/worktrees/<id>`，分支 `hq/<id>`）里后台运行一个 CLI worker，任何有 shell 的宿主都能用：
 ```bash
-cli-worker.sh start --id t2 --cli codex|claude --model <m> [--effort <e>] --brief <说明文件> [--sandbox read-only|workspace-write]
+cli-worker.sh start --id t2 --cli codex|claude|opencode|gemini|cursor --model <m> [--effort <e>] --brief <说明文件> [--sandbox read-only|workspace-write]
 cli-worker.sh status|stop|usage --id t2      # 输出 JSON
 cli-worker.sh list
 ```
-- sandbox 默认 `workspace-write`。`danger-full-access`（claude 对应 `--dangerously-skip-permissions`）会关闭全部防护，**必须同时传 `--allow-dangerous`**，否则拒绝并以退出码 2 退出。
+- 各 CLI 的命令和沙箱映射见 `skills/hq/references/runtimes.md` 的 W 节。opencode、gemini、cursor 三个后端（v0.4.2）只按文档和源码写成、用假 CLI 测过，**未实机运行**；opencode 和 cursor 没有“只限工作区”的沙箱，`workspace-write` 也会放开 shell。
+- sandbox 默认 `workspace-write`。`danger-full-access` 会关闭全部防护，**必须同时传 `--allow-dangerous`**，否则拒绝并以退出码 2 退出。
 - `usage` 按统一口径算 tokens（input + output + cache_write，不含 cache_read）。
-- 用和宿主不同厂商的 CLI 做 worker（跨厂商），需要在 `.hq/PLAYBOOK.md` 授权区写 `worker_clis: [codex, claude]`；**默认为空，即关闭**。
+- 用和宿主不同厂商的 CLI 做 worker（跨厂商），需要在 `.hq/PLAYBOOK.md` 授权区写 `worker_clis`（如 `[codex, claude]`）；**默认为空，即关闭**。宿主自己的 CLI（如 Gemini CLI 宿主用 `--cli gemini`）不需要授权，这也是 Cursor、Gemini CLI 宿主让档位生效的方式。
 
 ## 使用示例
 ```
@@ -142,7 +144,7 @@ merge_default: ask        # ask | auto-if-gates-pass：质量门槛都通过时�
 open_pr: ask              # ask | auto
 budget_usd: 20            # 单次运行的花费上限，超出前停下来问
 autonomy: auto            # auto | confirm-plan：confirm-plan 时计划要等你确认再派发
-worker_clis: []           # 跨厂商 worker，如 [codex, claude]；默认空即关闭
+worker_clis: []           # 跨厂商 worker，可选 codex/claude/opencode/gemini/cursor；默认空即关闭
 ```
 
 ## 进化闭环：记录 → 复盘 → 改插件
@@ -165,7 +167,7 @@ worker_clis: []           # 跨厂商 worker，如 [codex, claude]；默认空�
 for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh; do echo "$t: $(bash $t | tail -1)"; done
 python3 -m unittest discover tests
 ```
-`test_cli_worker.sh` 用 `tests/fixtures/fake-cli/` 下的假 `codex`、`claude` 测参数拼接和用量解析，不调用真实 CLI。
+`test_cli_worker.sh` 用 `tests/fixtures/fake-cli/` 下的假 `codex`、`claude`、`opencode`、`gemini`、`cursor-agent` 测参数拼接和用量解析，不调用真实 CLI。
 `resources.sh` 支持 `HQ_FAKE_CORES`、`HQ_FAKE_LOAD1`、`HQ_FAKE_MEM_TOTAL_MB` 等环境变量注入模拟读数，用来覆盖 GREEN/YELLOW/RED 各种情况。
 
 ## 待核实项与本机验证清单
@@ -178,6 +180,7 @@ python3 -m unittest discover tests
 - DeepSeek（路径二、三）：`CLAUDE_CODE_EFFORT_LEVEL=max` 是否覆盖 hq 按档位设的 effort；`ANTHROPIC_DEFAULT_OPUS_MODEL` 能否设为 `deepseek-v4-pro`；`deepseek-flash` 与 `deepseek-v4-flash` 是否等价。
 - Claude Code：本地 CLI 发起云端任务（通道 D）的参数。
 - OpenCode（v0.4.1 原生宿主）：`hq-t*` 子代理能否被识别、各档 `model#variant` 能否解析；中止子代理的方式；`opencode session export` 里的 token/成本字段；多个后台子代理同时运行时的权限审批。
+- W 通道新后端（v0.4.2）：`opencode run`、`gemini -p`、`cursor-agent -p` 在本机各跑一次 `start/status/usage/stop`，核对参数是否被接受、`usage` 是否有 tokens（cursor 的用量字段名未知）；gemini `auto_edit` 下能否跑 shell 命令。
 - Cursor、Gemini CLI（v0.4 基础支持）：`--host auto` 装好后各工具能否发现并触发 hq 技能；Cursor 是否也读 `~/.agents/skills`；`npx skills add` 是否带上 `scripts/` 和 `references/`。
 
 **装好 codex 后运行，核对参数**：

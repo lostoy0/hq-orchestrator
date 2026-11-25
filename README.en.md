@@ -23,7 +23,7 @@ Brings a Projects-like way of working to regular sessions (Claude Code or Codex,
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.4.1)
+.claude-plugin/plugin.json             plugin manifest (v0.4.2)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -34,7 +34,8 @@ skills/hq/references/metrics-schema.md run-data format (JSONL, v1) and usage def
 skills/hq/references/playbook-template.md template for the project playbook .hq/PLAYBOOK.md (including authorization settings)
 skills/hq/scripts/resources.sh         resource probing (Linux/cgroup/macOS); outputs how many more local tasks can be started
 skills/hq/scripts/metrics.py           summarizes run data into a metrics report (read-only)
-skills/hq/scripts/cli-worker.sh        W channel: runs codex exec / claude -p in the background in a separate git worktree
+skills/hq/scripts/cli-worker.sh        W channel: runs the codex / claude / opencode / gemini / cursor CLI in the background in a separate git worktree
+skills/hq/scripts/backends/*.sh        W channel per-CLI argument building and usage parsing (one file per CLI)
 skills/hq-retro/SKILL.md               /hq-retro: checks earlier changes, makes evidence-backed suggestions, generates a prompt for changing the plugin
 CHANGELOG.md                           reason, acceptance metric and verification status of every change
 PROMPT.md                              condensed prompt to paste directly when the plugin is not installed
@@ -54,9 +55,9 @@ tests/                                 self-tests for resources.sh, cli-worker.s
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.1/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.4.2/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.4.1` tag to `~/.hq-orchestrator/v0.4.1`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.4.2` tag to `~/.hq-orchestrator/v0.4.2`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -111,15 +112,16 @@ After committing, cloud sessions started from this repository can use `/hq` and 
 
 ## W channel and cross-vendor workers (off by default)
 
-`skills/hq/scripts/cli-worker.sh` runs `codex exec` or `claude -p` in the background in a separate git worktree (`.hq/worktrees/<id>`, branch `hq/<id>`); any host with a shell can use it:
+`skills/hq/scripts/cli-worker.sh` runs a CLI worker in the background in a separate git worktree (`.hq/worktrees/<id>`, branch `hq/<id>`); any host with a shell can use it:
 ```bash
-cli-worker.sh start --id t2 --cli codex|claude --model <m> [--effort <e>] --brief <brief file> [--sandbox read-only|workspace-write]
+cli-worker.sh start --id t2 --cli codex|claude|opencode|gemini|cursor --model <m> [--effort <e>] --brief <brief file> [--sandbox read-only|workspace-write]
 cli-worker.sh status|stop|usage --id t2      # JSON output
 cli-worker.sh list
 ```
-- The sandbox defaults to `workspace-write`. `danger-full-access` (for claude: `--dangerously-skip-permissions`) disables all protection and **requires `--allow-dangerous` as well**; otherwise it is refused with exit code 2.
+- Each CLI's command and sandbox mapping is in the W section of `skills/hq/references/runtimes.md`. The opencode, gemini and cursor backends (v0.4.2) are written from docs and source and tested only with fake CLIs, **not run on a real machine**; opencode and cursor have no workspace-only sandbox, so `workspace-write` also allows shell.
+- The sandbox defaults to `workspace-write`. `danger-full-access` disables all protection and **requires `--allow-dangerous` as well**; otherwise it is refused with exit code 2.
 - `usage` computes tokens with the common definition (input + output + cache_write, excluding cache_read).
-- Using a CLI from a different vendor than the host as a worker (cross-vendor) requires `worker_clis: [codex, claude]` in the Authorization section of `.hq/PLAYBOOK.md`; **it is empty by default, i.e. off**.
+- Using a CLI from a different vendor than the host as a worker (cross-vendor) requires `worker_clis` (e.g. `[codex, claude]`) in the Authorization section of `.hq/PLAYBOOK.md`; **it is empty by default, i.e. off**. The host's own CLI (e.g. `--cli gemini` on a Gemini CLI host) needs no authorization, and is how Cursor and Gemini CLI hosts get tiers to apply.
 
 ## Usage example
 ```
@@ -142,7 +144,7 @@ merge_default: ask        # ask | auto-if-gates-pass: auto-merge into the defaul
 open_pr: ask              # ask | auto
 budget_usd: 20            # spending cap per run; stops to ask before exceeding it
 autonomy: auto            # auto | confirm-plan: with confirm-plan, the plan waits for your confirmation before dispatch
-worker_clis: []           # cross-vendor workers, e.g. [codex, claude]; empty (off) by default
+worker_clis: []           # cross-vendor workers: any of codex/claude/opencode/gemini/cursor; empty (off) by default
 ```
 
 ## Improvement loop: record → retro → change the plugin
@@ -165,7 +167,7 @@ worker_clis: []           # cross-vendor workers, e.g. [codex, claude]; empty (o
 for t in tests/test_resources.sh tests/test_cli_worker.sh tests/test_install.sh; do echo "$t: $(bash $t | tail -1)"; done
 python3 -m unittest discover tests
 ```
-`test_cli_worker.sh` uses the fake `codex` and `claude` under `tests/fixtures/fake-cli/` to test argument assembly and usage parsing; it never calls the real CLIs.
+`test_cli_worker.sh` uses the fake `codex`, `claude`, `opencode`, `gemini` and `cursor-agent` under `tests/fixtures/fake-cli/` to test argument assembly and usage parsing; it never calls the real CLIs.
 `resources.sh` accepts `HQ_FAKE_CORES`, `HQ_FAKE_LOAD1`, `HQ_FAKE_MEM_TOTAL_MB` and similar environment variables to inject simulated readings, covering the GREEN/YELLOW/RED cases.
 
 ## Open items and on-machine verification checklist
@@ -178,6 +180,7 @@ codex and dsh cannot be installed in this repository's development environment, 
 - DeepSeek (paths 2 and 3): whether `CLAUDE_CODE_EFFORT_LEVEL=max` overrides the per-tier effort hq sets; whether `ANTHROPIC_DEFAULT_OPUS_MODEL` can be set to `deepseek-v4-pro`; whether `deepseek-flash` and `deepseek-v4-flash` are equivalent.
 - Claude Code: the flags for starting cloud tasks from the local CLI (channel D).
 - OpenCode (native host since v0.4.1): whether the `hq-t*` sub-agents are recognized and each tier's `model#variant` resolves; how to stop a sub-agent; token/cost fields in `opencode session export`; permission prompts when several background sub-agents run at once.
+- New W backends (v0.4.2): run `start/status/usage/stop` once each with `opencode run`, `gemini -p` and `cursor-agent -p` on your machine; check the flags are accepted and `usage` returns tokens (cursor's usage field names are unknown); whether gemini can run shell commands under `auto_edit`.
 - Cursor, Gemini CLI (basic support in v0.4): after `--host auto`, whether each tool discovers and triggers the hq skill; whether Cursor also reads `~/.agents/skills`; whether `npx skills add` brings `scripts/` and `references/` along.
 
 **After installing codex, run these to check the flags**:
