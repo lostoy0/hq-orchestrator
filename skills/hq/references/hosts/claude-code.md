@@ -38,8 +38,8 @@
 ## 4 安装与调用
 
 - **插件**：在 Claude Code 里添加本仓库为插件市场后安装（`/plugin marketplace add lostoy0/hq-orchestrator`，再 `/plugin install`），技能位于插件目录的 `skills/hq/`。
-- **个人技能**：把 `skills/hq`、`skills/hq-retro`、`skills/hq-plan`、`skills/hq-prd`、`skills/hq-research`、`skills/hq-arch`、`skills/hq-design` 拷到 `~/.claude/skills/`（项目级放 `.claude/skills/`）。
-- 调用：输入 `/hq <目标>` 或说“司令部模式”；复盘用 `/hq-retro`；阶段技能用 `/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`（设了 `disable-model-invocation`，只能手动输入命令调用；模型看到的技能列表里不出现它们，实测于 v0.6.0）。
+- **个人技能**：把 `skills/hq`、`skills/hq-retro`、`skills/hq-plan`、`skills/hq-prd`、`skills/hq-research`、`skills/hq-arch`、`skills/hq-design`、`skills/hq-blueprint`、`skills/hq-launch` 拷到 `~/.claude/skills/`（项目级放 `.claude/skills/`）。
+- 调用：输入 `/hq <目标>` 或说“司令部模式”；复盘用 `/hq-retro`；阶段技能用 `/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`、`/hq-blueprint`、`/hq-launch`（设了 `disable-model-invocation`，只能手动输入命令调用；模型看到的技能列表里不出现它们，实测于 v0.6.0）。
 - 找脚本：`find ~/.claude/skills ~/.claude/plugins .claude/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。
 
 ### 通道细节

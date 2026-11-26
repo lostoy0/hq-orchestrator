@@ -57,14 +57,17 @@ skills/hq-research/SKILL.md            /hq-research 竞品调研阶段：联网�
 skills/hq-prd/SKILL.md                 /hq-prd 需求阶段：按上线标准写出或补全需求文档；同目录 template.md 是文档格式
 skills/hq-design/SKILL.md              /hq-design 设计阶段：设计规范和高保真可点击原型；prototype-starter/ 是原型起步套件
 skills/hq-arch/SKILL.md                /hq-arch 架构阶段：架构设计、详细设计和决策记录；diagram-style.md 是画图规范
+skills/hq-blueprint/SKILL.md           /hq-blueprint 一键蓝图：把各阶段串起来跑完，产出项目蓝图
+skills/hq-launch/SKILL.md              /hq-launch 上线检查：46 项清单、结论和阻塞清单、起草上线材料
 skills/hq-plan/SKILL.md                /hq-plan 计划阶段：把需求拆成版本计划和任务清单（带预估档位），评审后交给 /hq 执行
-skills/hq/references/roles/*.md        角色卡（产品、设计、架构、开发、测试、安全、市场与竞品研究、运维），阶段技能写作和评审时用
+skills/hq/references/roles/*.md        角色卡（产品、设计、架构、开发、测试、安全、市场与竞品研究、运维、法务、运营增长、商务），阶段技能写作和评审时用
 skills/hq/references/stages/common.md  阶段技能通用规则：产物目录、编号与追溯、模式、评审协议、决策优先级
 skills/hq/references/backlog-schema.md 计划清单 backlog.json 的格式
 skills/hq/scripts/backlog-check.py     计划清单检查（只读）：编号、依赖、档位与分数、需求覆盖
 skills/hq/scripts/doc-check.py         需求文档、竞品调研报告、架构文档检查（只读）
 skills/hq/scripts/prototype-check.py   可点击原型静态检查（只读）
 skills/hq/scripts/prototype-walk.mjs   可点击原型自动走查：逐页逐状态截图、执行流程（需要 Playwright）
+skills/hq/scripts/stage-status.py      列出各阶段产物的状态（齐不齐、检查结果、是否过期），只读
 docs/design-stages.md                  阶段技能设计草案和路线图
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词
@@ -122,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.8.0/inst
 - 退出码：0 成功；2 参数错误；3 目标已存在（加 `--force` 覆盖，或用 `--update`）；4 没有可操作的对象（未检测到工具、没有可更新/卸载的副本）；5 下载失败。会先检查所有目标，不会装一半。
 - 宿主说明：Codex 的调用方式见 `hosts/codex.md`；dsh 的首次运行步骤见 `hosts/dsh.md`；OpenCode 见 `hosts/opencode.md`；Gemini CLI 见 `hosts/gemini.md`；Cursor 见 `hosts/generic.md`。
 
-**方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 和各阶段命令（`/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`））
+**方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 和各阶段命令（`/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`、`/hq-blueprint`、`/hq-launch`））
 ```bash
 gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.8.0
 ```
@@ -137,7 +140,7 @@ npx skills add lostoy0/hq-orchestrator -a opencode -a cursor
 
 **方式 1：个人 skill（本地最简单）**
 ```bash
-mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skills/hq-prd skills/hq-research skills/hq-arch skills/hq-design ~/.claude/skills/
+mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skills/hq-prd skills/hq-research skills/hq-arch skills/hq-design skills/hq-blueprint skills/hq-launch ~/.claude/skills/
 ```
 装好后在任意项目里输入 `/hq <目标>` 和 `/hq-retro` 即可使用。
 
@@ -155,7 +158,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skil
 *推荐做法（云端已实测可用）：把 skill 复制进项目仓库。*
 ```bash
 ./install.sh --host claude --scope project --project-dir <项目路径>
-# 或手动：mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro <本目录>/skills/hq-plan <本目录>/skills/hq-prd <本目录>/skills/hq-research <本目录>/skills/hq-arch <本目录>/skills/hq-design .claude/skills/
+# 或手动：mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro <本目录>/skills/hq-plan <本目录>/skills/hq-prd <本目录>/skills/hq-research <本目录>/skills/hq-arch <本目录>/skills/hq-design <本目录>/skills/hq-blueprint <本目录>/skills/hq-launch .claude/skills/
 ```
 提交 `.claude/skills/` 后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`，辅助脚本（如 `scripts/resources.sh`）也能正常运行。好处是不依赖网络和 marketplace，还能锁定版本；坏处是每个项目一份副本，要逐个升级。
 
@@ -193,7 +196,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skil
 注意：
 
 - `--update` 会把副本更新成**正在运行的这份脚本**的版本，不会自己联网查新版。所以一定要先拿到新版本的脚本（用新标签的一行命令，或先 `git pull`）。
-- 新版本新增的技能（如 v0.6.0 的 `hq-plan`、v0.7.0 的 `hq-prd` 和 `hq-research`、v0.8.0 的 `hq-arch` 和 `hq-design`）：`--update` 会补装到已更新 `hq` 的目录里。
+- 新版本新增的技能（如 v0.6.0 的 `hq-plan`、v0.7.0 的 `hq-prd` 和 `hq-research`、v0.8.0 的 `hq-arch` 和 `hq-design`、v0.9.0 的 `hq-blueprint` 和 `hq-launch`）：`--update` 会补装到已更新 `hq` 的目录里。
 - `--update` 只处理有安装记录的副本。v0.3 及更早装的、或手动复制的副本会被跳过并提示，用 `./install.sh --host <宿主> --force` 重装一次，以后就能正常 `--update`。
 - `--update` **不更新子代理模板**（`--with-agents` 装的 `hq-t0…t4`）。新版本改了模板时（见 `CHANGELOG.md`），用原来的参数加 `--force` 重装：`./install.sh --host <宿主> --with-agents [--model-map '…'] --force`。注意 `--force` 会覆盖你手动改过的模板。
 - 升级后重开会话，宿主才会读到新技能。
@@ -258,7 +261,7 @@ cli-worker.sh list
 - 子会话看不到聊天记录，所以接管时之前的进度要写进台账“接管背景”。以后即使必须换新会话，也只要让新会话读 SKILL.md 和台账就能接上。
 - 每批仍会先判断值不值得编排，小目标会直接自己做；要强制派发就在目标里写“这批也全部派出去”。
 
-## 阶段技能：从想法到计划（v0.6.0 起）
+## 阶段技能：从想法到上线（v0.6.0 起）
 
 `/hq` 管“怎么把活干完”，阶段技能管“该做出什么”，跑在同一套引擎上（台账、选档、派发、审核、记录都一样）。整体设计和后续路线见 `docs/design-stages.md`；目前已有：
 
@@ -272,19 +275,24 @@ cli-worker.sh list
 /hq-plan                                  # 读需求、设计、技术文档和现有代码，产出版本计划和任务清单
 /hq-plan --release MVP 一个人做，两周内上线
 /hq --backlog R1                          # 按清单执行第一个版本（也可以直接说“执行 R1”）
+/hq-blueprint 给独立开发者用的记账 App     # 一键：调研 → 需求 → 设计和架构（并行）→ 计划，跳过已完成的阶段
+/hq-blueprint --until build --skip design  # 一直做到执行第一个版本；纯后端产品跳过设计
+/hq-launch                                # 上线前按 46 项清单检查，给出能不能上线的结论
 ```
 
 - **`/hq-research`**：产出 `docs/research/competitors.md`：竞品分直接、间接、替代方案三类，深挖的写定位、功能、定价、用户规模、用户评价、优势短板；最后是对比矩阵、定价对比、机会点和“对需求的建议”。每条事实标来源编号，文末来源表写链接和访问日期，推断单独标出。不能联网时直接说明，不凭模型记忆冒充调研；你明确接受时可以加 `--offline`，报告会标明未核实。评审时研究员会抽查 5 条结论和来源是否一致。
 - **`/hq-prd`**：产出 `docs/product/prd.md`：目标用户、首版范围和“不做什么”、每个功能的用户故事、验收标准和全部界面状态、非功能需求、商业化、成功指标和埋点、上线必需项核对表（注册登录、找回密码、注销账号、隐私政策等 24 项，每项写包含、不做或不适用）、需求索引（`/hq-plan` 直接读）。没有调研报告时先做一次 5 家的竞品速览（`--no-research` 跳过）。已有需求文档时按上线标准补全，不删你写的内容；不是本格式的，原文件不动，另写一份。评审：设计、架构、测试，涉及账号、支付、个人信息时加安全。
+- **`/hq-blueprint`**：一条命令把上面几个阶段串起来。先用 `stage-status.py` 看每个阶段的产物齐不齐、检查有没有错误、依据的上游是否已更新，只跑需要跑的；上游重跑后下游自动对齐。设计和架构并行。每个阶段结束都要过检查关卡，不过关就停在那里，不在有问题的基础上往下做。需求阶段之后如果有商业模式、目标市场这类没定的大决定，停下来问你一次（`--no-pause` 不停），因为它们会影响后面每个阶段。最后写一份 `docs/blueprint.md` 项目蓝图，汇总各阶段的产物、待你决定的事项和下一步。
+- **`/hq-launch`**：上线前的检查，产出 `docs/launch/checklist.md`：产品完整性、质量、安全、隐私与合规、运维、运营与增长、商务、发布八个方面共 46 项。能用命令验证的实际去跑（全量测试、构建、依赖漏洞审计、密钥扫描），每项“通过”都要有证据，再由独立子会话抽查 5 条。结论按规则给出“可以上线 / 有条件上线 / 暂不上线”，列出阻塞问题和需要你确认的事项（备案、商店后台、真实支付这类只有你能看的）。缺少的材料会起草：运维手册、发布说明、上线运营计划、商店文案，以及隐私政策、用户协议、退款政策草稿（标明需法律专业人士审核，不构成法律意见）。它不部署、不发布。
 - **`/hq-design`**：产出 `docs/design/`：设计规范（设计变量、组件、交互、文案、可访问性）、页面与流程说明，以及一个能离线打开的高保真可点击原型。原型基于内置的起步套件：模拟登录和演示账号（新用户、老用户、付费、管理员等）、像真的模拟数据、每页的空、加载、错误、无权限、首次使用状态，主要流程（含注册登录）能从头点到尾，左下角工具条可切换页面、状态、账号。`prototype-check.py` 静态检查，`prototype-walk.mjs` 用 Playwright 逐页逐状态截图并把每条流程自动走一遍；再由设计角色看截图做视觉走查。默认风格简洁易懂又现代好看，并列出了要避免的“AI 风格”。评审：产品、开发、测试。
 - **`/hq-arch`**：产出 `docs/tech/architecture.md`、`detailed-design.md` 和 `adr/`：约束和质量属性、系统上下文、容器、组件、数据模型、关键流程时序、部署六类图（Mermaid，按 `skills/hq-arch/diagram-style.md` 的画法：一张图一层、节点不超过 15 个、子图画边界、连线写标签、统一配色）、模块职责和需求映射、非功能设计、技术选型和决策记录、风险与待验证（`/hq-plan` 会排成先行调研）。默认选成熟、托管、一个人维护得了的方案。评审：开发、安全、测试，有部署或成本约束时加运维。
 - **`/hq-plan`**：产出 `docs/plan/roadmap.md`（给人看：版本、范围、发布条件、依赖图、需求覆盖表）和 `docs/plan/backlog.json`（给 `/hq` 读：每个任务的依赖、负责的文件、验收标准、验证级别和按 5 维打分得到的预估档位）。项目已有文档目录时沿用。
 - **`/hq-plan` 评审**：架构、开发、QA 三个角色（没有需求文档时加产品）。
 - **评审规则**（所有阶段一样）：多个角色并行评审，意见分阻塞、重要、次要三级；默认最多 2 轮，第 2 轮只核对阻塞和重要问题，到上限还没解决的交给你确认，不会无限来回。角色卡在 `skills/hq/references/roles/`。
 - **决策**：按“合规与安全底线 > 用户价值与体验 > 商业可行 > 技术简单 > 成本”自己定。定价和商业模式、品牌命名、目标市场、法务风险这类改不回来的决定由你拍板，但不会卡住写作：先按推荐选项写，记成待决定事项，阶段结束时一次性问你（加 `--ask` 则写之前先问）；没决定前文档不能标为已批准。其他假设也一并列给你。
-- **检查**：`skills/hq/scripts/backlog-check.py` 机械检查计划清单（编号唯一、依赖无环、档位和分数一致、P0 需求都有任务覆盖）；`skills/hq/scripts/doc-check.py prd|research|arch` 检查需求文档、调研报告和架构文档（架构：每章的图齐全、节点数、统一配色、模块字段、需求都落到模块、ADR 格式；字段齐全、界面状态写全、需求索引和正文一致、上线必需项每行有结论、引用的来源都在来源表里、每家竞品的来源数够）。
+- **检查**：`skills/hq/scripts/backlog-check.py` 机械检查计划清单（编号唯一、依赖无环、档位和分数一致、P0 需求都有任务覆盖）；`skills/hq/scripts/doc-check.py prd|research|arch|launch` 检查需求文档、调研报告和架构文档（架构：每章的图齐全、节点数、统一配色、模块字段、需求都落到模块、ADR 格式；字段齐全、界面状态写全、需求索引和正文一致、上线必需项每行有结论、引用的来源都在来源表里、每家竞品的来源数够）。
 - **闭环**：`/hq` 执行时按当时的代码重新打分，记下计划预估的档位；`metrics.py` 报告“3e 计划预估档位 vs 实际”，`/hq-retro` 据此校准计划阶段的打分。
-- **不会被自动调用**：阶段技能很重，在 Claude Code 里设了 `disable-model-invocation`，只有输入命令（`/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`）才执行；其他宿主靠技能说明里的“仅在用户显式输入时使用”兜底。
+- **不会被自动调用**：阶段技能很重，在 Claude Code 里设了 `disable-model-invocation`，只有输入命令（`/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`、`/hq-blueprint`、`/hq-launch`）才执行；其他宿主靠技能说明里的“仅在用户显式输入时使用”兜底。
 
 ## 自主执行与停止条件
 - 技术方案、模型、拆分、重试都由主会话自己决定，每个决策记进台账“决策”区。

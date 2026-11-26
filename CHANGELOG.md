@@ -18,6 +18,26 @@
 
 ---
 
+## 未发布（v0.9.0）
+
+新增 `/hq-blueprint`（一键把各阶段串起来）和 `/hq-launch`（上线检查），以及 `stage-status.py`。`docs/design-stages.md` 第 8 节的落地顺序全部完成。
+
+### 新增 `/hq-blueprint` 一键蓝图和 `stage-status.py`
+- **改动**：新增 `skills/hq-blueprint/SKILL.md`（`disable-model-invocation: true`）：按 research → prd → design 与 arch 并行 → plan（可选 build）的顺序串联各阶段，每个阶段按它自己的技能执行；参数 `--until`、`--from`、`--skip`、`--no-pause`、`--ask`，各阶段参数原样转交；阶段关卡（不过关就停）；只在需求阶段之后为未决 `D-xx` 暂停一次；产出 `blueprint.md` 项目索引。新增 `scripts/stage-status.py`（只读）：列出每个阶段产物是否齐全、版本、是否过期（`based_on` 引用的上游版本已更新）、调用各检查脚本得到的错误数，给出 `ok / missing / partial / needs_work / stale`。测试 `tests/test_stage_status.py`（用其他测试的样例搭一个完整项目，再逐项改坏）。`hq/SKILL.md` 常驻模式推荐下一批时，有文档目录就先看 `stage-status.py`，一个版本做完时推荐 `/hq-launch`。
+- **原因/假设**：用户希望把一人公司的工作流尽量一键自动执行，遇到决策先按最优策略自己定，实在定不了再问。逐个敲阶段命令既繁琐又容易漏掉“上游改了、下游没跟”；`stage-status.py` 让串联只跑需要跑的。单个阶段里“按推荐先写、最后一次问”没问题，但在串联里需求阶段的大决定被三个下游阶段依赖，猜错的返工超过 hq 停止条件 3 的门槛，所以只在这里停一次。
+- **验收指标**：一次 `/hq-blueprint` 运行结束时 `stage-status.py` 的 `todo` 为空（停在关卡的除外，且汇报写明原因）；`autonomy_stops` ≤ 2（输入为空时的提问和需求后的决策暂停）；设计和架构的并行让这两步的总用时比串行少 30% 以上（至少 3 次运行后统计）。
+- **状态**：待验证（`stage-status.py` 自测通过；尚未在真实项目上运行）
+- **复盘报告**：无（人工改动）
+
+### 新增 `/hq-launch` 上线检查
+- **改动**：新增 `skills/hq-launch/SKILL.md`（`disable-model-invocation: true`）、`template-checklist.md`（八个方面 46 项标准清单 L-01–L-46、结论规则、阻塞问题和需要你确认两节）、`template-runbook.md`（运维手册）。参数 `--release`、`--market`、`--check-only`、`--panel`。任务图：侦察 → 产品与质量、安全、隐私与合规、运维、运营商务发布五路并行（能用命令验证的实际跑：全量测试、构建、依赖漏洞审计、密钥扫描）→ 起草缺少的材料 → 汇总 → 独立抽查 5 条“通过”。结论规则：有不通过的 blocker → 暂不上线；有不通过的 major 或待人工确认的 blocker → 有条件上线；否则可以上线。法律文本只有草稿时记“待人工确认 + blocker”。不部署、不发布、不付费、不注册外部账号。`doc-check.py` 新增 `launch` 子命令：46 项齐全、结果和严重程度取值、“通过”有证据、“不适用”有原因、结论不比规则更乐观、阻塞问题和待确认项都已列出。新增角色卡 `roles/legal.md`（只做风险提示和草稿，不构成法律意见）、`roles/growth.md`、`roles/business.md`。新增 Gemini 命令 `commands/hq-blueprint.toml`、`commands/hq-launch.toml`；`install.sh` 技能列表加入两者；`stages/common.md` 产物目录、第 8、9 节同步；README 中英文、宿主文档、`adapters/gemini/README.md`、`docs/design-stages.md` 同步。
+- **原因/假设**：用户希望插件覆盖从想法到上线的全部工作流，包括安全、运维、法务、商务、运营。上线前的问题往往不在代码里（备案、法律文本、备份、告警、收费流程），一份带证据要求和固定结论规则的清单能防止“看起来都好”的乐观判断；只有用户能看的项明确交给用户确认。
+- **验收指标**：首次交付时 `doc-check.py launch` 错误数 = 0；抽查的 5 条“通过”全部属实；结论为“可以上线”的版本上线后一周内发现的、清单本应覆盖的问题 = 0（至少 3 次上线后统计）。
+- **状态**：待验证（`doc-check.py launch` 自测通过；尚未在真实项目上运行）
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.8.0（2026-11-26）
 
 新增 `/hq-design`（设计规范和高保真可点击原型）和 `/hq-arch`（架构设计、详细设计和决策记录）两个阶段技能，以及配套的检查脚本。

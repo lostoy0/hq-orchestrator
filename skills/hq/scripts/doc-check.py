@@ -5,9 +5,10 @@
   doc-check.py research <report.md>    competitor research written by /hq-research
   doc-check.py arch <architecture.md> [--detailed <detailed-design.md>] [--prd <prd.md>]
                                        architecture written by /hq-arch (ADRs read from adr/ next to it)
+  doc-check.py launch <checklist.md>   launch readiness checklist written by /hq-launch
 
 Exit codes: 0 no errors (warnings allowed), 1 errors found, 2 bad arguments / unreadable file.
-Formats: skills/hq-prd/template.md, skills/hq-research/template.md, skills/hq-arch/template-*.md
+Formats: skills/hq-prd/template.md, skills/hq-research/template.md, skills/hq-arch/template-*.md, skills/hq-launch/template-checklist.md
 """
 import argparse
 import json
@@ -542,12 +543,79 @@ def check_arch(text, path=None, detailed=None, prd=None):
     return errs, warns, summary
 
 
-TITLES = {"prd": "需求文档", "research": "竞品调研", "arch": "架构设计"}
+LAUNCH_CHECK_COUNT = 46  # L-01..L-46 in skills/hq-launch/template-checklist.md
+LAUNCH_RESULTS = ("通过", "不通过", "不适用", "待人工确认")
+LAUNCH_VERDICTS = ["可以上线", "有条件上线", "暂不上线"]  # optimistic -> pessimistic
+SEVERITIES = ("blocker", "major", "minor")
+LAUNCH_SECTIONS = ["结论", "阻塞问题", "需要你确认", "检查结果", "起草的材料", "假设与待确认"]
+
+
+def check_launch(text):
+    errs, warns = [], []
+    E = lambda w, m: errs.append("%s: %s" % (w, m))
+    W = lambda w, m: warns.append("%s: %s" % (w, m))
+    meta, body, has_fm = split_frontmatter(text)
+    body = COMMENT_RE.sub("", body)
+    check_common(meta, has_fm, "launch", E, W)
+    if not meta.get("release"):
+        E("元数据", "缺 release（检查的是哪个版本）")
+    hs = headings(body)
+    for k in LAUNCH_SECTIONS:
+        if section(body, hs, k) is None:
+            E("章节", "缺少二级标题“%s”" % k)
+    rows = {}
+    for r in table_rows(section(body, hs, "检查结果") or ""):
+        if not r or not re.match(r"^L-\d{2,}$", r[0]):
+            continue
+        if r[0] in rows:
+            E(r[0], "编号重复"); continue
+        rows[r[0]] = (r + [""] * 6)[:6]
+    for i in range(1, LAUNCH_CHECK_COUNT + 1):
+        if "L-%02d" % i not in rows:
+            E("检查结果", "缺少标准项 L-%02d（不要删行，不适用就写“不适用”和原因）" % i)
+    counts = {k: 0 for k in LAUNCH_RESULTS}
+    blockers, majors, confirm = [], [], []
+    for lid, (_, item, res, sev, ev, nxt) in sorted(rows.items(), key=lambda kv: int(kv[0][2:])):
+        if res not in LAUNCH_RESULTS:
+            E(lid, "结果必须是 %s 之一" % "/".join(LAUNCH_RESULTS)); continue
+        counts[res] += 1
+        if res in ("通过", "不适用") and blank(ev):
+            E(lid, "“%s”要在证据栏写%s" % (res, "怎么确认的" if res == "通过" else "原因"))
+        if res in ("不通过", "待人工确认"):
+            if sev not in SEVERITIES:
+                E(lid, "“%s”要写严重程度（blocker/major/minor）" % res)
+            if blank(nxt):
+                E(lid, "“%s”要写下一步" % res)
+            if res == "不通过" and sev == "blocker":
+                blockers.append(lid)
+            elif (res == "不通过" and sev == "major") or (res == "待人工确认" and sev == "blocker"):
+                majors.append(lid)
+            if res == "待人工确认":
+                confirm.append(lid)
+    expect = "暂不上线" if blockers else "有条件上线" if majors else "可以上线"
+    m = re.search(r"结论[：:]\s*(\S+)", section(body, hs, "结论") or "")
+    got = m.group(1) if m else None
+    if got not in LAUNCH_VERDICTS:
+        E("结论", "要写“结论：可以上线 / 有条件上线 / 暂不上线”")
+    elif LAUNCH_VERDICTS.index(got) < LAUNCH_VERDICTS.index(expect):
+        E("结论", "写的是“%s”，但按规则最多是“%s”（%s）" % (got, expect, "、".join((blockers or majors)[:5])))
+    for name, ids in (("阻塞问题", blockers), ("需要你确认", confirm)):
+        sec = section(body, hs, name) or ""
+        miss = [x for x in ids if not re.search(r"\b%s\b" % x, sec)]
+        if miss:
+            E(name, "没有列出 %s" % "、".join(miss))
+    if counts["通过"] and counts["通过"] == len(rows):
+        W("检查结果", "全部是“通过”，确认没有不适用或需要人工确认的项")
+    summary = dict(counts, verdict=got, expected_verdict=expect, blockers=blockers, to_confirm=len(confirm))
+    return errs, warns, summary
+
+
+TITLES = {"prd": "需求文档", "research": "竞品调研", "arch": "架构设计", "launch": "上线检查"}
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Mechanical checks for /hq-prd, /hq-research and /hq-arch documents (read-only)")
-    ap.add_argument("kind", choices=["prd", "research", "arch"])
+    ap = argparse.ArgumentParser(description="Mechanical checks for /hq-prd, /hq-research, /hq-arch and /hq-launch documents (read-only)")
+    ap.add_argument("kind", choices=["prd", "research", "arch", "launch"])
     ap.add_argument("file")
     ap.add_argument("--prd", metavar="FILE", help="arch: requirements doc to check the mapping against")
     ap.add_argument("--detailed", metavar="FILE", help="arch: detailed design doc to check alongside")
@@ -566,7 +634,7 @@ def main(argv=None):
     if a.kind == "arch":
         errs, warns, summary = check_arch(texts["file"], a.file, texts.get("detailed"), texts.get("prd"))
     else:
-        errs, warns, summary = (check_prd if a.kind == "prd" else check_research)(texts["file"])
+        errs, warns, summary = {"prd": check_prd, "research": check_research, "launch": check_launch}[a.kind](texts["file"])
     if a.format == "json":
         print(json.dumps({"errors": errs, "warnings": warns, "summary": summary}, ensure_ascii=False, indent=2))
     else:

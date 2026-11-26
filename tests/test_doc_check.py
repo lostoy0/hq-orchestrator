@@ -530,5 +530,76 @@ class ArchCheckTest(unittest.TestCase):
         self.assertIn("classDef", block)
 
 
+LAUNCH_TPL = os.path.join(ROOT, "skills", "hq-launch", "template-checklist.md")
+
+
+def launch_doc(results=None, verdict="可以上线", blockers="", confirm=""):
+    """Fill the template: every row 通过 with evidence unless results overrides (id -> (结果, 严重程度, 证据, 下一步))."""
+    results = results or {}
+    t = read(LAUNCH_TPL).replace("updated: YYYY-MM-DD", "updated: 2026-11-26")
+    t = t.replace("结论：暂不上线", "结论：" + verdict)
+    t = t.replace("## 2. 阻塞问题\n", "## 2. 阻塞问题\n" + blockers + "\n").replace("## 3. 需要你确认\n", "## 3. 需要你确认\n" + confirm + "\n")
+    out = []
+    for line in t.splitlines():
+        m = re.match(r"^\| (L-\d{2}) \| (.+?) \| \| \| \| \|$", line)
+        if m:
+            res, sev, ev, nxt = results.get(m.group(1), ("通过", "", "npm test 全部通过", ""))
+            line = "| %s | %s | %s | %s | %s | %s |" % (m.group(1), m.group(2), res, sev, ev, nxt)
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+class LaunchCheckTest(unittest.TestCase):
+    def run_launch(self, text):
+        return run("launch", text)
+
+    def test_template_has_46_standard_items(self):
+        ids = re.findall(r"^\| (L-\d{2}) \|", read(LAUNCH_TPL), re.M)
+        self.assertEqual(ids, ["L-%02d" % i for i in range(1, dc.LAUNCH_CHECK_COUNT + 1)])
+
+    def test_all_pass(self):
+        rc, out = self.run_launch(launch_doc())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["summary"]["expected_verdict"], "可以上线")
+        self.assertTrue(any("全部是“通过”" in w for w in out["warnings"]))
+
+    def test_blocker_forces_no_go(self):
+        r = {"L-12": ("不通过", "blocker", "git grep 发现 AWS 密钥（src/config.ts:3）", "删除并轮换密钥")}
+        rc, out = self.run_launch(launch_doc(r, verdict="有条件上线", blockers="- L-12 仓库里有密钥"))
+        self.assertEqual(rc, 1)
+        self.assertIn("最多是“暂不上线”", "\n".join(out["errors"]))
+        rc, out = self.run_launch(launch_doc(r, verdict="暂不上线", blockers="- L-12 仓库里有密钥"))
+        self.assertEqual(rc, 0, out)
+        rc, out = self.run_launch(launch_doc(r, verdict="暂不上线"))
+        self.assertIn("阻塞问题: 没有列出 L-12", "\n".join(out["errors"]))
+
+    def test_conditional(self):
+        r = {"L-22": ("待人工确认", "blocker", "", "到备案系统确认 ICP 备案号"),
+             "L-09": ("不通过", "major", "首屏 3.4 秒", "压缩图片")}
+        rc, out = self.run_launch(launch_doc(r, verdict="可以上线", confirm="- L-22 ICP 备案"))
+        self.assertIn("最多是“有条件上线”", "\n".join(out["errors"]))
+        rc, out = self.run_launch(launch_doc(r, verdict="有条件上线", confirm="- L-22 ICP 备案"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["summary"]["to_confirm"], 1)
+        rc, out = self.run_launch(launch_doc(r, verdict="有条件上线"))
+        self.assertIn("需要你确认: 没有列出 L-22", "\n".join(out["errors"]))
+
+    def test_row_rules(self):
+        r = {"L-01": ("通过", "", "", ""), "L-26": ("不适用", "", "", ""), "L-30": ("不通过", "", "没有告警", ""),
+             "L-31": ("好", "", "x", "")}
+        e = "\n".join(self.run_launch(launch_doc(r, verdict="暂不上线"))[1]["errors"])
+        self.assertIn("L-01: “通过”要在证据栏写怎么确认的", e)
+        self.assertIn("L-26: “不适用”要在证据栏写原因", e)
+        self.assertIn("L-30: “不通过”要写严重程度", e)
+        self.assertIn("L-30: “不通过”要写下一步", e)
+        self.assertIn("L-31: 结果必须是", e)
+
+    def test_missing_rows_and_verdict(self):
+        t = launch_doc().replace("结论：可以上线", "结论：差不多").replace("| L-46 |", "| L-99 |")
+        e = "\n".join(self.run_launch(t)[1]["errors"])
+        self.assertIn("缺少标准项 L-46", e)
+        self.assertIn("要写“结论：", e)
+
+
 if __name__ == "__main__":
     unittest.main()

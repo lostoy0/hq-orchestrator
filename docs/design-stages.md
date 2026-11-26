@@ -1,6 +1,6 @@
 # 设计草案：阶段技能（从想法到可开发的计划）
 
-状态：v0.6.0 实现第 4 节的共用底座（角色卡、阶段通用规则、计划清单格式与检查脚本）和第 5.5 节的 `/hq-plan`，`/hq` 能直接按计划清单执行（第 6 节）。v0.7.0（未发布）实现第 5.1 节的 `/hq-research`、第 5.2 节的 `/hq-prd` 和文档检查脚本 `doc-check.py`，并加了研究员角色卡。v0.8.0（未发布）实现第 5.3 节的 `/hq-design`（含原型起步套件、`prototype-check.py`、`prototype-walk.mjs`）和第 5.4 节的 `/hq-arch`（含画图规范、`doc-check.py arch`），并加了运维角色卡。剩下 blueprint、launch。
+状态：v0.6.0 实现第 4 节的共用底座（角色卡、阶段通用规则、计划清单格式与检查脚本）和第 5.5 节的 `/hq-plan`，`/hq` 能直接按计划清单执行（第 6 节）。v0.7.0（未发布）实现第 5.1 节的 `/hq-research`、第 5.2 节的 `/hq-prd` 和文档检查脚本 `doc-check.py`，并加了研究员角色卡。v0.8.0（未发布）实现第 5.3 节的 `/hq-design`（含原型起步套件、`prototype-check.py`、`prototype-walk.mjs`）和第 5.4 节的 `/hq-arch`（含画图规范、`doc-check.py arch`），并加了运维角色卡。v0.9.0（未发布）实现 `/hq-blueprint`（含 `stage-status.py`）和 `/hq-launch`（含 46 项上线清单和 `doc-check.py launch`），并加了法务、运营增长、商务三张角色卡；第 8 节的落地顺序全部完成。
 
 ## 1. 目标与边界
 
@@ -35,8 +35,8 @@
 | `/hq-design` | 设计规范、视觉稿、可点击原型 | `--platform web\|ios\|android\|mini`、`--explore N`、`--brand`、`--scope`、`--figma` | **v0.8.0** |
 | `/hq-arch` | 架构设计和详细技术设计 | `--stack <偏好>`、`--only arch\|detailed` | **v0.8.0** |
 | `/hq-plan` | 版本迭代、任务拆分、难度档位 | `--release <名称>`、`--horizon <版本数>` | **v0.6.0** |
-| `/hq-blueprint` | 从想法串到计划 | `--until prd\|design\|arch\|plan` | 计划中 |
-| `/hq-launch` | 上线检查：安全、合规、运维、运营、法务 | | 计划中 |
+| `/hq-blueprint` | 从想法串到计划（可接着执行第一个版本） | `--until …\|plan\|build`、`--from`、`--skip`、`--no-pause`，各阶段参数原样转交 | **v0.9.0** |
+| `/hq-launch` | 上线检查：安全、合规、运维、运营、法务 | `--release`、`--market`、`--check-only` | **v0.9.0** |
 
 共用参数：`--review-only`（只出评审报告不改文档）、`--rounds N`（默认 2，最多 3）、`--panel pm,qa,…`、`--ask`（关键决策先问）。
 
@@ -119,11 +119,25 @@
 3. `/hq-prd`、`/hq-research`（v0.7.0，已完成）。
 4. `/hq-arch`（v0.8.0，已完成）。
 5. `/hq-design`（v0.8.0，已完成；依赖 Playwright 截图验证，没有时退化为静态检查）。
-6. `/hq-blueprint` 串联、`/hq-launch` 和运营、商务、法务角色卡（运维角色卡 v0.8.0 已加）。
+6. `/hq-blueprint` 串联、`/hq-launch` 和运营、商务、法务角色卡（v0.9.0，已完成）。
+
+### 8.1 `/hq-blueprint` 要点（v0.9.0）
+- 用 `scripts/stage-status.py` 判断每个阶段：`ok` 跳过，`missing` 新建，`partial`、`needs_work`、`stale` 补全；上游重跑后下游对齐。
+- 顺序：research → prd → design（页面与流程完成后）与 arch 并行 → plan → 可选 build。每个阶段按它自己的技能执行，本技能只串联。
+- 阶段关卡：下一个阶段开始前，上一个必须是 `ok` 且没有未解决的 blocker，否则停在那里。
+- 决策暂停只在 prd 之后一次：有未决 `D-xx` 时问用户，因为它们被后面三个阶段依赖，猜错的返工超过 hq 停止条件 3 的门槛；`--no-pause` 跳过。这和单个阶段“按推荐先写、最后一次问”（`common.md` 第 6 节）不矛盾：差别在于下游依赖的范围。
+- 产出 `blueprint.md` 项目索引，只汇总不重写。
+
+### 8.2 `/hq-launch` 要点（v0.9.0）
+- 46 项标准清单（`skills/hq-launch/template-checklist.md`），八个方面按角色并行检查；能用命令验证的实际跑。
+- “通过”必须有证据，独立子会话抽查 5 条；结论按固定规则（`doc-check.py launch` 检查结论不比规则更乐观）。
+- 只能由用户确认的项（备案、商店后台、真实支付）写“待人工确认”并说明怎么确认；法律文本只有草稿时记“待人工确认 + blocker”。
+- 缺少的材料起草（运维手册、发布说明、运营计划、商店文案、法律文本草稿）；不部署、不发布。
 
 每一步都按 CHANGELOG 惯例写验收指标。阶段运行的数据（评审轮次、各级问题数、交付后用户又改了多少）记在 run 记录的可选字段里（`metrics-schema.md`），先积累，样本够了再进 `metrics.py`。
 
 ## 9. 待核实
+- `/hq-launch` 的依赖审计和密钥扫描依赖项目里装了对应工具（`npm audit`、`pip-audit`、`gitleaks` 等），没有时退化为 `git grep` 常见格式；不同语言生态的覆盖程度待实际项目验证。
 - Mermaid 渲染：各宿主上用什么工具渲染（`mmdc` 需要浏览器；能联网的环境可以临时装），本仓库的环境里没有实测。
 - `prototype-walk.mjs` 在 Playwright 不是全局安装的环境里能否找到它（脚本依次从脚本目录、当前目录、原型目录 `require`）。
 - 其他宿主是否忽略 `disable-model-invocation`、`argument-hint` 这类未知元数据字段（Codex、Gemini CLI、OpenCode 官方文档没提，需实机确认不会报错）。
