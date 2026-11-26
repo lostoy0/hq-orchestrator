@@ -1,6 +1,6 @@
 ---
 name: hq
-description: 司令部模式（HQ）。把当前会话变成总指挥：先判断值不值得编排，再拆解规划任务、按难度给子会话选“能一次做对前提下最省”的模型和思考深度、决定在云端还是本地执行、按资源控制并发，自主推进、监控、审核归并，并记录用量数据供复盘。用户输入 /hq、说“司令部模式”“总指挥”“帮我统筹/编排/并行推进”，或给出需要拆成多个子任务的较大目标时使用；`/hq --stay`、“常驻司令部”“常驻 HQ”时进入常驻模式，本会话一批接一批地统筹，直到用户说退出。一两步就能做完的小事不要用。
+description: 司令部模式（HQ）。把当前会话变成总指挥：先判断值不值得编排，再拆解规划任务、按难度给子会话选“能一次做对前提下最省”的模型和思考深度、决定在云端还是本地执行、按资源控制并发，自主推进、监控、审核归并，并记录用量数据供复盘。用户输入 /hq、说“司令部模式”“总指挥”“帮我统筹/编排/并行推进”，或给出需要拆成多个子任务的较大目标时使用；`/hq --stay`、“常驻司令部”“常驻 HQ”时进入常驻模式，本会话一批接一批地统筹，直到用户说退出。`/hq --backlog [版本]` 按 /hq-plan 产出的计划清单执行。一两步就能做完的小事不要用。
 license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
 
@@ -61,16 +61,29 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - **收集候选**，只用便宜的来源，不亲自大面积读代码（铁律 1）：
   1. 台账：“待办池”、未派发的衍生任务、`BLOCKED`/`FAILED` 任务、“待问用户”里已有答复的事项、审核时记下的后续问题。
   2. 会话：“接管背景”的未完成事项、总目标里还没覆盖的部分、用户在对话中提过但没排进批次的要求。
-  3. 项目：README/docs 里的路线图或待办、CHANGELOG 中“待验证”且需要动手验证的项、`git grep -n -E "TODO|FIXME"` 的计数和前几条、仓库的 open issue（宿主能查时）、本批合并后全量测试的失败项。
+  3. 计划清单（有 `plan/backlog.json` 时，见下面“按计划执行”）：依赖已满足、状态 `todo` 的任务，当前版本优先。
+  4. 项目：README/docs 里的路线图或待办、CHANGELOG 中“待验证”且需要动手验证的项、`git grep -n -E "TODO|FIXME"` 的计数和前几条、仓库的 open issue（宿主能查时）、本批合并后全量测试的失败项。
   候选来源多、要读的内容大时，派一个 T0/T1 只读调研子任务汇总，不要自己读。
 - **筛选**：只保留有证据的候选，每条写来源（台账哪一区、哪个文件第几行、哪个 issue）。不为凑数编任务；属于停止条件的（要密钥、要部署、要用户操作）单独列为“需要你处理”，不算可执行任务。已完成的、与总目标无关的低价值项不推荐。
 - **输出**：最多 5 条，编号，按“关键路径/依赖优先，其次价值高、风险低”排序，每条一行：编号 | 标题 | 来源 | 预计档位和用时 | 为什么现在做。末尾写“回复编号（如‘做 1、3’）、‘按推荐’全部执行，或直接说新目标”。PLAYBOOK `autonomy: auto` 且用户说过“按推荐自动继续”时，不等回复直接开下一批（仍受第 0 步和停止条件约束）。
 - 推荐结果写进台账“待办池”（新的放前面，已做的删掉），这样压缩或换会话后也不丢。
 - **完工判断**：候选筛完后一条可执行的都没有，并且总目标的验收标准都已满足（或总目标未声明而待办池为空），就明确告诉用户：“项目当前所有任务都已执行完毕，没有更多可执行任务了。”后面附：检查过哪些来源、总目标的验收结果、仍需用户处理的事项（如有）。不要在有可执行候选时说完工。完工后仍保持常驻，等用户的新目标，或问一次是否退出常驻。
 
+- 项目缺计划、需求或架构文档，而且这正挡着后续工作时，推荐里可以写“建议运行 `/hq-plan`”这类阶段命令，作为一条普通推荐，**不自动运行**（阶段技能只在用户输入命令时执行）。
+
 **防止压缩后忘记**：每个用户回合开始时，若台账头部是 `mode: standing`，而你已不记得本文件的流程细节（上下文被压缩或会话恢复），先重新读取 `skill_path`，再读台账，然后继续。
 
 **退出**：用户说“退出常驻”“结束司令部”或 `/hq --stop`。等在跑的任务收尾（或按用户要求停掉），台账头部改为 `mode: off`，做一次最终汇报。
+
+## 按计划执行（可选）
+
+`/hq-plan` 产出的计划清单（`<docs_root>/plan/backlog.json`，格式见 `references/backlog-schema.md`）可以直接执行。
+- **进入**：`/hq --backlog [清单路径] [版本或任务编号，如 R1、B-003,B-004]`，或目标里明确说执行计划里的版本或任务（如“执行 R1”）。路径默认取 PLAYBOOK `docs_root`（没写就是 `docs/`）下的 `plan/backlog.json`；没给版本时取第一个还有 `todo` 任务的版本。可以和 `--stay`、`--assist` 连用。
+- **先检查**：运行 `python3 <scripts 目录>/backlog-check.py <清单路径>`。选中范围内有错误就不执行，汇报错误并建议运行 `/hq-plan` 补全；错误只在其他版本时照常执行，汇报里提一句。
+- **第 2 步**：选中的 `todo` 任务就是任务图；依赖的任务还不是 `done` 的，一并纳入本批。仍按第 2 步打包小任务、拆大任务，拆出的子任务编号写成 `B-003a`、`B-003b`。`owns` 写的是模块编号时，侦察时落到具体文件。任务的 `acceptance`、`verify_level`、`verify_cmd` 直接作为说明里的验收标准和验证。
+- **第 3 步**：清单里的 `tier` 只是计划时的预估。按当前代码重新打分选档；task 记录写 `plan_tier`（清单里的档位），和实际选的档位不同时在 notes 写一句原因。
+- **第 8 步之后**：回写清单：任务 `status` 改成 `done` 或 `blocked`，填 `run_id`、`branch`，更新顶层 `updated`；再跑一次 `backlog-check.py`，随本批改动一起提交。清单以外的新任务不写进清单，记进台账；要改计划时建议用户运行 `/hq-plan`。
+- 没有清单、目标又是“规划”“排期”这类时，不自动转成 `/hq-plan`，按普通目标处理，汇报里可以建议它。
 
 ## 第 0 步：要不要编排
 
@@ -205,7 +218,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 ## 第 9 步：记录数据与小结
 
 - **每个任务结束时**往 `.hq/runs/<run_id>.jsonl` 追加一行 `type:"task"`，**整批结束时**追加一行 `type:"run"`。只用手头已有的信息，**不为记录数据额外派子会话**。字段定义以 `references/metrics-schema.md` 为准，主会话直接追加；`scripts/metrics.py` 只读取汇总，写完可运行一次确认能读、损坏行数为 0。要点：
-  - task：run_id、task_id、host、kind、risk、tier_score、tier、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
+  - task：run_id、task_id、host、kind、risk、tier_score、tier、plan_tier（按计划执行时）、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
   - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
   - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。

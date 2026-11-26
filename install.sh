@@ -4,6 +4,7 @@
 # 一行安装：curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v<版本>/install.sh | bash -s -- --host auto
 set -u
 HQ_VERSION=0.5.4
+SKILLS=(hq hq-retro hq-plan)  # 安装的技能目录（skills/<名>）；新增技能加在这里
 HQ_REPO_URL_DEFAULT=https://github.com/lostoy0/hq-orchestrator.git
 
 usage() {
@@ -183,7 +184,7 @@ write_skill_path() {  # 个人范围：记下 hq 技能目录，供 SKILL.md 查
 scan_installed() {
   local k b s
   for k in "${D_KEY[@]}"; do b=$(dir_path "$k")
-    for s in hq hq-retro; do
+    for s in "${SKILLS[@]}"; do
       if [ -f "$b/$s/.hq-install.json" ]; then echo "$k|$b/$s|managed|$(marker_version "$b/$s/.hq-install.json")"
       elif [ -f "$b/$s/SKILL.md" ]; then echo "$k|$b/$s|unmanaged|"; fi
     done
@@ -208,7 +209,7 @@ if [ "$action" = list ]; then
   if [ "$host" = auto ] && [ "$det" = "  " ]; then echo "安装计划：未检测到工具，请用 --host 指定"; exit 0; fi
   resolve_hosts "$host"; plan_dirs
   echo "安装计划（--host $host --layout ${layout}）："
-  for k in "${KEYS[@]}"; do echo "  $(dir_path "$k")/{hq,hq-retro}  <- $(readers_of "$k")"; done
+  for k in "${KEYS[@]}"; do echo "  $(dir_path "$k")/{$(IFS=,; echo "${SKILLS[*]}")}  <- $(readers_of "$k")"; done
   exit 0
 fi
 
@@ -221,7 +222,7 @@ if [ "$action" = update ] || [ "$action" = uninstall ]; then
     echo "$legacy" | while IFS='|' read -r k p st v; do echo "  $p"; done
   fi
   [ -n "$found" ] || { echo "没有找到本脚本安装的副本（${scope} 范围）。" >&2; exit 4; }
-  first=""
+  first=""; added=()
   while IFS='|' read -r k p st v; do
     s=$(basename "$p")
     if [ "$action" = uninstall ]; then
@@ -231,11 +232,20 @@ if [ "$action" = update ] || [ "$action" = uninstall ]; then
       hj=$(marker_hosts "$p/.hq-install.json"); [ -n "$hj" ] || hj='[]'
       run rm -rf "$p"; run cp -r "$ROOT/skills/$s" "$p"; write_marker "$p" "$k" "$hj"
       echo "更新 $p  v$v -> v$HQ_VERSION"
-      [ "$s" = hq ] && [ -z "$first" ] && first=$p
+      [ "$s" = hq ] && { [ -z "$first" ] && first=$p; added+=("$k|$(dirname "$p")|$hj"); }
     fi
   done <<EOF
 $found
 EOF
+  # 新版本新增的技能（如 v0.6.0 的 hq-plan）：装进每个已更新 hq 的目录，沿用 hq 的宿主记录
+  for e in ${added[@]+"${added[@]}"}; do
+    IFS='|' read -r k b hj <<<"$e"
+    for s in "${SKILLS[@]}"; do
+      [ -e "$b/$s" ] && continue
+      run cp -r "$ROOT/skills/$s" "$b/$s"; write_marker "$b/$s" "$k" "$hj"
+      echo "新增 ${b}/${s}（v${HQ_VERSION} 新增的技能）"
+    done
+  done
   [ -n "$first" ] && write_skill_path "$first"
   [ "$action" = uninstall ] && echo "完成。子代理模板（如装过）不会自动删除：~/.codex/agents/hq-t*.toml、~/.config/opencode/agents/hq-t*.md、~/.gemini/agents/hq-t*.md，或项目里的 .codex/agents/、.opencode/agents/、.gemini/agents/。Gemini 扩展请用 gemini extensions uninstall hq-orchestrator。"
   exit 0
@@ -290,7 +300,7 @@ if [ $agents -eq 1 ] && [ ${#FMTS[@]} -eq 0 ]; then AG_NOTE+=("提示: 所选宿
 echo "宿主: ${HOSTS[*]}  范围: $scope  布局: $layout"
 # 先检查所有目标（技能和 agent 模板），避免装一半
 for k in "${KEYS[@]}"; do base=$(dir_path "$k")
-  for s in hq hq-retro; do
+  for s in "${SKILLS[@]}"; do
     if [ -e "$base/$s" ] && [ $force -eq 0 ]; then
       echo "错误: 目标已存在: $base/$s ；如需覆盖请加 --force（或用 --update 更新本脚本装过的副本）" >&2; exit 3
     fi
@@ -304,7 +314,7 @@ done
 
 first=""
 for k in "${KEYS[@]}"; do base=$(dir_path "$k"); rd=$(readers_of "$k")
-  for s in hq hq-retro; do
+  for s in "${SKILLS[@]}"; do
     run mkdir -p "$base"
     [ -e "$base/$s" ] && run rm -rf "$base/$s"
     run cp -r "$ROOT/skills/$s" "$base/$s"

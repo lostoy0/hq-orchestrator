@@ -28,6 +28,7 @@
 | risk | `low`/`med`/`high` | 风险等级 | 规划完成时 |
 | tier_score | 整数 0–10 | 难度评估总分 | 难度评估时 |
 | tier | `T0`–`T4` | 最终使用的档位 | 难度评估时；升降档后更新为最终值 |
+| plan_tier | `T0`–`T4`（可选，v0.6.0 起） | 按计划清单执行时，清单里预估的档位（`/hq-plan` 打分）；不是按计划执行的任务省略 | 规划完成时 |
 | host | `claude-code`/`codex`/`dsh`/`opencode`/`cursor`/`gemini`/`other`（可选） | 主会话所在宿主 | 派发时 |
 | model | 字符串 | 最终使用的模型；跨厂商（非宿主自带模型）写成 `<cli>:<模型名>`，如 `codex:<模型名>` | 派发时（升降档后更新） |
 | effort | 字符串 | 思考深度（low/medium/high/xhigh…） | 派发时（升降档后更新） |
@@ -85,6 +86,7 @@
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
 | assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
+| stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 7 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
 
 示例：
 
@@ -116,12 +118,13 @@
   - **数据矛盾**：加速比 > max_concurrency × 1.1，或某个任务的 actual_min > wall_min，说明 actual_min 口径不对（常见原因是把等审核、合并的时间也算了进去）。备注列标“数据矛盾”，该 run 不产生加速比信号，改为提示核对口径；它的任务也不计入按档位、按模型/深度、按宿主/通道和总体的 actual/est 用时比（备注列写“用时比排除矛盾 run 的 N 条”），所以“估时偏乐观”“可能存在降档空间”这两类用时信号不受它影响。一次通过率、升档率、成本等与时间无关的统计照常包含这些任务。
   - “加速比偏低”信号只在加速比 < 1.3、且加速比上限 ≥ 1.3（任务图本来允许并行）时给出；没记 critical_path_min 的 run 不判断。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
+- 计划预估 vs 实际（有 `plan_tier` 的任务才出这一节）：`tier` 与 `plan_tier` 一致、偏低（实际档位更高）、偏高的比例，以及一次通过率；n ≥ 5 且偏低或偏高超过 30% 时给出信号，提示调整 `/hq-plan` 的打分说明。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
 
 ## 保存进仓库与脱敏导出
 
 - **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id` 去重。
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
-  - 保留：task 的 `kind`、`risk`、`tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`。
+  - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`。
   - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。
   - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和所有未知字段。

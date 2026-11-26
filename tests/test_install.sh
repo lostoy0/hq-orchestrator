@@ -16,7 +16,7 @@ for h in claude codex; do for s in user project; do
   [ $h = claude ] && sub=.claude/skills || sub=.agents/skills
   [ $s = user ] && base="$T/h/$sub" || base="$T/p/$sub"
   inst --host $h --scope $s --project-dir "$T/p"; rc=$?
-  if [ $rc = 0 ] && [ -f "$base/hq/SKILL.md" ] && [ -f "$base/hq-retro/SKILL.md" ]; then ok "$h/$s 装到正确目录"
+  if [ $rc = 0 ] && [ -f "$base/hq/SKILL.md" ] && [ -f "$base/hq-retro/SKILL.md" ] && [ -f "$base/hq-plan/SKILL.md" ]; then ok "$h/$s 装到正确目录"
   else bad "$h/$s" "rc=$rc"; fi
 done; done
 
@@ -131,6 +131,13 @@ fresh; inst --host codex --scope project --project-dir "$T/p"
 fresh; mkdir -p "$T/h/.gemini"; HOME="$T/h" HQ_NO_CMD_DETECT=1 bash "$INST" --list >"$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && grep -q "✓ gemini" "$T/out" && grep -q "\.gemini/skills" "$T/out" && [ "$(find "$T/h" -type f | wc -l | tr -d ' ')" = 0 ] && ok "--list 显示检测和计划且不写入" || bad "--list" "rc=$rc"
 
+# 17b. --update：旧版本没有的技能（hq-plan）补装到已更新 hq 的目录，沿用 hq 的宿主记录
+fresh; inst --host claude; rm -rf "$T/h/.claude/skills/hq-plan"
+inst --update; rc=$?
+[ $rc = 0 ] && [ -f "$T/h/.claude/skills/hq-plan/SKILL.md" ] && grep -q '"hosts":\["claude"' "$T/h/.claude/skills/hq-plan/.hq-install.json" && grep -q "新增 .*hq-plan" "$T/out" && ok "--update 补装新增的技能" || bad "--update new skill" "rc=$rc $(tail -3 "$T/out")"
+inst --update; rc=$?
+[ $rc = 0 ] && ! grep -q "新增" "$T/out" && ok "--update 再次运行不重复新增" || bad "--update idempotent" "rc=$rc"
+
 # 17. --update：只更新有安装记录的副本
 fresh; inst --host claude; inst --host codex
 echo junk >"$T/h/.claude/skills/hq/junk"; sed -i.bak 's/"version":"[^"]*"/"version":"0.0.1"/' "$T/h/.claude/skills/hq/.hq-install.json"
@@ -234,9 +241,9 @@ if not m.get("description"): errs.append("description")
 if "contextFileName" in m: errs.append("contextFileName 会把文件注入每个会话")
 if os.path.exists(os.path.join(r,"GEMINI.md")): errs.append("根目录不应有 GEMINI.md（会自动注入上下文）")
 if os.path.isdir(os.path.join(r,"agents")): errs.append("根目录不应有 agents/（Claude Code 插件会加载）")
-for s in ("hq","hq-retro"):
+for s in ("hq","hq-retro","hq-plan"):
     if not os.path.isfile(os.path.join(r,"skills",s,"SKILL.md")): errs.append("skills/"+s)
-for c,skill in (("hq","hq"),("hq-retro","hq-retro")):
+for c,skill in (("hq","hq"),("hq-retro","hq-retro"),("hq-plan","hq-plan")):
     t=tomllib.load(open(os.path.join(r,"commands",c+".toml"),"rb"))
     if not t.get("description") or "{{args}}" not in t.get("prompt","") or ("技能名 "+skill) not in t["prompt"]: errs.append("commands/"+c)
 if [f for f in os.listdir(os.path.join(r,"commands")) if not f.endswith(".toml")]: errs.append("commands/ 只放 .toml")

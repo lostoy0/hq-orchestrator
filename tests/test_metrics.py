@@ -71,6 +71,28 @@ class MetricsTest(unittest.TestCase):
             self.assertIn("3d.", md)
             self.assertNotIn("3d.", run(FIX).stdout)  # no assist data -> section hidden
 
+    def test_plan_accuracy(self):
+        tiers = [("T2", "T2"), ("T2", "T3"), ("T1", "T3"), ("T3", "T2"), ("T2", "T2"), ("T1", "T2")]
+        rows = [{"type": "task", "run_id": "rp", "task_id": "t%d" % i, "plan_tier": p, "tier": t,
+                 "attempts": 1, "review_outcome": "pass"} for i, (p, t) in enumerate(tiers)]
+        rows += [{"type": "task", "run_id": "rp", "task_id": "x", "tier": "T2"},  # not from a plan
+                 {"type": "run", "run_id": "rp"}]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "rp.jsonl")
+            with open(p, "w") as fh:
+                fh.write("\n".join(json.dumps(x) for x in rows) + "\n")
+            r = rep(p)
+            pl = r["plan"]
+            self.assertEqual(pl["n"], 6)
+            self.assertAlmostEqual(pl["same_rate"], 2 / 6)
+            self.assertAlmostEqual(pl["under_rate"], 3 / 6)
+            self.assertAlmostEqual(pl["over_rate"], 1 / 6)
+            self.assertTrue(any(s["scope"] == "plan" and "偏低" in s["message"] for s in r["signals"]))
+            self.assertIn("3e.", run(p).stdout)
+            anon = json.loads(run(p, "--export-anon", "--raw").stdout)
+            self.assertIn('"plan_tier"', json.dumps(anon))
+        self.assertNotIn("3e.", run(FIX).stdout)  # no plan data -> section hidden
+
     def test_groups(self):
         r = rep(FIX)
         t2 = grp(r["by_tier"], "T2")

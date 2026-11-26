@@ -32,7 +32,7 @@ For Codex, OpenCode, Gemini CLI, Cursor and dsh use the one-line script; see [In
 | DeepSeek backend · path 2: Claude Code with DeepSeek | `hosts/deepseek.md` | Tiers collapse to flash/pro; cloud sub-sessions (B) still use Claude models |
 | DeepSeek backend · path 3: Codex with DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | Config example from official summaries, to be tested |
 | **OpenCode (V2)** | `hosts/opencode.md` + `adapters/opencode/` | Native host since v0.4.1: `hq-t0…t4` sub-agents each carry `provider/model#variant`, so tiers apply per task; **only the official docs were read, not run on a real machine** |
-| **Gemini CLI** | `hosts/gemini.md` + `adapters/gemini/` + `gemini-extension.json` | Native host since v0.4.3: `hq-t0…t4` sub-agents each carry a `model` (no reasoning-effort setting, tiers differ by model only); installable as a Gemini extension with `/hq` and `/hq-retro` commands; **only the official docs were read, not run on a real machine** |
+| **Gemini CLI** | `hosts/gemini.md` + `adapters/gemini/` + `gemini-extension.json` | Native host since v0.4.3: `hq-t0…t4` sub-agents each carry a `model` (no reasoning-effort setting, tiers differ by model only); installable as a Gemini extension with `/hq`, `/hq-retro` and `/hq-plan` commands; **only the official docs were read, not run on a real machine** |
 | Cursor (one-command install since v0.4) | `hosts/generic.md` | Basic support: skill directories registered from the official docs, **not run on a real machine**; with a shell, use the W channel, otherwise **degraded mode** (the main session executes serially itself with the same plan, ledger and quality gates). Native sub-agent adapters are planned in `docs/design-more-hosts.md` |
 | Other tools that support SKILL.md | `hosts/generic.md` | Same as above; installable with `npx skills add` (see Installation) |
 
@@ -53,6 +53,12 @@ skills/hq/scripts/runs-persist.sh      saves run records into the repository (de
 skills/hq/scripts/cli-worker.sh        W channel: runs the codex / claude / opencode / gemini / cursor CLI in the background in a separate git worktree
 skills/hq/scripts/backends/*.sh        W channel per-CLI argument building and usage parsing (one file per CLI)
 skills/hq-retro/SKILL.md               /hq-retro: checks earlier changes, makes evidence-backed suggestions, generates a prompt for changing the plugin
+skills/hq-plan/SKILL.md                /hq-plan: turns requirements into a release plan and task backlog with estimated tiers, reviewed, for /hq to execute
+skills/hq/references/roles/*.md        role cards (product, design, architecture, engineering, QA, security) used by stage skills for writing and review
+skills/hq/references/stages/common.md  shared rules for stage skills: output layout, ids and traceability, modes, review protocol, decision order
+skills/hq/references/backlog-schema.md format of the backlog.json plan
+skills/hq/scripts/backlog-check.py     backlog checker (read-only): ids, dependencies, tier vs score, requirement coverage
+docs/design-stages.md                  design draft and roadmap for stage skills (in Chinese)
 CHANGELOG.md                           reason, acceptance metric and verification status of every change
 PROMPT.md                              condensed prompt to paste directly when the plugin is not installed
 adapters/tiers.tsv                     tier registry: effort, model class and fitting tasks for T0–T4 (single source for sub-agent templates)
@@ -62,7 +68,7 @@ adapters/codex/                        Codex custom agent templates hq-t0…hq-t
 adapters/opencode/                     OpenCode V2 sub-agent templates hq-t0…hq-t4 (generated, no model set by default)
 adapters/gemini/                       Gemini CLI sub-agent templates hq-t0…hq-t4 (generated, no model set by default)
 gemini-extension.json                  Gemini CLI extension manifest: the whole repository installs with gemini extensions install
-commands/*.toml                        the Gemini extension's /hq and /hq-retro commands (Claude Code does not read .toml)
+commands/*.toml                        the Gemini extension's /hq, /hq-retro and /hq-plan commands (Claude Code does not read .toml)
 adapters/hosts.tsv                     host registry: which skill directories each tool reads and how to detect it (add a line for a new host)
 adapters/skill-dirs.tsv                skill directory registry: personal and project paths
 install.sh                             one-command install: detects tools, copies the skills into the smallest covering set of directories, supports --list/--update/--uninstall; changes no config
@@ -109,7 +115,7 @@ When not run from inside the repository, the script first uses git to download t
 - Exit codes: 0 success; 2 invalid arguments; 3 target exists (add `--force`, or use `--update`); 4 nothing to act on (no tool detected, nothing to update or remove); 5 download failed. All targets are checked first, so it never installs halfway.
 - Host notes: Codex usage in `hosts/codex.md`; dsh first-run steps in `hosts/dsh.md`; OpenCode in `hosts/opencode.md`; Gemini CLI in `hosts/gemini.md`; Cursor in `hosts/generic.md`.
 
-**Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq` and `/hq-retro` commands)
+**Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq`, `/hq-retro` and `/hq-plan` commands)
 ```bash
 gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.5.4
 ```
@@ -124,7 +130,7 @@ Whether it copies `scripts/` and `references/` in full is unverified; without th
 
 **Option 1: personal skill (simplest locally)**
 ```bash
-mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
+mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan ~/.claude/skills/
 ```
 After installing, type `/hq <goal>` and `/hq-retro` in any project to use them.
 
@@ -142,7 +148,7 @@ Each cloud session clones the repository into a fresh container and **cannot see
 *Recommended (verified in the cloud): copy the skills into the project repository.*
 ```bash
 ./install.sh --host claude --scope project --project-dir <project path>
-# or by hand: mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/skills/hq-retro .claude/skills/
+# or by hand: mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/skills/hq-retro <this directory>/skills/hq-plan .claude/skills/
 ```
 After committing `.claude/skills/`, cloud sessions started from this repository can use `/hq` and `/hq-retro`, and the helper scripts (such as `scripts/resources.sh`) run as well. It needs no network or marketplace and pins the version, but every project holds its own copy to upgrade.
 
@@ -180,6 +186,7 @@ First check what you have: `./install.sh --list` shows each installed copy with 
 Notes:
 
 - `--update` updates copies to the version of **the script you are running**; it does not check online for a newer one. Get the new script first (the one-line command with the new tag, or `git pull`).
+- Skills added in a new version (such as `hq-plan` in v0.6.0): `--update` installs them next to each updated `hq`.
 - `--update` only touches copies with an install record. Copies installed by v0.3 or earlier, or copied by hand, are skipped with a notice; reinstall once with `./install.sh --host <host> --force` and `--update` will handle them from then on.
 - `--update` **does not update sub-agent templates** (`hq-t0…t4` installed with `--with-agents`). When a release changes them (see `CHANGELOG.md`), reinstall with your original flags plus `--force`: `./install.sh --host <host> --with-agents [--model-map '…'] --force`. `--force` overwrites templates you edited by hand.
 - Start a new session after upgrading so the host picks up the new skills.
@@ -243,6 +250,23 @@ Notes:
 - The main session records the skill path in the `.hq/LEDGER.md` header (`skill_path`) and rereads the skill and the ledger after context compaction. If it ever starts doing the work itself instead of dispatching, say "reread SKILL.md and stay in standing mode".
 - Sub-sessions cannot see the chat, so earlier progress goes into the ledger's takeover background. Even if you later have to open a new session, it can pick up by reading SKILL.md and the ledger.
 - Each batch still starts by deciding whether orchestration is worth it, and small goals are done directly; to force dispatching, add "dispatch this batch too" to the goal.
+
+## Stage skills: from requirements to a plan (since v0.6.0)
+
+`/hq` handles how to get the work done; stage skills handle what to make. They run on the same engine (ledger, tiers, dispatch, review and records are all shared). The overall design and roadmap are in `docs/design-stages.md` (in Chinese). Available now:
+
+```
+/hq-plan                        # read requirements, design, tech docs and existing code; produce a release plan and task backlog
+/hq-plan --release MVP solo developer, ship in two weeks
+/hq --backlog R1                # execute the first release from the backlog (or just say "execute R1")
+```
+
+- **Outputs**: `docs/plan/roadmap.md` (for people: releases, scope, release criteria, dependency graph, requirement coverage) and `docs/plan/backlog.json` (for `/hq`: each task's dependencies, owned files, acceptance criteria, verification level, and an estimated tier from the 5-dimension score). An existing docs directory in the project is reused.
+- **Review**: before delivery, architect, engineer and QA roles review in parallel (plus product when there is no requirements doc). Findings are blocker, major or minor; at most 2 rounds by default, the second only checks blockers and majors, and anything still open at the limit goes to you, so it never loops. Role cards are in `skills/hq/references/roles/`.
+- **Decisions**: made on its own in the order "compliance and security baseline > user value and experience > business viability > technical simplicity > cost". It only asks you about decisions that cannot be undone: pricing and business model, brand naming, target market, legal risk, real payments or external accounts. Everything else goes into "Assumptions to confirm", listed once at the end of the stage.
+- **Checks**: `skills/hq/scripts/backlog-check.py` checks the backlog mechanically (unique ids, no dependency cycles, tier matches score, every P0 requirement covered by a task).
+- **Loop**: when `/hq` executes it re-scores tasks against the current code and records the planned tier; the `metrics.py` report has a "3e planned vs actual tier" section that `/hq-retro` uses to calibrate planning.
+- **Not invoked automatically**: stage skills are heavy, so in Claude Code they set `disable-model-invocation` and run only when you type `/hq-plan`; on other hosts the skill description ("use only when the user types it explicitly") is the fallback.
 
 ## Autonomous execution and stop conditions
 - The main session decides technical approach, models, task split and retries on its own, and logs each decision in the ledger's "Decisions" section.
