@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Static checks for a /hq-design clickable prototype. Read-only, Python stdlib only.
 
-  prototype-check.py <prototype dir> [--prd <prd.md>] [--format md|json]
+  prototype-check.py <prototype dir> [--prd <prd.md>] [--format md|json] [--foreign] [--allow-external]
+
+Without manifest.js (or with --foreign) the directory is treated as an adopted, foreign-format prototype
+(plain .html files): local links/resources must exist, no external network resources, and with --prd
+requirement IDs from the PRD that never appear in any HTML file are warned about (a coverage signal only).
 
 Exit codes: 0 no errors (warnings allowed), 1 errors found, 2 bad arguments / unreadable manifest.
 Format: skills/hq-design/prototype-schema.md
@@ -12,6 +16,7 @@ import json
 import os
 import re
 import sys
+from urllib.parse import unquote
 from collections import deque
 from html.parser import HTMLParser
 
@@ -22,6 +27,12 @@ ACTIONS = {"goto", "click", "fill", "select", "expect", "see"}
 REQUIRED_INCLUDES = ["../manifest.js", "../data/seed.js", "../assets/app.js", "../assets/tokens.css", "../assets/base.css"]
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 TESTID_RE = re.compile(r"^\[data-testid=['\"]?([\w-]+)['\"]?\]$")
+RESOURCE_TAGS = {"script", "link", "img", "iframe", "source", "video", "audio", "embed"}
+# requirement-like IDs (same shape as backlog-check.py: upper-case prefix, dash, number), taken where they
+# are defined: at the start of a heading, list item or table cell, optionally in bold
+ID_DEF_RE = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)?(?:\*\*|`)?([A-Z][A-Z0-9]*-\d+)\b", re.M)
+COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+SKIP_DIRS = {"node_modules", ".git", "__pycache__"}
 
 
 def load_manifest(root):
@@ -40,6 +51,7 @@ class Page(HTMLParser):
     def __init__(self):
         super().__init__()
         self.refs, self.navs, self.testids, self.states, self.external = [], [], set(), set(), []
+        self.external_res = []  # (tag, url) for resources the page loads from the network
         self.body_page = None
         self.style_text = []
         self._in_style = False
@@ -54,6 +66,8 @@ class Page(HTMLParser):
                 continue
             if re.match(r"^(https?:)?//", v):
                 self.external.append(v)
+                if tag in RESOURCE_TAGS and not (tag == "link" and (a.get("rel") or "").lower() in ("canonical", "alternate")):
+                    self.external_res.append((tag, v))
             elif not re.match(r"^(#|mailto:|tel:|javascript:|data:|\?)", v) and v:
                 self.refs.append(v)
         if a.get("data-hq-nav"):
@@ -307,6 +321,65 @@ def check(root, prd_text=None):
     return man, errs, warns, summary
 
 
+def html_files(root):
+    out = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+        out += [os.path.join(d, f) for f in sorted(files) if f.lower().endswith((".html", ".htm"))]
+    return out
+
+
+def prd_ids(text, prefixes=None):
+    """Requirement-like IDs defined in a PRD of any format, in order of first appearance."""
+    text = COMMENT_RE.sub("", text.replace("\r\n", "\n"))
+    if prefixes:
+        found = re.findall(r"\b((?:%s)-\d+)\b" % "|".join(map(re.escape, prefixes)), text)
+    else:
+        found = ID_DEF_RE.findall(text)
+    return list(dict.fromkeys(found))
+
+
+
+def check_foreign(root, prd_text=None, allow_external=False, prefixes=None):
+    """Baseline checks for an adopted prototype that is just a folder of .html files."""
+    errs, warns = [], []
+    files = html_files(root)
+    if not files:
+        return None, ["目录里没有 .html 文件"], [], {}
+    root_abs = os.path.abspath(root)
+    texts, refs, ext = [], 0, 0
+    for path in files:
+        name = os.path.relpath(path, root)
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        texts.append(text)
+        h = Page()
+        h.feed(text)
+        for tag, x in h.external_res:
+            ext += 1
+            (warns if allow_external else errs).append(
+                "%s: <%s> 引用了外部网络资源 %s；原型要能离线打开，资源放进原型目录" % (name, tag, x))
+        for r in h.refs:
+            refs += 1
+            rel = r.split("#")[0].split("?")[0]
+            if not rel:
+                continue
+            rel = unquote(rel)
+            base = root_abs if rel.startswith("/") else os.path.dirname(os.path.abspath(path))
+            q = os.path.normpath(os.path.join(base, rel.lstrip("/")))
+            if not os.path.exists(q):
+                errs.append("%s: 链接或资源不存在：%s" % (name, r))
+    summary = {"html": len(files), "local_refs": refs, "external": ext}
+    if prd_text is not None:
+        ids = prd_ids(prd_text, prefixes)
+        blob = "\n".join(texts)
+        missing = [i for i in ids if not re.search(r"(?<![\w-])%s(?!\d)" % re.escape(i), blob)]
+        for i in missing:
+            warns.append("需求: %s 在任何 HTML 文件里都没出现（只是覆盖信号，不代表没做）" % i)
+        summary.update(prd_ids=len(ids), prd_ids_missing=len(missing))
+    return {"files": [os.path.relpath(f, root) for f in files]}, errs, warns, summary
+
+
 def flow_pages(flows):
     out = set()
     for f in flows:
@@ -323,6 +396,9 @@ def main(argv=None):
     ap.add_argument("prototype_dir")
     ap.add_argument("--prd", metavar="FILE")
     ap.add_argument("--format", choices=["md", "json"], default="md")
+    ap.add_argument("--foreign", action="store_true", help="treat as a foreign-format prototype (auto when no manifest.js)")
+    ap.add_argument("--allow-external", action="store_true", help="foreign mode: external network resources are warnings, not errors")
+    ap.add_argument("--id-prefixes", metavar="P1,P2", help="foreign mode with --prd: only collect IDs with these prefixes (anywhere in the PRD)")
     a = ap.parse_args(argv)
     if not os.path.isdir(a.prototype_dir):
         print("错误: 不是目录：%s" % a.prototype_dir, file=sys.stderr)
@@ -335,15 +411,27 @@ def main(argv=None):
         except OSError as e:
             print("错误: 读不了 %s: %s" % (a.prd, e), file=sys.stderr)
             return 2
-    man, errs, warns, summary = check(a.prototype_dir, prd)
+    foreign = a.foreign or not os.path.isfile(os.path.join(a.prototype_dir, "manifest.js"))
+    if foreign:
+        prefixes = [x.strip() for x in (a.id_prefixes or "").split(",") if x.strip()]
+        man, errs, warns, summary = check_foreign(a.prototype_dir, prd, a.allow_external, prefixes)
+    else:
+        man, errs, warns, summary = check(a.prototype_dir, prd)
     if man is None:
         print("错误: %s" % errs[0], file=sys.stderr)
         return 2
+    mode = "foreign" if foreign else "hq"
     if a.format == "json":
-        print(json.dumps({"errors": errs, "warnings": warns, "summary": summary}, ensure_ascii=False, indent=2))
+        out = {"mode": mode, "errors": errs, "warnings": warns, "summary": summary}
+        if foreign:
+            out["files"] = man["files"]
+        print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
-        print("# 原型检查：%s\n" % a.prototype_dir)
+        print("# 原型检查（%s）：%s\n" % ("外来格式，无 manifest.js" if foreign else "hq 格式", a.prototype_dir))
         print("、".join("%s %s" % (k, v) for k, v in summary.items()))
+        if foreign:
+            print("\n## 页面（%d）" % len(man["files"]))
+            print("\n".join("- " + x for x in man["files"]))
         print("\n## 错误（%d）" % len(errs))
         print("\n".join("- " + x for x in errs) or "- 无")
         print("\n## 警告（%d）" % len(warns))
