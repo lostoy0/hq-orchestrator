@@ -50,7 +50,7 @@ SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv
 DOC_ROOTS = ["docs", "doc", "documentation", ".opc", "specs", "spec"]  # checked in this order
 # directories that exist to hold a set of files: the directory is the artifact, so files added later are noticed
 COLLECTION_DIR_RE = re.compile(r"(^|/)(adrs?|contracts?|api[-_]?specs?|prototype|原型|mockups?|wireframes?)$", re.I)
-FROZEN_RE = re.compile(r"已冻结|冻结版|\bfrozen\b|status:\s*approved|\|\s*状态\s*\|\s*(已批准|已确认)", re.I)
+FROZEN_RE = re.compile(r"已冻结|冻结版|\bfrozen\b|status:\s*approved|\|\s*状态\s*\|\s*(已批准|已确认)|v\d[\d.]*\s*(已确认|已批准|已签字)", re.I)
 # discovery heuristics: (stage, regex on the repo-relative path)
 DISCOVER = [
     ("research", re.compile(r"(competitor|竞品|market[-_ ]?research|调研)[^/]*\.md$", re.I)),

@@ -142,7 +142,7 @@ def foreign_repo(tmp):
     write(os.path.join(r, ".opc", "product", "prd.md"), "# 需求文档\n\n| 项 | 值 |\n|---|---|\n| 状态 | 已冻结 |\n\n### REQ-001 〔P0〕登录\n")
     write(os.path.join(r, ".opc", "product", "prototype", "index.html"), "<html></html>")
     write(os.path.join(r, ".opc", "product", "prototype", "web.html"), "<html></html>")
-    write(os.path.join(r, ".opc", "tech", "design.md"), "# 技术设计\n")
+    write(os.path.join(r, ".opc", "tech", "design.md"), "# 技术设计\n\n设计 v1.0 已确认（G2，2026-11-24）\n")
     write(os.path.join(r, ".opc", "tech", "adr", "ADR-001-a.md"), "# a\n")
     write(os.path.join(r, ".opc", "tech", "adr", "ADR-002-b.md"), "# b\n")
     write(os.path.join(r, ".opc", "tech", "contracts", "api.yaml"), "openapi: 3.0.0\n")
@@ -169,6 +169,8 @@ class ForeignArtifactsTest(unittest.TestCase):
             self.assertEqual(st["prd"], {"format": "foreign", "paths": [".opc/product/prd.md"], "frozen": True})
             self.assertEqual(st["design"]["paths"], [".opc/product/prototype"])
             self.assertEqual(st["arch"]["paths"], [".opc/tech/adr", ".opc/tech/contracts", ".opc/tech/design.md"])
+            self.assertTrue(st["arch"]["frozen"])  # "设计 v1.0 已确认"
+            self.assertFalse(st["plan"]["frozen"])
             self.assertEqual(st["plan"]["paths"], [".opc/plan/v1.dag.yaml"])
             self.assertNotIn("research", st)
 
