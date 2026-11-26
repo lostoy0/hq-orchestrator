@@ -68,6 +68,7 @@ skills/hq/scripts/doc-check.py         需求文档、竞品调研报告、架�
 skills/hq/scripts/prototype-check.py   可点击原型静态检查（只读）
 skills/hq/scripts/prototype-walk.mjs   可点击原型自动走查：逐页逐状态截图、执行流程（需要 Playwright）
 skills/hq/scripts/stage-status.py      列出各阶段产物的状态（齐不齐、检查结果、是否过期），只读
+skills/hq/scripts/fetch-page.py        用 curl 走会话代理抓取网页正文（宿主自带的抓取工具打不开时，调研用它）
 docs/design-stages.md                  阶段技能设计草案和路线图
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词

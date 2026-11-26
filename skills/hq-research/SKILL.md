@@ -41,7 +41,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 开始前按 `common.md` 第 7 节确认主会话和要派的子会话能联网。
 
-- **能联网**：元数据 `mode: online`。
+- **能联网**：元数据 `mode: online`。派 r2、r3 前，用子会话会用的同一个抓取工具实际打开一个来源；宿主自带的抓取工具打不开、`curl` 能打开时，在说明里写明改用 `python3 <hq>/scripts/fetch-page.py <URL> [字数]`。
 - **不能联网，也没有 `--offline`**：停下来告诉用户，不开始调研：“这个会话不能联网，竞品调研需要查证公开信息。可以：1. 换一个能联网的会话运行；2. 加 `--offline`，按模型知识先写一版，报告会标明未核实。”
 - **`--offline`**：元数据 `mode: offline`，正文开头保留模板里的“未联网”说明（写明模型知识的截止时间）；不要求来源，但定价、用户规模这类数字一律写“未核实”；汇报里建议联网后重跑。
 
