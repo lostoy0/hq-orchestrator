@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>页面标题</title>
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/base.css">
+</head>
+<!-- 新页面复制本文件（文件名不要以 _ 开头），把 P-xx 换成 manifest.js 里的编号。
+     manifest 里这一页声明的每种状态都要有对应的 data-hq-state 区块；不适用的状态写进 manifest 的 na 并写原因。
+     一个区块属于几种状态时用空格分开（如 data-hq-state="default error"）。
+     需要点击、输入的元素加 data-testid，流程（flows）用它定位。只用 tokens.css 的变量，不写死颜色。 -->
+<body data-hq-page="P-xx">
+  <div class="app">
+    <header class="header"><div class="title">页面标题</div></header>
+    <main class="main">
+      <section data-hq-state="default"></section>
+      <section data-hq-state="loading" hidden aria-busy="true"></section>
+      <section data-hq-state="empty" hidden></section>
+      <section data-hq-state="error" hidden></section>
+      <section data-hq-state="forbidden" hidden></section>
+      <section data-hq-state="first" hidden></section>
+    </main>
+  </div>
+  <script src="../manifest.js"></script>
+  <script src="../data/seed.js"></script>
+  <script src="../assets/app.js"></script>
+  <script>
+    // 页面逻辑：用 HQ.api() 模拟接口，HQ.show() 切换状态，HQ.go("P-xx") 跳转，HQ.db 读写模拟数据。
+  </script>
+</body>
+</html>

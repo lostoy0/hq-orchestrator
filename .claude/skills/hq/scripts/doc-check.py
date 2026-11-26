@@ -3,9 +3,11 @@
 
   doc-check.py prd <prd.md>            requirements doc written by /hq-prd
   doc-check.py research <report.md>    competitor research written by /hq-research
+  doc-check.py arch <architecture.md> [--detailed <detailed-design.md>] [--prd <prd.md>]
+                                       architecture written by /hq-arch (ADRs read from adr/ next to it)
 
 Exit codes: 0 no errors (warnings allowed), 1 errors found, 2 bad arguments / unreadable file.
-Formats: skills/hq-prd/template.md, skills/hq-research/template.md
+Formats: skills/hq-prd/template.md, skills/hq-research/template.md, skills/hq-arch/template-*.md
 """
 import argparse
 import json
@@ -332,23 +334,243 @@ def check_research(text):
     return errs, warns, summary
 
 
+ARCH_SECTIONS = ["概述与约束", "系统上下文", "容器视图", "模块", "数据架构", "关键流程", "部署与环境",
+                 "非功能设计", "需求映射", "技术选型", "风险与待验证", "假设与待确认"]
+# 章节 -> 允许的 Mermaid 图类型（skills/hq-arch/diagram-style.md）
+ARCH_DIAGRAMS = {"系统上下文": ("flowchart", "graph", "C4Context"), "容器视图": ("flowchart", "graph", "C4Container"),
+                 "数据架构": ("erDiagram", "classDiagram"), "关键流程": ("sequenceDiagram",),
+                 "部署与环境": ("flowchart", "graph", "C4Deployment")}
+DETAILED_SECTIONS = ["目录结构", "模块详细设计", "接口", "数据模型", "安全", "可观测", "测试策略", "配置"]
+ADR_STATUS = ("提议中", "已采纳", "已替代", "已废弃")
+MAX_NODES = 20
+MERMAID_RE = re.compile(r"```mermaid[ \t]*\n(.*?)```", re.S)
+NODE_RE = re.compile(r"(?<![\w-])([A-Za-z_]\w*)\s*(?:\(\[|\[\(|\(\(|\[\[|\[|\(|\{)")
+EDGE_RE = re.compile(r"(?:-->|-\.->|==>)(\|[^|]*\|)?")
+
+
+def diagram_kind(block):
+    for line in block.splitlines():
+        line = line.strip()
+        if line and not line.startswith("%%"):
+            return line.split()[0]
+    return ""
+
+
+def diagram_body_lines(block):
+    return [l for l in block.splitlines()[1:] if l.strip() and not l.strip().startswith(("%%", "classDef", "class "))]
+
+
+def flow_stats(block):
+    """(node ids, edges, labeled edges) of a flowchart; quoted labels and subgraph titles are ignored."""
+    nodes, edges, labeled = set(), 0, 0
+    for line in block.splitlines()[1:]:
+        s = line.strip()
+        if not s or s.startswith(("%%", "classDef", "class ", "style ", "linkStyle", "end", "direction")):
+            continue
+        s = re.sub(r'"[^"]*"', '""', s)
+        if s.startswith("subgraph"):
+            continue
+        nodes.update(NODE_RE.findall(s))
+        for m in EDGE_RE.finditer(s):
+            edges += 1
+            labeled += 1 if m.group(1) else 0
+        # A -- 文本 --> B 形式的标签
+        labeled += len(re.findall(r"--\s*[^->|\s][^>]*?-->", s))
+    return nodes, edges, labeled
+
+
+def prd_requirements(text):
+    """{id: priority} for F-/NFR- headings of a /hq-prd document."""
+    _, body, _ = split_frontmatter(text.replace("\r\n", "\n"))
+    body = COMMENT_RE.sub("", body)
+    out = {}
+    for lv, t, st, end in headings(body):
+        m = re.match(r"^((?:F|NFR)-\d{3,})\b", t)
+        if lv == 3 and m:
+            out[m.group(1)] = (fields(body[st:end]).get("优先级") or [""])[0]
+    return out
+
+
+def check_adrs(adr_dir, E, W):
+    import os
+    found = {}
+    if not os.path.isdir(adr_dir):
+        return found
+    for f in sorted(os.listdir(adr_dir)):
+        m = re.match(r"^(\d{4})-.+\.md$", f)
+        if not m:
+            continue
+        aid = "ADR-" + m.group(1)
+        w = "%s（%s）" % (aid, f)
+        with open(os.path.join(adr_dir, f), encoding="utf-8", errors="replace") as fh:
+            t = COMMENT_RE.sub("", fh.read())
+        found[aid] = f
+        if not re.search(r"^#\s+" + aid + r"\b", t, re.M):
+            E(w, "标题必须以“# %s”开头" % aid)
+        st = re.search(r"^- 状态[：:]\s*(\S+)", t, re.M)
+        if not st or not st.group(1).startswith(ADR_STATUS):
+            E(w, "状态必须是 %s 之一" % "/".join(ADR_STATUS))
+        hs = headings(t)
+        for k in ("背景", "选项", "决定", "后果"):
+            sec = section(t, hs, k)
+            if sec is None:
+                E(w, "缺少二级标题“%s”" % k)
+            elif not [l for l in sec.splitlines()[1:] if l.strip()]:
+                E(w, "“%s”是空的" % k)
+        opts = section(t, hs, "选项") or ""
+        if len(re.findall(r"^\s*(?:\d+[.、)]|[-*])\s*\S", opts, re.M)) < 2:
+            E(w, "选项至少写 2 个")
+    return found
+
+
+def check_arch(text, path=None, detailed=None, prd=None):
+    import os
+    errs, warns = [], []
+    E = lambda w, m: errs.append("%s: %s" % (w, m))
+    W = lambda w, m: warns.append("%s: %s" % (w, m))
+    meta, body, has_fm = split_frontmatter(text)
+    body = COMMENT_RE.sub("", body)
+    check_common(meta, has_fm, "arch", E, W)
+    hs = headings(body)
+    for k in ARCH_SECTIONS:
+        if section(body, hs, k) is None:
+            E("章节", "缺少二级标题“%s”" % k)
+
+    diagrams = 0
+    for k, kinds in ARCH_DIAGRAMS.items():
+        sec = section(body, hs, k)
+        if sec is None:
+            continue
+        blocks = MERMAID_RE.findall(sec)
+        if not any(diagram_kind(b) in kinds for b in blocks):
+            E(k, "缺少 Mermaid 图（%s）" % " / ".join(kinds))
+        for b in blocks:
+            if not diagram_body_lines(b):
+                E(k, "有一张 %s 图是空的" % (diagram_kind(b) or "Mermaid"))
+    for i, b in enumerate(MERMAID_RE.findall(body), 1):
+        diagrams += 1
+        if diagram_kind(b) not in ("flowchart", "graph"):
+            continue
+        nodes, edges, labeled = flow_stats(b)
+        w = "第 %d 张图" % i
+        if len(nodes) > MAX_NODES:
+            W(w, "有 %d 个节点（>%d），建议拆图或收成子图" % (len(nodes), MAX_NODES))
+        if len(nodes) >= 6 and "classDef" not in b:
+            W(w, "没有用统一配色（diagram-style.md 的 classDef）")
+        if edges and labeled / edges < 0.5:
+            W(w, "%d 条连线里只有 %d 条写了标签" % (edges, labeled))
+
+    mods = {}
+    for lv, t, st, end in hs:
+        m = re.match(r"^(M-\d{2,})\b\s*(.*)$", t)
+        if lv != 3 or not m:
+            continue
+        mid = m.group(1)
+        if mid in mods:
+            E(mid, "编号重复"); continue
+        f = fields(body[st:end])
+        mods[mid] = f
+        if blank(m.group(2)) or PLACEHOLDER_RE.search(m.group(2)):
+            E(mid, "标题缺少名称")
+        for k in ("职责", "依赖", "关联需求"):
+            v = " ".join(f.get(k, []))
+            if blank(v) or PLACEHOLDER_RE.search(v):
+                E(mid, "缺“%s”" % k)
+    if not mods:
+        E("模块", "没有任何模块（三级标题“### M-01 名称”）")
+
+    reqs = prd_requirements(prd) if prd is not None else {}
+    mapped = {}
+    mp = section(body, hs, "需求映射")
+    if mp is not None:
+        for r in table_rows(mp):
+            if not r or not re.match(r"^(F|NFR)-\d{3,}$", r[0]):
+                continue
+            ms = re.findall(r"M-\d{2,}", r[1] if len(r) > 1 else "")
+            if not ms:
+                E("需求映射", "%s 没写模块" % r[0])
+            for x in ms:
+                if x not in mods:
+                    E("需求映射", "%s 对应的 %s 不存在" % (r[0], x))
+            mapped[r[0]] = ms
+            if prd is not None and r[0] not in reqs:
+                E("需求映射", "%s 在需求文档里不存在" % r[0])
+    if prd is not None:
+        for rid, pr in sorted(reqs.items()):
+            if rid in mapped:
+                continue
+            if rid.startswith("NFR-") or pr == "P0":
+                E("需求映射", "%s（%s）没有落到任何模块" % (rid, pr or "?"))
+            elif pr == "P1":
+                W("需求映射", "%s（P1）没有落到任何模块" % rid)
+        for mid, f in mods.items():
+            for x in re.findall(r"\b(?:F|NFR)-\d{3,}\b", " ".join(f.get("关联需求", []))):
+                if x not in reqs:
+                    E(mid, "关联需求 %s 在需求文档里不存在" % x)
+
+    adr_dir = os.path.join(os.path.dirname(os.path.abspath(path)), "adr") if path else None
+    adrs = check_adrs(adr_dir, E, W) if adr_dir else {}
+    tech = section(body, hs, "技术选型") or ""
+    for x in sorted(set(re.findall(r"ADR-\d{4}", tech + (mp or "")))):
+        if x not in adrs:
+            E("技术选型", "引用了 %s，但 adr/ 下没有 %s-*.md" % (x, x[4:]))
+    if not adrs:
+        W("ADR", "adr/ 下没有任何决策记录，重要的技术选择要写 ADR")
+
+    if detailed is not None:
+        dmeta, dbody, dfm = split_frontmatter(detailed.replace("\r\n", "\n"))
+        dbody = COMMENT_RE.sub("", dbody)
+        check_common(dmeta, dfm, "arch-detailed", lambda w, m: E("详细设计 " + w, m), W)
+        dhs = headings(dbody)
+        for k in DETAILED_SECTIONS:
+            if section(dbody, dhs, k) is None:
+                E("详细设计", "缺少二级标题“%s”" % k)
+        dmods = {re.match(r"^(M-\d{2,})", t).group(1) for lv, t, _, _ in dhs if lv == 3 and re.match(r"^M-\d{2,}", t)}
+        for mid in sorted(set(mods) - dmods):
+            E("详细设计", "缺少 %s 的详细设计（三级标题“### %s …”）" % (mid, mid))
+        for mid in sorted(dmods - set(mods)):
+            E("详细设计", "%s 在架构设计里不存在" % mid)
+        api = section(dbody, dhs, "接口")
+        if api is not None and not [r for r in table_rows(api) if r and not blank(r[0])]:
+            W("详细设计", "接口表是空的")
+
+    ds = open_decisions(body, hs)
+    if ds and meta.get("status") == "approved":
+        E("元数据", "还有待决定事项 %s，status 不能是 approved" % ", ".join(ds))
+    summary = {"modules": len(mods), "diagrams": diagrams, "adrs": len(adrs), "mapped": len(mapped),
+               "open_decisions": ds}
+    return errs, warns, summary
+
+
+TITLES = {"prd": "需求文档", "research": "竞品调研", "arch": "架构设计"}
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Mechanical checks for /hq-prd and /hq-research documents (read-only)")
-    ap.add_argument("kind", choices=["prd", "research"])
+    ap = argparse.ArgumentParser(description="Mechanical checks for /hq-prd, /hq-research and /hq-arch documents (read-only)")
+    ap.add_argument("kind", choices=["prd", "research", "arch"])
     ap.add_argument("file")
+    ap.add_argument("--prd", metavar="FILE", help="arch: requirements doc to check the mapping against")
+    ap.add_argument("--detailed", metavar="FILE", help="arch: detailed design doc to check alongside")
     ap.add_argument("--format", choices=["md", "json"], default="md")
     a = ap.parse_args(argv)
-    try:
-        with open(a.file, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError as e:
-        print("错误: 读不了 %s: %s" % (a.file, e), file=sys.stderr)
-        return 2
-    errs, warns, summary = (check_prd if a.kind == "prd" else check_research)(text.replace("\r\n", "\n"))
+    texts = {}
+    for k, p in (("file", a.file), ("prd", a.prd), ("detailed", a.detailed)):
+        if p is None:
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                texts[k] = fh.read().replace("\r\n", "\n")
+        except OSError as e:
+            print("错误: 读不了 %s: %s" % (p, e), file=sys.stderr)
+            return 2
+    if a.kind == "arch":
+        errs, warns, summary = check_arch(texts["file"], a.file, texts.get("detailed"), texts.get("prd"))
+    else:
+        errs, warns, summary = (check_prd if a.kind == "prd" else check_research)(texts["file"])
     if a.format == "json":
         print(json.dumps({"errors": errs, "warnings": warns, "summary": summary}, ensure_ascii=False, indent=2))
     else:
-        print("# %s 检查：%s\n" % ("需求文档" if a.kind == "prd" else "竞品调研", a.file))
+        print("# %s 检查：%s\n" % (TITLES[a.kind], a.file))
         print("、".join("%s %s" % (k, v) for k, v in summary.items()))
         print("\n## 错误（%d）" % len(errs))
         print("\n".join("- " + x for x in errs) or "- 无")
