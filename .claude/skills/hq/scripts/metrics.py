@@ -18,6 +18,7 @@ import sys
 from datetime import datetime, timezone
 
 MIN_N = 3
+TIER_ORDER = ["T0", "T1", "T2", "T3", "T4"]
 
 
 def num(x):
@@ -235,7 +236,21 @@ def adjust(tasks):
     }
 
 
-def signals(tiers, models, overall_ratio, effs):
+def plan_accuracy(tasks):
+    """Tasks executed from a /hq-plan backlog carry plan_tier (the planned estimate); tier is what was used."""
+    ts = [t for t in tasks if t.get("plan_tier") in TIER_ORDER and t.get("tier") in TIER_ORDER]
+    n = len(ts)
+    d = [TIER_ORDER.index(t["tier"]) - TIER_ORDER.index(t["plan_tier"]) for t in ts]
+    return {
+        "n": n, "insufficient": n < MIN_N,
+        "same_rate": rate(sum(1 for x in d if x == 0), n),
+        "under_rate": rate(sum(1 for x in d if x > 0), n),  # plan estimated lower than needed
+        "over_rate": rate(sum(1 for x in d if x < 0), n),
+        "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
+    }
+
+
+def signals(tiers, models, overall_ratio, effs, plan=None):
     s = []
     def add(scope, msg, n):
         s.append({"scope": scope, "message": msg, "n": n})
@@ -249,6 +264,11 @@ def signals(tiers, models, overall_ratio, effs):
                 add(sc, "一次通过率 100%%，actual/est 中位数 %.2f (<0.7)，可能存在降档空间" % rm, n)
             if rm is not None and g["ratio_n"] >= 3 and rm > 1.5:
                 add(sc, "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % rm, g["ratio_n"])
+    if plan and plan["n"] >= 5:
+        if plan["under_rate"] is not None and plan["under_rate"] > 0.3:
+            add("plan", "%.0f%% 的计划任务实际用了比预估更高的档位 (>30%%)，/hq-plan 打分偏低" % (plan["under_rate"] * 100), plan["n"])
+        if plan["over_rate"] is not None and plan["over_rate"] > 0.3:
+            add("plan", "%.0f%% 的计划任务实际用了比预估更低的档位 (>30%%)，/hq-plan 打分偏高" % (plan["over_rate"] * 100), plan["n"])
     om, on = overall_ratio
     if om is not None and on >= 3 and om > 1.5:
         add("overall", "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % om, on)
@@ -290,6 +310,7 @@ def build(runs, corrupt):
                    else "main/%s" % s_(t, "tier"), skip)
     rs = [ratio(t) for t in tasks if id(t) not in skip and ratio(t) is not None]
     miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
+    plan = plan_accuracy(tasks)
     return {
         "overview": {"runs": len(ids), "tasks": len(tasks), "corrupt_lines": corrupt,
                      "missing_task_records": sum(miss) if miss else None,
@@ -303,7 +324,8 @@ def build(runs, corrupt):
         "autonomy": {"autonomy_stops": sum(cnt(r.get("autonomy_stops")) for r in rr),
                      "decisions": sum(cnt(r.get("decisions")) for r in rr),
                      "user_corrections": sum(cnt(t.get("user_corrections")) for t in tasks)},
-        "signals": signals(tiers, models, (med(rs), len(rs)), effs),
+        "plan": plan,
+        "signals": signals(tiers, models, (med(rs), len(rs)), effs, plan),
     }
 
 
@@ -349,6 +371,12 @@ def render_md(rep):
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
     if any(g["key"].startswith("assist:") for g in rep["by_assist"]):
         L += ["", "## 3d. 辅助执行者 vs 主宿主（按档位；交接率≈被收回给主宿主的比例）", ""] + table(gh, [grow(g) for g in rep["by_assist"]])
+    p = rep["plan"]
+    if p["n"]:
+        L += ["", "## 3e. 计划预估档位 vs 实际（按计划执行的任务，plan_tier）", ""] + table(
+            ["n", "一致", "预估偏低", "预估偏高", "一次通过率", "备注"],
+            [[p["n"], f(p["same_rate"], "p"), f(p["under_rate"], "p"), f(p["over_rate"], "p"),
+              f(p["first_pass_rate"], "p"), "样本不足" if p["insufficient"] else ""]])
     L += ["", "## 4. 效率", ""]
     L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events", "备注"],
                [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["speedup_ceiling"]),
@@ -418,6 +446,8 @@ def anon_task(t, rid, idx):
     for k in ENUMS:
         if k in t:
             o[k] = a_enum(k, t[k])
+    if "plan_tier" in t:
+        o["plan_tier"] = a_enum("tier", t["plan_tier"])
     for k in ("model", "effort", "assist"):
         if k in t:
             o[k] = a_token(t[k])

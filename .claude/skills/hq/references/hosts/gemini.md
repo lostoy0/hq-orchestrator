@@ -43,7 +43,7 @@
 
 ## 4. 安装与调用
 
-- **扩展**（提供 `/hq`、`/hq-retro` 命令）：`gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref <版本标签>`；子代理模板再用 `./install.sh --host gemini --with-agents --model-map …` 单独装（扩展里不带子代理，原因见 `adapters/gemini/README.md`）。
+- **扩展**（提供 `/hq`、`/hq-retro`、`/hq-plan` 命令）：`gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref <版本标签>`；子代理模板再用 `./install.sh --host gemini --with-agents --model-map …` 单独装（扩展里不带子代理，原因见 `adapters/gemini/README.md`）。
 - **install.sh**：`./install.sh --host gemini --with-agents --model-map …`，技能装到 `~/.gemini/skills`（与其他工具一起装时为 `~/.agents/skills`），子代理装到 `~/.gemini/agents/`（`--scope project` 时为 `<项目>/.gemini/agents/`）。没有 `/hq` 命令，在会话里说“用 hq 技能 + 目标”。
 - 两种都装时用户目录的技能覆盖扩展里的，建议只留一种。
 - 首次运行：
