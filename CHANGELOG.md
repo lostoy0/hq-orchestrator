@@ -20,6 +20,8 @@
 
 ## 未发布
 
+## v0.10.4（2026-11-26）
+
 ### 计划清单：新增 hold（暂缓）状态
 - **改动**：`references/backlog-schema.md` 的任务 `status` 新增 `hold`，配必填的 `hold_reason`。`scripts/backlog-check.py` 接受 `hold`；`hold` 没写 `hold_reason` 报错；没有 hold 的任务依赖 hold 任务报错（会一直等下去）；hold 任务不算进 P0/P1 覆盖、`owns` 重叠检查和关键路径，汇总里单列（`summary.hold`，各版本的 `hold` 数，md 报告的“暂缓”一节）。`/hq` 的 `SKILL.md`“按计划执行”：hold 任务从不派发，汇报里列为等待中并附原因。`/hq-plan` 第 3、4 节：范围变更和其他等别人决定的任务用 `hold`。测试：`tests/test_backlog_check.py` 新增 hold、依赖 hold 报错、hold 不算覆盖。
 - **原因/假设**：在一个真实项目上，有几项范围变更要等客户确认，清单里只能写成 `todo`，`/hq --backlog` 会把它们当成可执行任务派出去。预期等待中的任务和可执行任务分开，派发不会再碰到它们，依赖它们的任务在计划阶段就被发现。
