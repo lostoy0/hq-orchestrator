@@ -1,7 +1,7 @@
 ---
 name: hq-arch
 description: HQ 架构阶段。仅在用户显式输入 /hq-arch 时使用：根据需求文档、设计稿和现有代码，做技术架构设计和详细技术设计，产出带全景架构图（系统上下文、容器、组件、数据、关键流程、部署）的架构文档、详细设计文档和架构决策记录，交付前由开发、安全、测试等角色评审，评审轮次有上限。用户只是提到“架构”“技术方案”时不要自动使用。
-argument-hint: "[补充说明] [--stack <技术偏好>] [--only arch|detailed] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
+argument-hint: "[补充说明] [--stack <技术偏好>] [--only arch|detailed] [--convert] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
 disable-model-invocation: true
 license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
@@ -20,6 +20,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 - 命令后面的文字：补充说明（如“只用 Serverless”“预算每月 50 美元以内”“一个人维护”），作为约束写进台账头部和架构文档第 1 章。
 - `--stack <偏好>`：技术栈偏好（如 `nextjs,postgres`）。与需求或约束冲突时按 `common.md` 第 6 节的优先级取舍，在 ADR 里写明。
+- `--convert`：已有技术设计不是本模板格式时，按本模板重写（默认是接管）。
 - `--only arch|detailed`：只做架构设计，或只在已有架构上补详细设计。
 - `--ask`、`--review-only`、`--rounds N`、`--panel 角色,…`：见 `common.md` 第 4–6 节。默认评审团：`engineer`、`security`、`qa`；有部署、高可用或成本约束时加 `ops`（最多 4 个）。
 
@@ -32,7 +33,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 | 有需求文档 | 正常设计；先运行 `doc-check.py prd`，有错误照常设计，把错误列进“假设与待确认”，汇报里建议先修需求文档 |
 | 没有需求文档，只有想法或设计稿 | 可以设计，但先由侦察任务整理一份需求索引写进架构文档第 1 章，并在“假设与待确认”写明“需求未经评审”；汇报里建议运行 `/hq-prd` |
 | 已有代码 | 以现有架构为起点：先画出现状，改动要写迁移路径；不为了“更好看”推倒重来，除非需求做不到 |
-| 已有架构文档 | 补全模式：按完成标准和 `doc-check.py arch` 找缺项；已有 ADR 不改写，要推翻时新写一条并把旧的标“已替代” |
+| 已有架构或技术设计文档，但不是本模板格式 | 按 `common.md` 第 10 节**接管**：先建或读对应表 `hq-artifacts.json`，再做接管评审（按完成标准判断内容，不看格式），把结果用 `stage-status.py --record-audit` 记下；已冻结的只写提案，没冻结的在原文件里按原结构补缺口，编号照用；ADR 和接口、数据契约照原样接管。缺的图（上下文、容器、部署等）可以作为补充文件加在原目录里，不改原文件结构。只有带 `--convert` 时才按本模板重写 |
+| 已有按本模板写的架构文档 | 补全模式：按完成标准和 `doc-check.py arch` 找缺项；已有 ADR 不改写，要推翻时新写一条并把旧的标“已替代” |
 | 什么都没有，命令后面也没写 | 问用户一句：“要设计架构的产品是什么？一两句话描述，或给需求文档路径。”这是本阶段唯一需要等用户的输入 |
 
 ## 2. 任务图（hq 主流程第 2 步按这个模板拆）
