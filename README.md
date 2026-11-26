@@ -66,7 +66,7 @@ skills/hq/references/backlog-schema.md 计划清单 backlog.json 的格式
 skills/hq/scripts/backlog-check.py     计划清单检查（只读）：编号、依赖、档位与分数、需求覆盖
 skills/hq/scripts/doc-check.py         需求文档、竞品调研报告、架构文档检查（只读）
 skills/hq/scripts/prototype-check.py   可点击原型静态检查（只读）
-skills/hq/scripts/prototype-walk.mjs   可点击原型自动走查：逐页逐状态截图、执行流程（需要 Playwright）
+skills/hq/scripts/prototype-walk.mjs   可点击原型自动走查：逐页逐状态截图、执行流程（需要 Playwright）；两个原型脚本都有外来格式模式，接管没有 manifest.js 的普通 HTML 原型时查基线，项目流程用 --script 补
 skills/hq/scripts/stage-status.py      列出各阶段产物的状态（齐不齐、检查结果、是否过期），只读
 skills/hq/scripts/fetch-page.py        用 curl 走会话代理抓取网页正文（宿主自带的抓取工具打不开时，调研用它）
 docs/design-stages.md                  阶段技能设计草案和路线图
