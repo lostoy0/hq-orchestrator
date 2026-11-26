@@ -66,7 +66,7 @@ skills/hq/references/backlog-schema.md format of the backlog.json plan
 skills/hq/scripts/backlog-check.py     backlog checker (read-only): ids, dependencies, tier vs score, requirement coverage
 skills/hq/scripts/doc-check.py         requirements doc, research report and architecture checker (read-only)
 skills/hq/scripts/prototype-check.py   clickable prototype static checker (read-only)
-skills/hq/scripts/prototype-walk.mjs   clickable prototype walk-through: screenshots every page and state, runs flows (needs Playwright)
+skills/hq/scripts/prototype-walk.mjs   clickable prototype walk-through: screenshots every page and state, runs flows (needs Playwright); both prototype scripts have a foreign mode that runs baseline checks on adopted plain-HTML prototypes without manifest.js, with project flows added via --script
 skills/hq/scripts/stage-status.py      reports each stage's outputs: complete or not, check results, stale or not (read-only)
 skills/hq/scripts/fetch-page.py        fetches a page's text with curl through the session proxy (for research when the host's own fetch tool cannot reach sites)
 docs/design-stages.md                  design draft and roadmap for stage skills (in Chinese)

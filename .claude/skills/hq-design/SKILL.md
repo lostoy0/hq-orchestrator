@@ -58,6 +58,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 | g9 修改与复核 | 按分诊结果修改，再跑一次 g6；第 1 轮有 blocker 或 major 时做第 2 轮评审 | code / review | 同 g5 / g8 | g8 |
 
 - 产品小（页面少于约 6 个）时，g4、g5 合成一个任务。
+- 接管的外来格式原型（普通 .html 文件、自带状态切换，没有 `manifest.js`）：g6 照样跑这两个脚本，它们自动进入外来格式模式，只查通用基线（本地链接、外部资源、报错、失败请求、页内 `#` 路由）；原型自己的状态和流程写成 `--script` 项目脚本存在 `.hq/` 下，格式见 `prototype-schema.md` 的“外来格式原型”。
 - 没有 Playwright（`prototype-walk.mjs` 退出码 3）时，g6 只跑静态检查，g7 改为在宿主的浏览器工具里手动打开主要页面截图；都做不到时在评审记录里写明“未自动走查”。
 - 带 `--figma` 且连了 Figma 时，g9 之后把截图按流程顺序推送到一个新的 Figma 文件（按 Figma 技能的要求先建会话），文件链接写进汇报。
 

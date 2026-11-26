@@ -62,4 +62,29 @@ node <hq 技能目录>/scripts/prototype-walk.mjs design/prototype --out design/
 ```
 
 - `prototype-check.py`（只读，只要 Python）：清单格式、文件存在、状态区块齐全、本地链接都能打开、页面都能从入口走到、流程引用的页面和 testid 存在、没有引用外部网络资源、页面里没写死颜色；带 `--prd` 时检查每个有界面的 P0/P1 功能都有页面、P0 功能都有流程覆盖。
-- `prototype-walk.mjs`（需要 Node 和 Playwright）：启动本地服务，逐页逐状态打开并截图到 `--out`，记录控制台报错，按 `flows` 逐步执行。退出码 0 = 全部通过，1 = 有失败，3 = 没有 Playwright（跳过走查，在评审记录里写明）。
+- `prototype-walk.mjs`（需要 Node 和 Playwright）：启动本地服务，逐页逐状态打开并截图到 `--out`，记录控制台报错，按 `flows` 逐步执行。退出码 0 = 全部通过，1 = 有失败，2 = 参数错误或清单、脚本读不了，3 = 没有 Playwright（跳过走查，在评审记录里写明）。
+
+## 外来格式原型
+
+接管的原型如果只是一组普通 .html 文件（自带状态切换，没有 `manifest.js`），两个脚本自动进入外来格式模式（也可加 `--foreign` 强制），报告开头会写明模式：
+
+```bash
+python3 <hq 技能目录>/scripts/prototype-check.py <原型目录> [--prd <需求文档>] [--allow-external] [--id-prefixes REQ,NFR]
+node <hq 技能目录>/scripts/prototype-walk.mjs <原型目录> [--pages a.html,b.html] [--max-views 200] [--script .hq/prototype-flows.mjs] [--viewport 390x844] [--out <截图目录>]
+```
+
+- `prototype-check.py`：列出所有 .html；本地的 `href`/`src`（`#` 锚点、`data:`、`mailto:`、`tel:` 除外）都要指向存在的文件；`script`、`link`、`img` 等引用 http/https 外部资源算错误（`--allow-external` 降为警告）。带 `--prd` 时从需求文档里收集编号（标题、列表、表格开头的“大写前缀-数字”，或 `--id-prefixes` 指定的前缀），在哪个 HTML 里都没出现的给警告：这只是覆盖信号，不代表没做。
+- `prototype-walk.mjs`：打开顶层每个 .html（或 `--pages` 指定的），跟着页内 `a[href^="#"]` 和 `[data-page]` 发现的 `#` 路由逐个打开，最多 `--max-views` 个；记录控制台报错、页面异常、失败的请求和 HTTP ≥400；有 `--out` 时每个视图截一张图。
+- `--script <file.mjs>`：项目自己的状态和流程。走查器负责本地服务、报错收集和报告，脚本只写操作：
+
+```js
+// .hq/prototype-flows.mjs
+export default async ({ page, context, baseUrl, step, check, shot }) => {
+  await step("打开购物车", () => page.goto(baseUrl + "cart.html"));
+  await step("加入商品甲", () => page.click("#add"));
+  await check(async () => (await page.textContent("#count")) === "1", "购物车数量是 1");
+  await shot("cart-after-add");
+};
+```
+
+`step(名称[, 函数])` 开始一步（之后收集到的报错算在这一步；给了函数就执行它，抛错记为这一步失败）；`check(条件, 名称)` 记一条断言（条件可以是值、Promise 或函数）；`shot(名称)` 截当前页（没有 `--out` 时不截）。脚本运行期间收集到的报错都算失败。报告列出视图、步骤、断言、失败和全部报错；退出码同上。
