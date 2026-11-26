@@ -7,11 +7,14 @@
 //
 // Foreign format (no manifest.js, or --foreign): an adopted folder of plain .html files. Serve it, open each
 // top-level .html (or --pages a.html,b.html), record console errors, page errors, failed requests and
-// HTTP >= 400, follow in-page hash routes (a[href^="#"], [data-page]) up to --max-views, and optionally run
-// a project script for states and flows:
+// HTTP >= 400, follow in-page hash routes (a[href^="#"], [data-page]) up to --max-views, warn when visible
+// text shows [object Object] / undefined / NaN, and optionally run a project script for states and flows.
+// Without --script this is only a smoke test: it opens pages, it does not sign in or switch states or roles.
 //   node prototype-walk.mjs <dir> --foreign [--pages a.html,b.html] [--max-views 200] [--script flows.mjs]
 //        [--viewport 390x844] [--out <dir>] [--format md|json] [--scale 1|2]
-// The script's default export is `async ({ page, context, baseUrl, step, check, shot }) => {}`:
+// The script's default export is `async ({ page, context, baseUrl, step, check, shot }) => {}`.
+// baseUrl is the served directory root with no trailing slash: page.goto(baseUrl + "/cart.html").
+// The script's console output goes to stderr and into the report (script_log), never to stdout.
 //   step(label[, fn])  start a named step (errors captured from now on are attributed to it); with fn, run it
 //                      and record a thrown error as a failure of that step
 //   check(cond, label) record an assertion (cond may be a value, a promise or a function)
@@ -75,11 +78,28 @@ if (!foreign) {
     if (!existsSync(scriptPath)) { console.error("错误: 脚本不存在：" + scriptOpt); process.exit(2); }
   }
 }
+// The project script's console output must not reach stdout (it would break --format json): send it to
+// stderr and keep it for the report while the script is loaded and while it runs.
+const scriptLog = [];
+const CONSOLE = ["log", "info", "warn", "error", "debug"];
+const realConsole = Object.fromEntries(CONSOLE.map((k) => [k, console[k]]));
+const redirectConsole = (on) => {
+  for (const k of CONSOLE) {
+    console[k] = on ? (...a) => {
+      const line = a.map((x) => (typeof x === "string" ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })())).join(" ");
+      if (scriptLog.length < 500) scriptLog.push((k === "log" ? "" : k + ": ") + line);
+      process.stderr.write("[script] " + line + "\n");
+    } : realConsole[k];
+  }
+};
 let scriptFn = null;
 if (scriptPath) {
   try {
+    redirectConsole(true);
     scriptFn = (await import(pathToFileURL(scriptPath).href)).default;
+    redirectConsole(false);
   } catch (e) {
+    redirectConsole(false);
     console.error("错误: 载入脚本失败：" + e.message.split("\n")[0]);
     process.exit(2);
   }
@@ -103,7 +123,8 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
   ".webp": "image/webp", ".gif": "image/gif", ".woff2": "font/woff2", ".woff": "font/woff", ".ico": "image/x-icon" };
 const server = createServer((req, res) => {
-  let p = normalize(join(root, decodeURIComponent(new URL(req.url, "http://x").pathname)));
+  // collapse leading slashes first: new URL("//web.html", base) would read "web.html" as a host and serve index.html
+  let p = normalize(join(root, decodeURIComponent(new URL(req.url.replace(/^\/+/, "/"), "http://x").pathname)));
   if ((p === root || p.startsWith(root + sep)) && existsSync(p) && statSync(p).isDirectory()) p = join(p, "index.html");
   if (!(p === root || p.startsWith(root + sep)) || !existsSync(p) || statSync(p).isDirectory()) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": TYPES[extname(p).toLowerCase()] || "application/octet-stream" });
@@ -217,8 +238,22 @@ async function walkForeign() {
   const mobile = vw < 600;
   const browser = await pw.chromium.launch();
   const context = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: scale, isMobile: mobile, hasTouch: mobile });
-  const res = { mode: "foreign", root, pages: foreignPages, views: [], truncated: false, script: scriptPath, steps: [], assertions: [],
-    errors: [], failures: [], screenshots: 0 };
+  const res = { mode: "foreign", root, pages: foreignPages,
+    coverage: scriptFn ? "smoke+script" : "smoke",
+    note: "默认走查只是冒烟：打开每个页面和页内 # 路由，不登录、不切换状态和角色；状态、角色和流程要用 --script 写项目脚本",
+    views: [], truncated: false, script: scriptPath, steps: [], assertions: [],
+    errors: [], failures: [], warnings: [], script_log: scriptLog, screenshots: 0 };
+  // cheap rendering check: template placeholders that leaked into the visible text
+  const textIssues = (pg) => pg.evaluate(() => {
+    const t = (document.body && document.body.innerText) || "";
+    const re = /\[object Object\]|(?<![\p{L}\p{N}_$])(?:undefined|NaN)(?![\p{L}\p{N}_$])/gu;
+    const out = new Map();
+    for (const m of t.matchAll(re)) {
+      if (out.has(m[0])) continue;
+      out.set(m[0], t.slice(Math.max(0, m.index - 20), m.index + m[0].length + 20).replace(/\s+/g, " ").trim());
+    }
+    return [...out].map(([w, ctx]) => `页面文字里出现 ${w}：…${ctx}…`);
+  }).catch(() => []);
   let sink = null; // where captured errors go right now
   const record = (m) => { if (sink) sink(m); };
   const watchAll = (page) => {
@@ -253,13 +288,14 @@ async function walkForeign() {
     while (queue.length) {
       if (res.views.length >= maxViews) { res.truncated = true; break outer; }
       const hash = queue.shift();
-      const v = { page: file, view: hash, ok: true, errors: [], screenshot: null };
+      const v = { page: file, view: hash, ok: true, errors: [], warnings: [], screenshot: null };
       res.views.push(v);
       sink = (m) => v.errors.push(m);
       try {
         await page.goto("about:blank");
         await page.goto(base + file + hash, { waitUntil: "load", timeout: 10000 });
         await page.waitForTimeout(hash ? 250 : 500);
+        v.warnings.push(...await textIssues(page));
         if (out) { v.screenshot = shotName(file.replace(/\.html?$/i, "") + (hash ? "--" + hash.slice(1) : "")); await page.screenshot({ path: v.screenshot, fullPage: true }); res.screenshots++; }
         for (const h of await discover()) if (!seen.has(h)) { seen.add(h); queue.push(h); }
       } catch (e) { v.errors.push(e.message.split("\n")[0]); }
@@ -275,7 +311,7 @@ async function walkForeign() {
     sp.setDefaultTimeout(5000);
     watchAll(sp);
     let cur = null;
-    const start = (label) => { cur = { label, ok: true, errors: [] }; res.steps.push(cur); return cur; };
+    const start = (label) => { cur = { label, ok: true, errors: [], warnings: [] }; res.steps.push(cur); return cur; };
     sink = (m) => { if (!cur) start("（脚本开始）"); cur.errors.push(m); cur.ok = false; };
     const shot = async (name) => {
       if (!out) return null;
@@ -288,6 +324,17 @@ async function walkForeign() {
       const s = start(String(label));
       if (!fn) return undefined;
       try { return await fn(); } catch (e) { s.errors.push("异常: " + e.message.split("\n")[0]); s.ok = false; return undefined; }
+      finally { if (!sp.isClosed()) s.warnings.push(...await textIssues(sp)); }
+    };
+    // baseUrl has no trailing slash; also accept the older baseUrl + "cart.html" and bare relative paths
+    const baseUrl = base.replace(/\/+$/, "");
+    const goto = sp.goto.bind(sp);
+    sp.goto = (url, o) => {
+      if (typeof url === "string") {
+        if (url.startsWith(baseUrl) && url.length > baseUrl.length && !"/?#".includes(url[baseUrl.length])) url = baseUrl + "/" + url.slice(baseUrl.length);
+        else if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = new URL(url, baseUrl + "/").href;
+      }
+      return goto(url, o);
     };
     const check = async (cond, label) => {
       const a = { label: String(label), ok: false, step: cur ? cur.label : null };
@@ -296,13 +343,16 @@ async function walkForeign() {
       if (!a.ok && out) await shot("failed-" + a.label).catch(() => {});
       return a.ok;
     };
+    redirectConsole(true);
     try {
-      await scriptFn({ page: sp, context, baseUrl: base, step, check, shot });
+      await scriptFn({ page: sp, context, baseUrl, step, check, shot });
       await sp.waitForTimeout(200); // late errors
     } catch (e) {
       if (!cur) start("（脚本）");
       cur.errors.push("脚本异常: " + e.message.split("\n")[0]);
       cur.ok = false;
+    } finally {
+      redirectConsole(false);
     }
     sink = null;
     await sp.close();
@@ -314,18 +364,25 @@ async function walkForeign() {
   for (const s of res.steps) for (const e of s.errors) res.errors.push(`脚本「${s.label}」: ${e}`);
   for (const v of res.views.filter((v) => !v.ok)) res.failures.push(`视图 ${v.page}${v.view}：${v.errors.join("；")}`);
   for (const s of res.steps.filter((s) => !s.ok)) res.failures.push(`步骤「${s.label}」：${s.errors.join("；")}`);
+  for (const v of res.views) for (const w of v.warnings) res.warnings.push(`视图 ${v.page}${v.view}：${w}`);
+  for (const s of res.steps) for (const w of s.warnings || []) res.warnings.push(`步骤「${s.label}」：${w}`);
   for (const a of res.assertions.filter((a) => !a.ok)) res.failures.push(`断言「${a.label}」不成立${a.step ? "（步骤「" + a.step + "」）" : ""}${a.error ? "：" + a.error : ""}`);
 
   if (format === "json") {
     console.log(JSON.stringify(res, null, 2));
   } else {
     const nf = (xs) => xs.filter((x) => !x.ok).length;
-    console.log(`# 原型走查（外来格式，无 manifest.js）：${root}\n`);
+    console.log(`# 原型走查（外来格式，无 manifest.js；${scriptFn ? "冒烟 + 项目脚本" : "只是冒烟"}）：${root}\n`);
+    console.log(scriptFn ? "冒烟部分只打开页面和页内 # 路由；状态、角色和流程只覆盖项目脚本里写到的。\n"
+      : "只是冒烟：打开每个页面和页内 # 路由，记录报错；不登录、不切换状态和角色，不走流程。要检查这些，用 --script <flows.mjs> 写项目脚本。\n");
     console.log(`页面 ${foreignPages.length} 个，视图 ${res.views.length} 个（失败 ${nf(res.views)}）${res.truncated ? "，已达 --max-views " + maxViews + " 上限" : ""}；` +
       `脚本${scriptPath ? ` 步骤 ${res.steps.length} 个（失败 ${nf(res.steps)}），断言 ${res.assertions.length} 条（失败 ${nf(res.assertions)}）` : "：未提供 --script"}；` +
       `截图 ${res.screenshots} 张${out ? "，在 " + out : ""}\n`);
     console.log(`## 失败（${res.failures.length}）`);
     console.log(res.failures.map((x) => "- ✗ " + x).join("\n") || "- 无");
+    console.log(`\n## 警告（${res.warnings.length}）`);
+    console.log(res.warnings.map((x) => "- " + x).join("\n") || "- 无");
+    if (scriptLog.length) console.log(`\n## 脚本输出（${scriptLog.length} 行，前 20 行）\n` + scriptLog.slice(0, 20).map((x) => "    " + x).join("\n"));
     if (res.assertions.length) {
       console.log("\n## 断言");
       for (const a of res.assertions) console.log(`- ${a.ok ? "✓" : "✗"} ${a.label}`);

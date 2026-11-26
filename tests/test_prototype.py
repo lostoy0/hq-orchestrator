@@ -288,6 +288,29 @@ class PrototypeCheckForeignTest(unittest.TestCase):
             rc, out = f.check("--prd", f.prd, "--allow-external", "--id-prefixes", "AC")
             self.assertEqual([w.split()[1] for w in out["warnings"] if w.startswith("需求")], ["AC-002-1"])
 
+    def test_many_missing_ids_are_grouped(self):
+        with Foreign() as f:
+            lines = ["# 需求", "## REQ-001 首页"] + ["- AC-%03d 验收" % i for i in range(1, 26)] + ["- NFR-%02d 非功能" % i for i in range(1, 4)]
+            write(f.prd, "\n".join(lines) + "\n")
+            rc, out = f.check("--prd", f.prd, "--allow-external")
+            w = [x for x in out["warnings"] if x.startswith("需求")]
+            self.assertEqual(len(w), 2, w)
+            self.assertIn("需求: AC 前缀有 25 个编号", w[0])
+            self.assertIn("AC-001、AC-002", w[0])
+            self.assertIn("AC-010…", w[0])
+            self.assertNotIn("AC-011", w[0])
+            self.assertIn("需求: NFR 前缀有 3 个编号", w[1])
+            self.assertEqual(out["summary"]["prd_ids_missing"], 28)
+            self.assertEqual(out["summary"]["prd_ids_missing_by_prefix"], {"AC": 25, "NFR": 3})
+            self.assertIn("REQ-xxx", out["summary"]["hint"])
+            rc, out = f.check("--prd", f.prd, "--allow-external", "--ids-detail")
+            self.assertEqual(len([x for x in out["warnings"] if x.startswith("需求")]), 28)
+            self.assertNotIn("hint", out["summary"])
+            rc, out = f.check("--prd", f.prd, "--allow-external", "--id-prefixes", "NFR")
+            self.assertEqual([x.split()[1] for x in out["warnings"] if x.startswith("需求")], ["NFR-01", "NFR-02", "NFR-03"])
+            r = subprocess.run([sys.executable, CHECK, f.dir, "--prd", f.prd, "--allow-external"], capture_output=True, text=True)
+            self.assertIn("提示：", r.stdout)
+
     def test_forced_on_hq_prototype_and_empty_dir(self):
         with Proto() as p:
             r = subprocess.run([sys.executable, CHECK, p.dir, "--foreign", "--format", "json"], capture_output=True, text=True)
@@ -391,6 +414,52 @@ class PrototypeWalkForeignTest(unittest.TestCase):
             write(sp, "export const x = 1;\n")
             rc, res = self.walk(f.dir, "--script", sp)
             self.assertEqual(rc, 2, res)
+
+    def test_script_console_and_second_page(self):
+        # console output in the script must not break the JSON on stdout; baseUrl has no trailing slash and
+        # baseUrl + "/web.html" opens web.html, not index.html
+        with Foreign() as f:
+            write(os.path.join(f.dir, "web.html"), '<!doctype html><title>网页版</title><p id="w">web</p>')
+            sp = os.path.join(f.tmp, "flows.mjs")
+            write(sp, """console.log("loading flows");
+export default async ({ page, baseUrl, step, check }) => {
+  console.log("base", baseUrl);
+  console.info({ a: 1 });
+  await check(!baseUrl.endsWith("/"), "baseUrl 没有结尾斜杠");
+  await step("打开网页版", () => page.goto(baseUrl + "/web.html"));
+  await check(async () => (await page.title()) === "网页版", "打开的是 web.html");
+  await step("旧写法", () => page.goto(baseUrl + "cart.html"));
+  await check(async () => (await page.title()) === "购物车", "旧写法也能打开 cart.html");
+};
+""")
+            r = subprocess.run(["node", WALK, f.dir, "--format", "json", "--scale", "1", "--pages", "cart.html", "--script", sp],
+                               capture_output=True, text=True, timeout=300)
+            res = json.loads(r.stdout)  # stdout is pure JSON
+            self.assertEqual(r.returncode, 0, res)
+            self.assertTrue(all(a["ok"] for a in res["assertions"]), res["assertions"])
+            self.assertEqual(res["script_log"][0], "loading flows")
+            self.assertTrue(any(x.startswith("base http://127.0.0.1:") for x in res["script_log"]), res["script_log"])
+            self.assertIn('info: {"a":1}', res["script_log"])
+            self.assertIn("[script] loading flows", r.stderr)
+            self.assertEqual(res["coverage"], "smoke+script")
+
+    def test_text_placeholder_warning_and_smoke_header(self):
+        with Foreign() as f:
+            write(os.path.join(f.dir, "bad.html"),
+                  "<!doctype html><title>x</title><p>价格：[object Object] 元</p><p>库存 NaN 件</p><p>undefinedness 不算</p>"
+                  '<a href="#more">更多</a><script>if (location.hash) document.body.append("剩余 " + undefined)</script>')
+            rc, res = self.walk(f.dir, "--pages", "bad.html")
+            self.assertEqual(rc, 0, res)  # a warning, not a failure
+            self.assertEqual(res["coverage"], "smoke")
+            w = "\n".join(res["warnings"])
+            self.assertIn("视图 bad.html：页面文字里出现 [object Object]", w)
+            self.assertIn("视图 bad.html：页面文字里出现 NaN", w)
+            self.assertIn("视图 bad.html#more：页面文字里出现 undefined", w)
+            self.assertNotIn("视图 bad.html：页面文字里出现 undefined", w)
+            r = subprocess.run(["node", WALK, f.dir, "--pages", "bad.html", "--scale", "1"], capture_output=True, text=True, timeout=300)
+            self.assertIn("只是冒烟", r.stdout.splitlines()[0])
+            self.assertIn("用 --script", r.stdout)
+            self.assertIn("## 警告（", r.stdout)
 
 
 if __name__ == "__main__":

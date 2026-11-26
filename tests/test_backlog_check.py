@@ -182,6 +182,89 @@ class BacklogCheckTest(unittest.TestCase):
         self.assertEqual(len(out["warnings"]), 1, out["warnings"])
         self.assertIn("3 个任务 est_min 超过 120", out["warnings"][0])
 
+    def test_hold(self):
+        e = self.errs(mutate(lambda d: d["tasks"][2].update(status="hold")))
+        self.assertIn("必须写 hold_reason", e)
+        rc, out = run(mutate(lambda d: d["tasks"][2].update(status="hold", hold_reason="等客户确认导出范围")))
+        self.assertEqual(rc, 0, out)
+        s = out["summary"]
+        self.assertEqual(s["hold"], [{"id": "B-003", "release": "R2", "reason": "等客户确认导出范围"}])
+        self.assertEqual((s["by_release"]["R2"]["tasks"], s["by_release"]["R2"]["hold"]), (0, 1))
+        self.assertNotIn("B-003", s["critical_path"])
+        # P1 covered only by a hold task: not covered
+        self.assertTrue(any("F-002" in w and "hold 的任务不算：B-003" in w for w in out["warnings"]), out["warnings"])
+
+    def test_hold_excluded_from_p0_coverage(self):
+        e = self.errs(mutate(lambda d: [t.update(status="hold", hold_reason="范围待定") for t in d["tasks"][:2]]))
+        self.assertIn("P0 需求在 R1 及以前没有任务覆盖（hold 的任务不算：B-001、B-002）", e)
+
+    def test_depends_on_hold_task(self):
+        e = self.errs(mutate(lambda d: d["tasks"][0].update(status="hold", hold_reason="等客户确认")))
+        self.assertIn("task B-002: 依赖了 hold 的任务 B-001", e)
+        self.assertIn("task B-003: 依赖了 hold 的任务 B-001", e)
+        # hold depending on hold is fine, and so is a dropped task
+        def ok(d):
+            for t in d["tasks"]:
+                t.update(status="hold", hold_reason="等客户确认")
+            d["tasks"][1]["status"] = "dropped"
+            d["tasks"].append(task("B-004"))
+        rc, out = run(mutate(ok))
+        self.assertEqual(rc, 0, out)
+
+    def test_needs_human(self):
+        e = self.errs(mutate(lambda d: d["tasks"][0].update(needs_human=["device"])))
+        self.assertIn("必须写 human_step", e)
+        e = self.errs(mutate(lambda d: d["tasks"][0].update(needs_human=["robot"], human_step="x")))
+        self.assertIn("needs_human 必须是非空数组", e)
+        e = self.errs(mutate(lambda d: d["tasks"][0].update(needs_human=[], human_step="x")))
+        self.assertIn("needs_human 必须是非空数组", e)
+        rc, out = run(mutate(lambda d: d["tasks"][0].update(human_step="x")))
+        self.assertTrue(any("没有 needs_human" in w for w in out["warnings"]))
+        rc, out = run(mutate(lambda d: d["tasks"][1].update(needs_human=["device", "test_account"], human_step="真机上用测试账号付一笔")))
+        self.assertEqual(rc, 0, out)
+        nh = out["summary"]["needs_human"]
+        self.assertEqual((nh["tasks"], nh["ids"], nh["on_critical_path"]), (1, ["B-002"], ["B-002"]))
+        rc, out = run(mutate(lambda d: d["tasks"][2].update(est_min=10, needs_human=["manual_check"], human_step="看一眼")))
+        self.assertEqual(out["summary"]["needs_human"]["on_critical_path"], [])
+
+    def test_milestone_shifts_critical_path(self):
+        rc, out = run(BASE)
+        self.assertEqual((out["summary"]["critical_path_min"], out["summary"]["critical_path"]), (60, ["B-001", "B-002"]))
+        ms = [{"id": "M-ACCOUNTS", "name": "商店账号和支付测试账号就绪", "at_min": 200, "owner": "客户"}]
+        rc, out = run(mutate(lambda d: (d.update(milestones=ms), d["tasks"][2].update(ready_after="M-ACCOUNTS"))))
+        self.assertEqual(rc, 0, out)
+        s = out["summary"]
+        self.assertEqual((s["critical_path_min"], s["critical_path"]), (230, ["M-ACCOUNTS", "B-003"]))
+        self.assertEqual((s["by_release"]["R1"]["finish_min"], s["by_release"]["R2"]["finish_min"]), (60, 230))
+        self.assertEqual(s["milestones"], 1)
+        # a milestone earlier than the dependencies does not move anything
+        ms[0]["at_min"] = 10
+        rc, out = run(mutate(lambda d: (d.update(milestones=ms), d["tasks"][2].update(ready_after="M-ACCOUNTS"))))
+        self.assertEqual((out["summary"]["critical_path_min"], out["summary"]["critical_path"]), (60, ["B-001", "B-002"]))
+
+    def test_milestone_validation(self):
+        e = self.errs(mutate(lambda d: d["tasks"][0].update(ready_after="M-NOPE")))
+        self.assertIn("不是顶层 milestones 里的里程碑", e)
+        e = self.errs(mutate(lambda d: d.update(milestones=[{"id": "M-X", "name": "x", "at_min": -1}])))
+        self.assertIn("at_min", e)
+        self.assertIn("owner", e)
+        e = self.errs(mutate(lambda d: d.update(milestones="M-X")))
+        self.assertIn("milestones: 必须是数组", e)
+
+    def test_md_shows_hold_and_critical_path(self):
+        doc = mutate(lambda d: (d.update(milestones=[{"id": "M-DOC", "name": "客户资料", "at_min": 100, "owner": "客户"}]),
+                                d["tasks"][1].update(ready_after="M-DOC", needs_human=["customer_doc"], human_step="客户给出价目表"),
+                                d["tasks"].append(task("B-009", release="R2", reqs=["F-002"], status="hold", hold_reason="等客户确认"))))
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "b.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            r = subprocess.run([sys.executable, SCRIPT, p], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("130 分钟：M-DOC -> B-002", r.stdout)
+        self.assertIn("在关键路径上的：B-002", r.stdout)
+        self.assertIn("- B-009（R2）：等客户确认", r.stdout)
+
     def test_garbage(self):
         for doc in ([], {"schema": "nope"}, mutate(lambda d: d.update(tasks=[1, "x", None]))):
             rc, out = run(doc)

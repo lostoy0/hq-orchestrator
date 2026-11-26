@@ -2,10 +2,12 @@
 """Static checks for a /hq-design clickable prototype. Read-only, Python stdlib only.
 
   prototype-check.py <prototype dir> [--prd <prd.md>] [--format md|json] [--foreign] [--allow-external]
+                     [--id-prefixes P1,P2] [--ids-detail]
 
 Without manifest.js (or with --foreign) the directory is treated as an adopted, foreign-format prototype
 (plain .html files): local links/resources must exist, no external network resources, and with --prd
 requirement IDs from the PRD that never appear in any HTML file are warned about (a coverage signal only).
+More than 20 such IDs are grouped by prefix (count and first 10 each) unless --ids-detail is given.
 
 Exit codes: 0 no errors (warnings allowed), 1 errors found, 2 bad arguments / unreadable manifest.
 Format: skills/hq-design/prototype-schema.md
@@ -34,6 +36,10 @@ ID_DEF_RE = re.compile(r"^\s*(?:(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)(?:\*\*|`
 NOT_IDS = {"UTF", "ISO", "SHA", "HTTP", "TLS", "ES", "RFC", "CVE", "GB", "IPV"}  # standards, not requirements
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 SKIP_DIRS = {"node_modules", ".git", "__pycache__"}
+GROUP_MISSING_OVER = 20  # more missing PRD ids than this: one warning per prefix
+GROUP_SHOW = 10
+IDS_HINT = ("多数没有界面的编号（验收级、非功能）本来就不会出现在 HTML 里：在 HTML 里标出需求级编号（如 REQ-xxx，"
+            "写在 data-req 属性或注释里）通常就能消掉大部分；--id-prefixes 只看指定前缀，--ids-detail 列出全部")
 
 
 def load_manifest(root):
@@ -341,7 +347,7 @@ def prd_ids(text, prefixes=None):
 
 
 
-def check_foreign(root, prd_text=None, allow_external=False, prefixes=None):
+def check_foreign(root, prd_text=None, allow_external=False, prefixes=None, ids_detail=False):
     """Baseline checks for an adopted prototype that is just a folder of .html files."""
     errs, warns = [], []
     files = html_files(root)
@@ -375,9 +381,19 @@ def check_foreign(root, prd_text=None, allow_external=False, prefixes=None):
         ids = prd_ids(prd_text, prefixes)
         blob = "\n".join(texts)
         missing = [i for i in ids if not re.search(r"(?<![\w-])%s(?![\w]|-\d)" % re.escape(i), blob)]
-        for i in missing:
-            warns.append("需求: %s 在任何 HTML 文件里都没出现（只是覆盖信号，不代表没做）" % i)
         summary.update(prd_ids=len(ids), prd_ids_missing=len(missing))
+        if len(missing) > GROUP_MISSING_OVER and not ids_detail:
+            groups = {}
+            for i in missing:
+                groups.setdefault(i.split("-")[0], []).append(i)
+            for pre, xs in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+                warns.append("需求: %s 前缀有 %d 个编号在任何 HTML 文件里都没出现（只是覆盖信号，不代表没做）：%s%s" % (
+                    pre, len(xs), "、".join(xs[:GROUP_SHOW]), "…" if len(xs) > GROUP_SHOW else ""))
+            summary["prd_ids_missing_by_prefix"] = {k: len(v) for k, v in sorted(groups.items())}
+            summary["hint"] = IDS_HINT
+        else:
+            for i in missing:
+                warns.append("需求: %s 在任何 HTML 文件里都没出现（只是覆盖信号，不代表没做）" % i)
     return {"files": [os.path.relpath(f, root) for f in files]}, errs, warns, summary
 
 
@@ -400,6 +416,7 @@ def main(argv=None):
     ap.add_argument("--foreign", action="store_true", help="treat as a foreign-format prototype (auto when no manifest.js)")
     ap.add_argument("--allow-external", action="store_true", help="foreign mode: external network resources are warnings, not errors")
     ap.add_argument("--id-prefixes", metavar="P1,P2", help="foreign mode with --prd: only collect IDs with these prefixes (anywhere in the PRD)")
+    ap.add_argument("--ids-detail", action="store_true", help="foreign mode with --prd: list every missing ID instead of grouping by prefix")
     a = ap.parse_args(argv)
     if not os.path.isdir(a.prototype_dir):
         print("错误: 不是目录：%s" % a.prototype_dir, file=sys.stderr)
@@ -415,7 +432,7 @@ def main(argv=None):
     foreign = a.foreign or not os.path.isfile(os.path.join(a.prototype_dir, "manifest.js"))
     if foreign:
         prefixes = [x.strip() for x in (a.id_prefixes or "").split(",") if x.strip()]
-        man, errs, warns, summary = check_foreign(a.prototype_dir, prd, a.allow_external, prefixes)
+        man, errs, warns, summary = check_foreign(a.prototype_dir, prd, a.allow_external, prefixes, a.ids_detail)
     else:
         man, errs, warns, summary = check(a.prototype_dir, prd)
     if man is None:
@@ -429,7 +446,7 @@ def main(argv=None):
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         print("# 原型检查（%s）：%s\n" % ("外来格式，无 manifest.js" if foreign else "hq 格式", a.prototype_dir))
-        print("、".join("%s %s" % (k, v) for k, v in summary.items()))
+        print("、".join("%s %s" % (k, v) for k, v in summary.items() if k != "hint"))
         if foreign:
             print("\n## 页面（%d）" % len(man["files"]))
             print("\n".join("- " + x for x in man["files"]))
@@ -437,6 +454,8 @@ def main(argv=None):
         print("\n".join("- " + x for x in errs) or "- 无")
         print("\n## 警告（%d）" % len(warns))
         print("\n".join("- " + x for x in warns) or "- 无")
+        if summary.get("hint"):
+            print("\n提示：" + summary["hint"])
     return 1 if errs else 0
 
 

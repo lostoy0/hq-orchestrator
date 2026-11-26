@@ -20,6 +20,34 @@
 
 ## 未发布
 
+### 计划清单：新增 hold（暂缓）状态
+- **改动**：`references/backlog-schema.md` 的任务 `status` 新增 `hold`，配必填的 `hold_reason`。`scripts/backlog-check.py` 接受 `hold`；`hold` 没写 `hold_reason` 报错；没有 hold 的任务依赖 hold 任务报错（会一直等下去）；hold 任务不算进 P0/P1 覆盖、`owns` 重叠检查和关键路径，汇总里单列（`summary.hold`，各版本的 `hold` 数，md 报告的“暂缓”一节）。`/hq` 的 `SKILL.md`“按计划执行”：hold 任务从不派发，汇报里列为等待中并附原因。`/hq-plan` 第 3、4 节：范围变更和其他等别人决定的任务用 `hold`。测试：`tests/test_backlog_check.py` 新增 hold、依赖 hold 报错、hold 不算覆盖。
+- **原因/假设**：在一个真实项目上，有几项范围变更要等客户确认，清单里只能写成 `todo`，`/hq --backlog` 会把它们当成可执行任务派出去。预期等待中的任务和可执行任务分开，派发不会再碰到它们，依赖它们的任务在计划阶段就被发现。
+- **验收指标**：按计划执行时，派发出去的 `hold` 任务数 = 0；因“任务还在等客户确认”而中途撤回的派发次数 = 0。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
+### 计划清单：标出需要人或外部条件的任务（needs_human、外部里程碑）
+- **改动**：`references/backlog-schema.md` 新增任务字段 `needs_human`（取值 `device`、`ios_build`、`store_account`、`test_account`、`customer_doc`、`manual_check`）和 `human_step`（人要做的那一步），顶层新增可选的 `milestones: [{id, name, at_min, owner}]`（外部就绪时间点，距项目开始的分钟数），任务用 `ready_after: "M-ACCOUNTS"` 引用。`scripts/backlog-check.py` 校验这些字段；新增最早完成时间和关键路径计算（依赖加 `ready_after` 里程碑，资源不限，不含 hold 和 dropped），汇总给出 `critical_path_min`、`critical_path`、各版本 `finish_min`，以及 `needs_human` 任务数和其中在关键路径上的任务。`/hq` 的 `SKILL.md` 第 4 步新增第 0 条：`needs_human` 任务不整个交给云端子会话，worker 只做脚本、用例和检查清单，需要人的那一步用 C 通道或按停止条件 1 交给用户，任务保持 `BLOCKED` 直到用户回报；第 2 步围绕外部里程碑排，“按计划执行”里 `ready_after` 未就绪不派发。`/hq-plan` 第 3、4 节同步。测试：`tests/test_backlog_check.py` 新增 `needs_human` 校验、里程碑推迟关键路径、里程碑校验和 md 报告。
+- **原因/假设**：在一个真实项目上，有些任务要真机、商店账号、支付测试账号或客户提供的资料，计划却假设这些在第 0 分钟就齐了，关键路径偏短；AI 还会把这些任务派给云端子会话，后者只能用模拟器或假数据交差。预期关键路径反映外部等待，需要人的步骤提早交给用户，和开发并行。
+- **验收指标**：`needs_human` 任务整个派给云端子会话的次数 = 0；这类任务以模拟代替真实验证而被审核打回的次数 = 0；有里程碑的版本，实际完成时间与 `finish_min` 的偏差比没有里程碑时小（复盘时对照 `critical_path_min`）。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
+### 原型走查（外来格式）：脚本输出不污染 JSON、baseUrl 去掉结尾斜杠、标明只是冒烟、页面文字占位符警告
+- **改动**：`skills/hq/scripts/prototype-walk.mjs` 外来格式模式：`--script` 脚本载入和运行期间的 `console.log` 等输出改写到 stderr，并记进报告的 `script_log`（md 报告列前 20 行）；传给脚本的 `baseUrl` 改为原型目录根地址、结尾不带斜杠（写 `baseUrl + "/web.html"`），本地服务先合并开头的多个斜杠（原来 `//web.html` 被当成主机名，打开的是 index.html），脚本页的 `page.goto` 兼容旧写法 `baseUrl + "cart.html"` 和相对路径；报告开头写明“只是冒烟”或“冒烟 + 项目脚本”，JSON 新增 `coverage`（`smoke` / `smoke+script`）和 `note`，提示状态、角色和流程要用 `--script`；每个视图（以及脚本里每个带函数的 `step` 结束时）检查可见文字，出现 `[object Object]`、单独的 `undefined` 或 `NaN` 时给警告（新增 `warnings`，不算失败）。`/hq-design` 的 `prototype-schema.md`、`SKILL.md`，`stages/common.md` 第 10 节同步。测试：`tests/test_prototype.py` 新增脚本输出、按路径打开第二个页面、文字占位符警告和冒烟报告头。
+- **原因/假设**：在一个真实项目上用 `--script` 走查接管的原型时，脚本里的 `console.log` 混进 JSON 输出，结果解析失败；`baseUrl + '/web.html'` 实际打开的是 index.html，断言全部落在错误的页面上；默认走查被当成“状态和流程都验过了”，其实它只打开页面；页面上渲染出 `[object Object]`、`NaN` 这类问题截图里才看得到，没人逐张看。预期脚本可以随手打日志，多页面脚本打开的就是写的那一页，评审记录不再把冒烟当成完整走查，占位符问题在报告里直接列出。
+- **验收指标**：`--format json` 输出解析失败的次数 = 0；外来格式原型的脚本里因打开错页面导致的误报 = 0；评审记录把不带脚本的走查写成“状态和流程已验证”的次数 = 0；人工看截图才发现的 `[object Object]`/`undefined`/`NaN` 问题数 = 0。
+- **状态**：待验证（自测通过；用旧脚本复现了 `baseUrl + '/web.html'` 打开 index.html，修改后打开正确）
+- **复盘报告**：无（人工改动，来自实测）
+
+### 原型检查（外来格式）：需求编号覆盖警告按前缀分组
+- **改动**：`skills/hq/scripts/prototype-check.py` 带 `--prd` 时，缺失的需求编号超过 20 个就按前缀分组，每个前缀一条警告（个数和前 10 个编号），汇总新增 `prd_ids_missing_by_prefix` 和 `hint`（md 报告末尾的“提示”）；新增 `--ids-detail` 逐个列出；20 个以内照旧逐条列。`prototype-schema.md`、`stages/common.md` 第 10 节写明：在 HTML 里标出需求级编号（如 `REQ-xxx`）通常就能消掉大部分，`--id-prefixes` 可以只看需求级。测试：`tests/test_prototype.py` 新增分组警告、`--ids-detail` 和 `--id-prefixes` 组合。
+- **原因/假设**：在一个真实项目的需求文档上，覆盖检查列出 89 个在 HTML 里没出现的验收级编号，大部分本来就没有界面，真正缺页面的需求淹没在里面，评审者只能整段忽略。预期分组后警告条数降到前缀数量级，信号仍在，需要时再看全部。
+- **验收指标**：真实项目上外来格式检查的需求覆盖警告条数 ≤ 前缀数；评审记录里因“警告太多”整体忽略覆盖检查的次数 = 0。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
 ## v0.10.3（2026-11-26）
 
 ### PLAYBOOK：并发上限和单批子任务上限可配置

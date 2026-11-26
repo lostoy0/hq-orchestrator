@@ -15,6 +15,7 @@
 | requirements | 数组 | 是 | 需求索引，见下 |
 | releases | 数组 | 是 | 版本，按先后排列，见下 |
 | tasks | 数组 | 是 | 任务，见下 |
+| milestones | 数组 | 否 | 外部就绪里程碑（账号开通、真机到位、客户交付资料等），见下 |
 | imported_from | 字符串 | 否 | 由 `/hq-plan` 导入时写原计划路径。有这个字段时，任务超过 120 分钟的警告合并成一条（保留原计划的粒度，`/hq` 派发时再拆） |
 
 ## requirements（需求索引）
@@ -36,6 +37,17 @@
 | goal | 字符串 | 是 | 这个版本交付的用户价值，一两句 |
 | exit_criteria | 字符串数组 | 是 | 发布条件（可检验） |
 
+## milestones（外部就绪里程碑，可选）
+
+不由 AI 决定、要等人或外部条件就绪的时间点。任务用 `ready_after` 引用它，`backlog-check.py` 算关键路径时这个任务不早于里程碑开始。
+
+| 字段 | 类型 | 必填 | 含义 |
+|---|---|---|---|
+| id | 大写前缀加名称，如 `M-ACCOUNTS`、`M-DEVICE` | 是 | 唯一 |
+| name | 字符串 | 是 | 一句话，如“商店账号和支付测试账号开通” |
+| at_min | 数字 ≥0 | 是 | 预计在项目开始后第几分钟就绪（和 `est_min` 同一把尺子；拿不准时往后估） |
+| owner | 字符串 | 是 | 谁负责让它就绪，如 `客户`、`用户`、`运营` |
+
 ## tasks（任务）
 
 | 字段 | 类型 | 必填 | 含义 |
@@ -55,7 +67,11 @@
 | tier | `T0`–`T4` | 是 | 预估档位。按 `calibration.md` 分数线得出，可以按规则 9 上调；低于分数线时必须在 `tier_note` 写依据（例如 PLAYBOOK“选档偏好”里已验证的条目） |
 | tier_note | 字符串 | 否 | 选档理由，一句话 |
 | est_min | 数字 | 是 | 预计用时（分钟）；超过 120 建议拆分 |
-| status | `todo` / `in_progress` / `done` / `blocked` / `dropped` | 是 | 计划时都是 `todo` |
+| status | `todo` / `in_progress` / `done` / `blocked` / `dropped` / `hold` | 是 | 计划时一般是 `todo`；`hold` 表示在等别人的决定（例如客户还没确认的范围变更），`/hq` 不会派发，也不算进覆盖和关键路径 |
+| hold_reason | 字符串 | `hold` 时必填 | 在等谁的什么决定，如“等客户确认是否加入导出功能” |
+| needs_human | 数组 | 否 | 需要人或真实环境的部分：`device`（真机）、`ios_build`（iOS 构建/签名）、`store_account`（应用商店账号）、`test_account`（支付等测试账号）、`customer_doc`（客户提供的资料）、`manual_check`（人工核对）。有这个字段的任务不会整个交给云端子会话 |
+| human_step | 字符串 | 有 `needs_human` 时必填 | 需要人做的那一步，一句话，如“在真机上用测试账号下单并截图” |
+| ready_after | 里程碑 id | 否 | 不早于这个里程碑开始，如 `"M-ACCOUNTS"` |
 | run_id | 字符串或 `null` | 否 | `/hq` 执行它的 run |
 | branch | 字符串或 `null` | 否 | 合并来源分支 |
 | notes | 字符串 | 否 | 备注 |
@@ -83,7 +99,29 @@
       "score": {"scope": 1, "ambiguity": 0, "context": 1, "risk": 2, "verify": 0},
       "tier_score": 4, "tier": "T2", "tier_note": "数据迁移，风险 2",
       "est_min": 30, "status": "todo", "run_id": null, "branch": null
+    },
+    {
+      "id": "B-002", "release": "R1", "title": "真机支付冒烟", "kind": "review",
+      "requirements": ["F-001"], "depends_on": ["B-001"], "owns": ["tests/e2e/pay.*"],
+      "acceptance": ["测试账号在真机上下单成功并有截图"],
+      "verify_level": "e2e", "verify_cmd": null,
+      "score": {"scope": 1, "ambiguity": 0, "context": 1, "risk": 1, "verify": 1},
+      "tier_score": 4, "tier": "T2", "est_min": 30, "status": "todo",
+      "needs_human": ["device", "test_account"], "human_step": "在真机上用支付测试账号走一遍下单，回报截图",
+      "ready_after": "M-ACCOUNTS"
+    },
+    {
+      "id": "B-003", "release": "R1", "title": "订单导出为表格", "kind": "code",
+      "requirements": ["F-001"], "depends_on": [], "owns": ["src/export/**"],
+      "acceptance": ["导出的表格列和页面一致"],
+      "verify_level": "code", "verify_cmd": "npm test -- export",
+      "score": {"scope": 1, "ambiguity": 1, "context": 0, "risk": 0, "verify": 0},
+      "tier_score": 2, "tier": "T1", "est_min": 40, "status": "hold",
+      "hold_reason": "范围变更，等客户确认是否加入本版本"
     }
+  ],
+  "milestones": [
+    {"id": "M-ACCOUNTS", "name": "支付测试账号开通", "at_min": 240, "owner": "客户"}
   ]
 }
 ```
@@ -96,5 +134,6 @@ python3 <hq 技能目录>/scripts/backlog-check.py docs/plan/backlog.json [--prd
 
 退出码 0 = 没有错误（可能有警告），1 = 有错误，2 = 参数错误或文件读不了。错误必须改掉；警告要么改，要么在 `notes` 或 `tier_note` 写明理由。
 
-- **错误**：缺必填字段；取值不合法；编号重复；依赖不存在、有环、依赖了更晚的版本；`tier_score` 不等于 5 维之和；档位低于分数线又没写 `tier_note`；P0 需求没有安排版本，或所在版本里没有任务覆盖它；任务引用了不存在的需求或版本。
-- **警告**：`est_min` 超过 120；档位低于分数线（已写 `tier_note`）；同一版本里没有依赖关系的两个任务 `owns` 有重复项（并行时会改同一批文件）；`--prd` 给出的需求文档里出现、清单里却没有的 `F-`/`NFR-` 编号；P1 需求没有任务覆盖。
+- **错误**：缺必填字段（含 `hold` 没写 `hold_reason`、有 `needs_human` 没写 `human_step`）；取值不合法；`ready_after` 引用了不存在的里程碑；没有 hold 的任务依赖了 hold 的任务（会一直等下去）；编号重复；依赖不存在、有环、依赖了更晚的版本；`tier_score` 不等于 5 维之和；档位低于分数线又没写 `tier_note`；P0 需求没有安排版本，或所在版本里没有任务覆盖它（`hold` 和 `dropped` 的任务不算覆盖）；任务引用了不存在的需求或版本。
+- **警告**：`est_min` 超过 120；档位低于分数线（已写 `tier_note`）；同一版本里没有依赖关系的两个任务 `owns` 有重复项（并行时会改同一批文件）；`--prd` 给出的需求文档里出现、清单里却没有的 `F-`/`NFR-` 编号；P1 需求没有任务覆盖；写了 `human_step` 却没有 `needs_human`。
+- **汇总**（`summary`）：每个版本的任务数、预计用时、最早完成时间（`finish_min`）、hold 数；全项目的关键路径（`critical_path_min`、`critical_path`，任务按依赖和 `ready_after` 里程碑排，资源不限；被里程碑卡住时路径以里程碑 id 开头；不含 `hold`、`dropped`）；`hold` 任务列表和原因；`needs_human` 任务数，以及其中哪些在关键路径上（这些最该提前安排人）。
