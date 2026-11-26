@@ -69,22 +69,23 @@ node <hq 技能目录>/scripts/prototype-walk.mjs design/prototype --out design/
 接管的原型如果只是一组普通 .html 文件（自带状态切换，没有 `manifest.js`），两个脚本自动进入外来格式模式（也可加 `--foreign` 强制），报告开头会写明模式：
 
 ```bash
-python3 <hq 技能目录>/scripts/prototype-check.py <原型目录> [--prd <需求文档>] [--allow-external] [--id-prefixes REQ,NFR]
+python3 <hq 技能目录>/scripts/prototype-check.py <原型目录> [--prd <需求文档>] [--allow-external] [--id-prefixes REQ,NFR] [--ids-detail]
 node <hq 技能目录>/scripts/prototype-walk.mjs <原型目录> [--pages a.html,b.html] [--max-views 200] [--script .hq/prototype-flows.mjs] [--viewport 390x844] [--out <截图目录>]
 ```
 
-- `prototype-check.py`：列出所有 .html；本地的 `href`/`src`（`#` 锚点、`data:`、`mailto:`、`tel:` 除外）都要指向存在的文件；`script`、`link`、`img` 等引用 http/https 外部资源算错误（`--allow-external` 降为警告）。带 `--prd` 时从需求文档里收集编号（标题、列表、表格开头的“大写前缀-数字”，或 `--id-prefixes` 指定的前缀），在哪个 HTML 里都没出现的给警告：这只是覆盖信号，不代表没做。
-- `prototype-walk.mjs`：打开顶层每个 .html（或 `--pages` 指定的），跟着页内 `a[href^="#"]` 和 `[data-page]` 发现的 `#` 路由逐个打开，最多 `--max-views` 个；记录控制台报错、页面异常、失败的请求和 HTTP ≥400；有 `--out` 时每个视图截一张图。
+- `prototype-check.py`：列出所有 .html；本地的 `href`/`src`（`#` 锚点、`data:`、`mailto:`、`tel:` 除外）都要指向存在的文件；`script`、`link`、`img` 等引用 http/https 外部资源算错误（`--allow-external` 降为警告）。带 `--prd` 时从需求文档里收集编号（标题、列表、表格开头的“大写前缀-数字”，或 `--id-prefixes` 指定的前缀），在哪个 HTML 里都没出现的给警告：这只是覆盖信号，不代表没做。缺的编号超过 20 个时按前缀分组，每个前缀一条警告（个数和前 10 个编号），`--ids-detail` 逐个列出。验收级、非功能这类编号多数没有界面，本来就不会出现在 HTML 里：在 HTML 里标出需求级编号（如 `REQ-xxx`，写在 `data-req` 属性或注释里）通常就能消掉大部分，`--id-prefixes REQ` 只看需求级。
+- `prototype-walk.mjs`：打开顶层每个 .html（或 `--pages` 指定的），跟着页内 `a[href^="#"]` 和 `[data-page]` 发现的 `#` 路由逐个打开，最多 `--max-views` 个；记录控制台报错、页面异常、失败的请求和 HTTP ≥400；页面可见文字里出现 `[object Object]`、单独的 `undefined` 或 `NaN` 时给警告（不算失败）；有 `--out` 时每个视图截一张图。
+- **默认走查只是冒烟**：只打开页面和 `#` 路由，不登录、不切换状态和角色、不走流程，报告开头写明“只是冒烟”（JSON 的 `coverage` 为 `smoke`，带脚本时为 `smoke+script`）。状态、角色和流程要用 `--script` 写项目脚本。
 - `--script <file.mjs>`：项目自己的状态和流程。走查器负责本地服务、报错收集和报告，脚本只写操作：
 
 ```js
 // .hq/prototype-flows.mjs
 export default async ({ page, context, baseUrl, step, check, shot }) => {
-  await step("打开购物车", () => page.goto(baseUrl + "cart.html"));
+  await step("打开购物车", () => page.goto(baseUrl + "/cart.html"));
   await step("加入商品甲", () => page.click("#add"));
   await check(async () => (await page.textContent("#count")) === "1", "购物车数量是 1");
   await shot("cart-after-add");
 };
 ```
 
-`step(名称[, 函数])` 开始一步（之后收集到的报错算在这一步；给了函数就执行它，抛错记为这一步失败）；`check(条件, 名称)` 记一条断言（条件可以是值、Promise 或函数）；`shot(名称)` 截当前页（没有 `--out` 时不截）。脚本运行期间收集到的报错都算失败。报告列出视图、步骤、断言、失败和全部报错；退出码同上。
+`step(名称[, 函数])` 开始一步（之后收集到的报错算在这一步；给了函数就执行它，抛错记为这一步失败）；`check(条件, 名称)` 记一条断言（条件可以是值、Promise 或函数）；`shot(名称)` 截当前页（没有 `--out` 时不截）。`baseUrl` 是原型目录的根地址，结尾不带斜杠，打开其他页面写 `baseUrl + "/web.html"`（旧写法 `baseUrl + "cart.html"` 和相对路径 `page.goto("cart.html")` 也能用）。脚本里的 `console.log` 等输出写到 stderr，并记进报告的 `script_log`，不会混进 JSON。每个带函数的 `step` 结束时也查一次页面文字。脚本运行期间收集到的报错都算失败。报告列出视图、步骤、断言、失败和全部报错；退出码同上。

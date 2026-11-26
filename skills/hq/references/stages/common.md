@@ -179,7 +179,7 @@ updated: 2026-11-26
 
 **2. 接管评审**（代替这个阶段的“新建”）：按本阶段的完成标准逐条判断**内容**是否满足，不看格式和章节名。
 - 派该阶段默认的评审团（只读），说明里给：对应表里的文件、本阶段完成标准、第 5 节的意见格式，**以及已经存在的下游产物**（例如评审需求时附上技术设计和契约）：评审者先查下游是否已经解决，已解决的只记“上游缺验收标准”，不报 blocker。每个评审者多交一张表：完成标准每条一行，写“满足 / 部分满足 / 缺失”和依据（文件和位置）。
-- 原型检查脚本有外来格式模式（目录里没有 `manifest.js` 时自动进入，也可加 `--foreign`），接管评审和补缺口时都要跑，结果写进评审记录：`python3 <hq>/scripts/prototype-check.py <原型目录> --prd <需求文档>`（本地链接和资源都存在、没有外部网络资源；需求文档里的编号在哪个 HTML 里都没出现时给警告，只是覆盖信号，不算证据）；`node <hq>/scripts/prototype-walk.mjs <原型目录> --out <截图目录> --script .hq/prototype-flows.mjs`（逐页打开并跟着页内 `#` 路由走，记录控制台报错、页面异常、失败请求和 HTTP ≥400）。原型自己的状态切换和核心流程写成项目脚本（默认导出 `async ({ page, baseUrl, step, check, shot }) => {}`，格式见 `/hq-design` 的 `prototype-schema.md`），存在 `.hq/` 下反复用，不要每次重写一套走查。
+- 原型检查脚本有外来格式模式（目录里没有 `manifest.js` 时自动进入，也可加 `--foreign`），接管评审和补缺口时都要跑，结果写进评审记录：`python3 <hq>/scripts/prototype-check.py <原型目录> --prd <需求文档>`（本地链接和资源都存在、没有外部网络资源；需求文档里的编号在哪个 HTML 里都没出现时给警告，只是覆盖信号，不算证据）；`node <hq>/scripts/prototype-walk.mjs <原型目录> --out <截图目录> --script .hq/prototype-flows.mjs`（逐页打开并跟着页内 `#` 路由走，记录控制台报错、页面异常、失败请求和 HTTP ≥400，页面文字出现 `[object Object]`、`undefined`、`NaN` 时给警告）。不带 `--script` 的走查只是冒烟（不登录、不切状态和角色），评审记录里照此写明，不要当成状态和流程都验过。需求编号缺得多时按前缀分组显示；在 HTML 里标出需求级编号（如 `REQ-xxx`）、或用 `--id-prefixes` 只看需求级，能消掉大部分噪音。原型自己的状态切换和核心流程写成项目脚本（默认导出 `async ({ page, baseUrl, step, check, shot }) => {}`，格式见 `/hq-design` 的 `prototype-schema.md`），存在 `.hq/` 下反复用，不要每次重写一套走查。
 - `doc-check.py`、`backlog-check.py` 仍然只认 hq 格式，接管时不跑；能用的通用验证照做（如对照需求核对计划覆盖）。
 - 主会话分诊后写评审记录 `<docs_root>/reviews/<阶段>-audit-<YYYYMMDD>.md`，然后运行 `stage-status.py --docs <docs_root> --record-audit <阶段> --report <评审记录路径> --blockers <未解决的 blocker 数> --majors <数>`。脚本会记下文件指纹：之后文件一改，这个阶段就回到“待接管评审”。
 

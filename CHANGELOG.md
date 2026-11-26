@@ -34,6 +34,20 @@
 - **状态**：待验证（自测通过）
 - **复盘报告**：无（人工改动，来自实测）
 
+### 原型走查（外来格式）：脚本输出不污染 JSON、baseUrl 去掉结尾斜杠、标明只是冒烟、页面文字占位符警告
+- **改动**：`skills/hq/scripts/prototype-walk.mjs` 外来格式模式：`--script` 脚本载入和运行期间的 `console.log` 等输出改写到 stderr，并记进报告的 `script_log`（md 报告列前 20 行）；传给脚本的 `baseUrl` 改为原型目录根地址、结尾不带斜杠（写 `baseUrl + "/web.html"`），本地服务先合并开头的多个斜杠（原来 `//web.html` 被当成主机名，打开的是 index.html），脚本页的 `page.goto` 兼容旧写法 `baseUrl + "cart.html"` 和相对路径；报告开头写明“只是冒烟”或“冒烟 + 项目脚本”，JSON 新增 `coverage`（`smoke` / `smoke+script`）和 `note`，提示状态、角色和流程要用 `--script`；每个视图（以及脚本里每个带函数的 `step` 结束时）检查可见文字，出现 `[object Object]`、单独的 `undefined` 或 `NaN` 时给警告（新增 `warnings`，不算失败）。`/hq-design` 的 `prototype-schema.md`、`SKILL.md`，`stages/common.md` 第 10 节同步。测试：`tests/test_prototype.py` 新增脚本输出、按路径打开第二个页面、文字占位符警告和冒烟报告头。
+- **原因/假设**：在一个真实项目上用 `--script` 走查接管的原型时，脚本里的 `console.log` 混进 JSON 输出，结果解析失败；`baseUrl + '/web.html'` 实际打开的是 index.html，断言全部落在错误的页面上；默认走查被当成“状态和流程都验过了”，其实它只打开页面；页面上渲染出 `[object Object]`、`NaN` 这类问题截图里才看得到，没人逐张看。预期脚本可以随手打日志，多页面脚本打开的就是写的那一页，评审记录不再把冒烟当成完整走查，占位符问题在报告里直接列出。
+- **验收指标**：`--format json` 输出解析失败的次数 = 0；外来格式原型的脚本里因打开错页面导致的误报 = 0；评审记录把不带脚本的走查写成“状态和流程已验证”的次数 = 0；人工看截图才发现的 `[object Object]`/`undefined`/`NaN` 问题数 = 0。
+- **状态**：待验证（自测通过；用旧脚本复现了 `baseUrl + '/web.html'` 打开 index.html，修改后打开正确）
+- **复盘报告**：无（人工改动，来自实测）
+
+### 原型检查（外来格式）：需求编号覆盖警告按前缀分组
+- **改动**：`skills/hq/scripts/prototype-check.py` 带 `--prd` 时，缺失的需求编号超过 20 个就按前缀分组，每个前缀一条警告（个数和前 10 个编号），汇总新增 `prd_ids_missing_by_prefix` 和 `hint`（md 报告末尾的“提示”）；新增 `--ids-detail` 逐个列出；20 个以内照旧逐条列。`prototype-schema.md`、`stages/common.md` 第 10 节写明：在 HTML 里标出需求级编号（如 `REQ-xxx`）通常就能消掉大部分，`--id-prefixes` 可以只看需求级。测试：`tests/test_prototype.py` 新增分组警告、`--ids-detail` 和 `--id-prefixes` 组合。
+- **原因/假设**：在一个真实项目的需求文档上，覆盖检查列出 89 个在 HTML 里没出现的验收级编号，大部分本来就没有界面，真正缺页面的需求淹没在里面，评审者只能整段忽略。预期分组后警告条数降到前缀数量级，信号仍在，需要时再看全部。
+- **验收指标**：真实项目上外来格式检查的需求覆盖警告条数 ≤ 前缀数；评审记录里因“警告太多”整体忽略覆盖检查的次数 = 0。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
 ## v0.10.3（2026-11-26）
 
 ### PLAYBOOK：并发上限和单批子任务上限可配置
