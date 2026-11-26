@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录</title>
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/base.css">
+</head>
+<body data-hq-page="P-01">
+  <div class="app">
+    <main class="main" style="max-width: 400px; padding-top: var(--space-12);">
+      <h1>欢迎回来</h1>
+      <p class="muted">登录后继续使用</p>
+      <form class="card stack" data-testid="login-form" novalidate>
+        <section data-hq-state="error" hidden>
+          <div class="notice notice-danger" role="alert" data-testid="login-error">邮箱或密码不正确</div>
+        </section>
+        <div class="field">
+          <label for="email">邮箱</label>
+          <input class="input" id="email" type="email" autocomplete="email" data-testid="email" required>
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input class="input" id="password" type="password" autocomplete="current-password" data-testid="password" required>
+        </div>
+        <section data-hq-state="default error">
+          <button class="btn btn-primary btn-block" type="submit" data-testid="submit">登录</button>
+        </section>
+        <section data-hq-state="loading" hidden>
+          <button class="btn btn-primary btn-block" type="button" aria-busy="true" disabled>正在登录…</button>
+        </section>
+      </form>
+      <p class="small muted" style="margin-top: var(--space-4);">演示账号：demo@example.com / Demo1234</p>
+    </main>
+  </div>
+  <script src="../manifest.js"></script>
+  <script src="../data/seed.js"></script>
+  <script src="../assets/app.js"></script>
+  <script>
+    document.querySelector("[data-testid=login-form]").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var email = document.getElementById("email").value.trim();
+      var password = document.getElementById("password").value;
+      HQ.show("loading");
+      HQ.api(function () { return HQ.auth.signIn(email, password); }).then(function (user) {
+        if (!user) { HQ.show("error"); return; }
+        var next = new URLSearchParams(location.search).get("next");
+        HQ.go(next || "P-02");
+      }, function () { HQ.show("error"); });
+    });
+  </script>
+</body>
+</html>

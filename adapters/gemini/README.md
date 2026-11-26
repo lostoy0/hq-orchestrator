@@ -6,7 +6,7 @@
 ```bash
 gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.7.0
 ```
-仓库根目录的 `gemini-extension.json` 让整个仓库成为一个扩展：提供 `skills/` 下的全部技能（hq、hq-retro 和各阶段技能）和 `commands/` 下的同名命令（`/hq <目标>`、`/hq-retro`、`/hq-research`、`/hq-prd`、`/hq-plan`）。更新用 `gemini extensions update hq-orchestrator`，卸载用 `gemini extensions uninstall hq-orchestrator`。扩展**不带**子代理模板（见下），装完后可再单独装模板。
+仓库根目录的 `gemini-extension.json` 让整个仓库成为一个扩展：提供 `skills/` 下的全部技能（hq、hq-retro 和各阶段技能）和 `commands/` 下的同名命令（`/hq <目标>`、`/hq-retro`、`/hq-research`、`/hq-prd`、`/hq-design`、`/hq-arch`、`/hq-plan`）。更新用 `gemini extensions update hq-orchestrator`，卸载用 `gemini extensions uninstall hq-orchestrator`。扩展**不带**子代理模板（见下），装完后可再单独装模板。
 
 **方式 B：install.sh**
 ```bash

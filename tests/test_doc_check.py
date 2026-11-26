@@ -318,5 +318,217 @@ class ResearchCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+ARCH_TPL = os.path.join(ROOT, "skills", "hq-arch", "template-architecture.md")
+DETAILED_TPL = os.path.join(ROOT, "skills", "hq-arch", "template-detailed.md")
+STYLE = """  classDef person fill:#eef2ff,stroke:#4f46e5
+  classDef ours fill:#e0f2fe,stroke:#0369a1
+"""
+FLOW = "```mermaid\nflowchart LR\n  user([\"用户\"]):::person\n  web[\"Web 前端\"]:::ours\n  api[\"API\"]:::ours\n  db[(\"库\")]\n  user -->|\"使用 HTTPS\"| web\n  web -->|\"调用\"| api\n  api -->|\"读写\"| db\n" + STYLE + "```\n"
+
+ARCH = """---
+hq_stage: arch
+version: 1
+based_on: [prd@2]
+status: draft
+updated: 2026-11-26
+---
+
+# 记账 架构设计
+
+## 1. 概述与约束
+- 目标：支撑首版。
+## 2. 系统上下文
+""" + FLOW + """
+## 3. 容器视图
+""" + FLOW + """
+## 4. 模块
+
+### M-01 账号
+
+- 职责：注册登录
+- 所在容器：API
+- 依赖：邮件服务
+- 关联需求：F-001、NFR-002
+
+### M-02 记账
+
+- 职责：账目增删改查
+- 依赖：M-01
+- 关联需求：F-002、NFR-001、NFR-003
+
+## 5. 数据架构
+```mermaid
+erDiagram
+  USER ||--o{ ENTRY : owns
+```
+## 6. 关键流程
+```mermaid
+sequenceDiagram
+  用户->>API: 登录
+```
+## 7. 部署与环境
+""" + FLOW + """
+## 8. 非功能设计
+略。
+## 9. 需求映射
+
+| 需求 | 模块 | 说明 |
+|---|---|---|
+| F-001 | M-01 | |
+| F-002 | M-02 | |
+| NFR-001 | M-02 | |
+| NFR-002 | M-01 | |
+| NFR-003 | M-01, M-02 | |
+
+## 10. 技术选型
+
+| 领域 | 选择 | 备选 | 理由 | ADR |
+|---|---|---|---|---|
+| 数据库 | PostgreSQL | MySQL | 熟悉 | ADR-0001 |
+
+## 11. 风险与待验证
+无。
+## 12. 假设与待确认
+"""
+
+ADR = """# ADR-0001：数据库用 PostgreSQL
+
+- 状态：已采纳
+- 日期：2026-11-26
+
+## 背景
+需要关系型数据库。
+## 选项
+1. **PostgreSQL**：功能全
+2. **MySQL**：常见
+## 决定
+PostgreSQL。
+## 后果
+要会运维 PG。
+"""
+
+DETAILED = """---
+hq_stage: arch-detailed
+version: 1
+based_on: [architecture@1]
+status: draft
+updated: 2026-11-26
+---
+# 详细设计
+## 1. 目录结构与代码约定
+略
+## 2. 模块详细设计
+### M-01 账号
+略
+### M-02 记账
+略
+## 3. 接口
+
+| 方法 | 路径或名称 | 请求 | 响应 | 错误 | 权限 | 关联需求 |
+|---|---|---|---|---|---|---|
+| POST | /api/v1/login | | | | | F-001 |
+
+## 4. 数据模型
+## 5. 安全
+## 6. 可观测
+## 7. 测试策略
+## 8. 配置与环境变量
+"""
+
+
+def run_arch(arch=ARCH, adrs=None, detailed=None, prd=None):
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "architecture.md")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(arch)
+        os.mkdir(os.path.join(d, "adr"))
+        for name, text in (adrs if adrs is not None else {"0001-db.md": ADR}).items():
+            with open(os.path.join(d, "adr", name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        args = []
+        for flag, text in (("--detailed", detailed), ("--prd", prd)):
+            if text is not None:
+                q = os.path.join(d, flag[2:] + ".md")
+                with open(q, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+                args += [flag, q]
+        r = subprocess.run([sys.executable, SCRIPT, "arch", p, "--format", "json", *args], capture_output=True, text=True)
+        return r.returncode, json.loads(r.stdout) if r.stdout.strip().startswith("{") else r.stderr
+
+
+class ArchCheckTest(unittest.TestCase):
+    def errs(self, **kw):
+        rc, out = run_arch(**kw)
+        self.assertEqual(rc, 1, out)
+        return "\n".join(out["errors"])
+
+    def test_valid_with_detailed_and_prd(self):
+        rc, out = run_arch(detailed=DETAILED, prd=PRD)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual((out["summary"]["modules"], out["summary"]["adrs"], out["summary"]["diagrams"]), (2, 1, 5))
+
+    def test_missing_diagram(self):
+        e = self.errs(arch=ARCH.replace("```mermaid\nsequenceDiagram\n  用户->>API: 登录\n```", "略"))
+        self.assertIn("关键流程: 缺少 Mermaid 图", e)
+        e = self.errs(arch=ARCH.replace("  USER ||--o{ ENTRY : owns\n", ""))
+        self.assertIn("erDiagram 图是空的", e)
+
+    def test_module_fields_and_mapping(self):
+        e = self.errs(arch=ARCH.replace("- 职责：注册登录\n", "").replace("| F-002 | M-02 |", "| F-002 | M-09 |"))
+        self.assertIn("M-01: 缺“职责”", e)
+        self.assertIn("F-002 对应的 M-09 不存在", e)
+
+    def test_prd_coverage(self):
+        e = self.errs(arch=ARCH.replace("| NFR-001 | M-02 | |\n", "").replace("| F-001 | M-01 | |\n", ""), prd=PRD)
+        self.assertIn("NFR-001（P0）没有落到任何模块", e)
+        self.assertIn("F-001（P0）没有落到任何模块", e)
+        rc, out = run_arch(arch=ARCH.replace("| F-002 | M-02 | |\n", ""), prd=PRD)  # F-002 is P1
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("F-002（P1）" in w for w in out["warnings"]))
+        e = self.errs(arch=ARCH.replace("F-002、NFR-001", "F-009、NFR-001"), prd=PRD)
+        self.assertIn("关联需求 F-009 在需求文档里不存在", e)
+
+    def test_adr(self):
+        e = self.errs(adrs={})
+        self.assertIn("引用了 ADR-0001", e)
+        bad = ADR.replace("- 状态：已采纳", "- 状态：考虑中").replace("2. **MySQL**：常见\n", "").replace("## 后果\n要会运维 PG。\n", "")
+        e = self.errs(adrs={"0001-db.md": bad})
+        self.assertIn("状态必须是", e)
+        self.assertIn("选项至少写 2 个", e)
+        self.assertIn("缺少二级标题“后果”", e)
+
+    def test_detailed_modules(self):
+        e = self.errs(detailed=DETAILED.replace("### M-02 记账", "### M-03 报表"))
+        self.assertIn("缺少 M-02 的详细设计", e)
+        self.assertIn("M-03 在架构设计里不存在", e)
+
+    def test_diagram_warnings(self):
+        many = "```mermaid\nflowchart LR\n" + "\n".join("  n%d[\"节点%d\"] --> n%d[\"节点%d\"]" % (i, i, i + 1, i + 1) for i in range(22)) + "\n```\n"
+        rc, out = run_arch(arch=ARCH.replace("## 8. 非功能设计\n", "## 8. 非功能设计\n" + many))
+        self.assertEqual(rc, 0)
+        w = "\n".join(out["warnings"])
+        self.assertIn("个节点（>20）", w)
+        self.assertIn("没有用统一配色", w)
+        self.assertIn("写了标签", w)
+
+    def test_flow_stats_ignores_labels_and_subgraphs(self):
+        nodes, edges, labeled = dc.flow_stats('flowchart LR\n  subgraph sys["系统(核心)"]\n  a["Web(前端)"] -->|"调用"| b[(库)]\n  end\n  b -.-> c("外部")\n')
+        self.assertEqual(nodes, {"a", "b", "c"})
+        self.assertEqual((edges, labeled), (2, 1))
+
+    def test_templates_have_required_sections(self):
+        rc, out = run_arch(arch=read(ARCH_TPL), detailed=read(DETAILED_TPL))
+        self.assertFalse([x for x in out["errors"] if "缺少二级标题" in x], out["errors"])
+
+    def test_style_guide_example_is_clean(self):
+        style = read(os.path.join(ROOT, "skills", "hq-arch", "diagram-style.md"))
+        block = dc.MERMAID_RE.findall(style)[0]
+        nodes, edges, labeled = dc.flow_stats(block)
+        self.assertLessEqual(len(nodes), dc.MAX_NODES)
+        self.assertEqual(edges, labeled)
+        self.assertIn("classDef", block)
+
+
 if __name__ == "__main__":
     unittest.main()
