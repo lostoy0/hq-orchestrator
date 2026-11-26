@@ -20,6 +20,20 @@
 
 ## 未发布
 
+### 计划清单：新增 hold（暂缓）状态
+- **改动**：`references/backlog-schema.md` 的任务 `status` 新增 `hold`，配必填的 `hold_reason`。`scripts/backlog-check.py` 接受 `hold`；`hold` 没写 `hold_reason` 报错；没有 hold 的任务依赖 hold 任务报错（会一直等下去）；hold 任务不算进 P0/P1 覆盖、`owns` 重叠检查和关键路径，汇总里单列（`summary.hold`，各版本的 `hold` 数，md 报告的“暂缓”一节）。`/hq` 的 `SKILL.md`“按计划执行”：hold 任务从不派发，汇报里列为等待中并附原因。`/hq-plan` 第 3、4 节：范围变更和其他等别人决定的任务用 `hold`。测试：`tests/test_backlog_check.py` 新增 hold、依赖 hold 报错、hold 不算覆盖。
+- **原因/假设**：在一个真实项目上，有几项范围变更要等客户确认，清单里只能写成 `todo`，`/hq --backlog` 会把它们当成可执行任务派出去。预期等待中的任务和可执行任务分开，派发不会再碰到它们，依赖它们的任务在计划阶段就被发现。
+- **验收指标**：按计划执行时，派发出去的 `hold` 任务数 = 0；因“任务还在等客户确认”而中途撤回的派发次数 = 0。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
+### 计划清单：标出需要人或外部条件的任务（needs_human、外部里程碑）
+- **改动**：`references/backlog-schema.md` 新增任务字段 `needs_human`（取值 `device`、`ios_build`、`store_account`、`test_account`、`customer_doc`、`manual_check`）和 `human_step`（人要做的那一步），顶层新增可选的 `milestones: [{id, name, at_min, owner}]`（外部就绪时间点，距项目开始的分钟数），任务用 `ready_after: "M-ACCOUNTS"` 引用。`scripts/backlog-check.py` 校验这些字段；新增最早完成时间和关键路径计算（依赖加 `ready_after` 里程碑，资源不限，不含 hold 和 dropped），汇总给出 `critical_path_min`、`critical_path`、各版本 `finish_min`，以及 `needs_human` 任务数和其中在关键路径上的任务。`/hq` 的 `SKILL.md` 第 4 步新增第 0 条：`needs_human` 任务不整个交给云端子会话，worker 只做脚本、用例和检查清单，需要人的那一步用 C 通道或按停止条件 1 交给用户，任务保持 `BLOCKED` 直到用户回报；第 2 步围绕外部里程碑排，“按计划执行”里 `ready_after` 未就绪不派发。`/hq-plan` 第 3、4 节同步。测试：`tests/test_backlog_check.py` 新增 `needs_human` 校验、里程碑推迟关键路径、里程碑校验和 md 报告。
+- **原因/假设**：在一个真实项目上，有些任务要真机、商店账号、支付测试账号或客户提供的资料，计划却假设这些在第 0 分钟就齐了，关键路径偏短；AI 还会把这些任务派给云端子会话，后者只能用模拟器或假数据交差。预期关键路径反映外部等待，需要人的步骤提早交给用户，和开发并行。
+- **验收指标**：`needs_human` 任务整个派给云端子会话的次数 = 0；这类任务以模拟代替真实验证而被审核打回的次数 = 0；有里程碑的版本，实际完成时间与 `finish_min` 的偏差比没有里程碑时小（复盘时对照 `critical_path_min`）。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自实测）
+
 ## v0.10.3（2026-11-26）
 
 ### PLAYBOOK：并发上限和单批子任务上限可配置
