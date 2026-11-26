@@ -111,6 +111,8 @@ def check(doc, prd_text=None):
 
     # tasks
     tasks = {}
+    imported = bool(doc.get("imported_from"))  # converted from another plan: its own task granularity is kept
+    long_imported = []
     for i, t in enumerate(doc["tasks"]):
         w = "tasks[%d]" % i
         if not isinstance(t, dict):
@@ -150,7 +152,10 @@ def check(doc, prd_text=None):
         if not (isinstance(est, (int, float)) and not isinstance(est, bool) and est > 0):
             E(w, "est_min 必须是正数")
         elif est > LONG_TASK_MIN:
-            W(w, "est_min=%s 超过 %d，建议拆分" % (est, LONG_TASK_MIN))
+            if imported:
+                long_imported.append(tid)
+            else:
+                W(w, "est_min=%s 超过 %d，建议拆分" % (est, LONG_TASK_MIN))
         # tier
         sc = t.get("score")
         ok_score = isinstance(sc, dict) and all(is_int(sc.get(d)) and 0 <= sc[d] <= 2 for d in DIMS)
@@ -171,6 +176,10 @@ def check(doc, prd_text=None):
                     W(w, "档位 %s 低于分数线 %s（tier_score=%d），依据：%s" % (tier, base, ts, t["tier_note"]))
                 else:
                     E(w, "档位 %s 低于分数线 %s（tier_score=%d），必须在 tier_note 写依据" % (tier, base, ts))
+
+    if long_imported:
+        W("tasks", "%d 个任务 est_min 超过 %d（导入自 %s，保留原计划的粒度，/hq 派发时再拆）：%s" % (
+            len(long_imported), LONG_TASK_MIN, doc.get("imported_from"), "、".join(long_imported[:8]) + ("…" if len(long_imported) > 8 else "")))
 
     # dependencies
     for tid, t in tasks.items():

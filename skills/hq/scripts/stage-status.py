@@ -17,6 +17,8 @@ A stage marked "foreign" is not checked by format; it is ok once a content audit
 
 Stage state: ok | missing | partial | needs_work (checker errors or audit blockers) | unaudited (foreign,
 not audited or changed since the audit) | stale.
+A foreign stage that is not frozen also needs work while the audit recorded majors (they are fixed in place,
+then re-audited); for a frozen one, majors are only proposals.
 Exit codes: 0 done, 2 bad arguments.
 """
 import argparse
@@ -261,7 +263,10 @@ def stage_states(arts):
             state = "missing"
         elif len(have) < len(mine):
             state = "partial"
-        elif foreign and audit and mine[0]["audit_current"] and int(audit.get("blockers") or 0) > 0:
+        elif foreign and audit and mine[0]["audit_current"] and (
+                int(audit.get("blockers") or 0) > 0
+                or (not mine[0]["frozen"] and int(audit.get("majors") or 0) > 0)):
+            # frozen: majors are only proposals; not frozen: majors must be fixed in place and re-audited
             state = "needs_work"
         elif foreign and not (audit and mine[0]["audit_current"]):
             state = "unaudited"

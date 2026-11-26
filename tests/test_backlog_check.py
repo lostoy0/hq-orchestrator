@@ -172,6 +172,16 @@ class BacklogCheckTest(unittest.TestCase):
         e = self.errs(mutate(lambda d: d["tasks"].append(task("b-1"))))
         self.assertIn("大写前缀加编号", e)
 
+    def test_imported_long_tasks_collapse(self):
+        def conv(d):
+            d["imported_from"] = ".opc/plan/x.dag.yaml"
+            for t in d["tasks"]:
+                t["est_min"] = 230
+        rc, out = run(mutate(conv))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(out["warnings"]), 1, out["warnings"])
+        self.assertIn("3 个任务 est_min 超过 120", out["warnings"][0])
+
     def test_garbage(self):
         for doc in ([], {"schema": "nope"}, mutate(lambda d: d.update(tasks=[1, "x", None]))):
             rc, out = run(doc)

@@ -203,6 +203,13 @@ class ForeignArtifactsTest(unittest.TestCase):
 
             ss("--docs", docs, "--record-audit", "arch", "--report", "x.md", "--blockers", "2", "--majors", "1")
             self.assertEqual(states()["arch"]["state"], "needs_work")
+            # not frozen: majors still need fixing in place; frozen: majors are only proposals
+            ss("--docs", docs, "--record-audit", "design", "--report", "x.md", "--blockers", "0", "--majors", "3")
+            self.assertEqual(states()["design"]["state"], "needs_work")
+            ss("--docs", docs, "--record-audit", "design", "--report", "x.md", "--blockers", "0", "--majors", "0")
+            self.assertEqual(states()["design"]["state"], "ok")
+            ss("--docs", docs, "--record-audit", "prd", "--report", "x.md", "--blockers", "0", "--majors", "5")
+            self.assertEqual(states()["prd"]["state"], "ok")  # frozen
 
     def test_record_audit_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
