@@ -16,10 +16,11 @@ STATUS = {"todo", "in_progress", "done", "blocked", "dropped"}
 PRIO = {"P0", "P1", "P2"}
 TIERS = ["T0", "T1", "T2", "T3", "T4"]
 DIMS = ("scope", "ambiguity", "context", "risk", "verify")
-REQ_RE = re.compile(r"^(F|NFR)-\d{3,}$")
-REQ_IN_TEXT = re.compile(r"\b(?:F|NFR)-\d{3,}\b")
-TASK_RE = re.compile(r"^B-\d{3,}$")
-REL_RE = re.compile(r"^R\d+$")
+# Ids keep the project's own scheme (hq writes F-001 / B-001 / R1; an imported plan may use REQ-001, NFR-01,
+# LC-01, DF-V1-BASE01, M1 ...). Only the shape is checked: an upper-case prefix, a dash, a number.
+REQ_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
+TASK_RE = re.compile(r"^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$")
+REL_RE = re.compile(r"^[A-Za-z][\w.-]{0,31}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 LONG_TASK_MIN = 120
 
@@ -71,7 +72,7 @@ def check(doc, prd_text=None):
             E(w, "必须是对象"); continue
         rid = r.get("id")
         if not (isinstance(rid, str) and REL_RE.match(rid)):
-            E(w, "id 必须形如 R1"); continue
+            E(w, "id 必须以字母开头，如 R1、M1、v1.1"); continue
         w = "release %s" % rid
         if rid in rel_order:
             E(w, "id 重复"); continue
@@ -92,7 +93,7 @@ def check(doc, prd_text=None):
             E(w, "必须是对象"); continue
         qid = q.get("id")
         if not (isinstance(qid, str) and REQ_RE.match(qid)):
-            E(w, "id 必须形如 F-001 或 NFR-001"); continue
+            E(w, "id 必须是大写前缀加编号，如 F-001、NFR-001、REQ-001"); continue
         w = "requirement %s" % qid
         if qid in reqs:
             E(w, "id 重复"); continue
@@ -110,13 +111,15 @@ def check(doc, prd_text=None):
 
     # tasks
     tasks = {}
+    imported = bool(doc.get("imported_from"))  # converted from another plan: its own task granularity is kept
+    long_imported = []
     for i, t in enumerate(doc["tasks"]):
         w = "tasks[%d]" % i
         if not isinstance(t, dict):
             E(w, "必须是对象"); continue
         tid = t.get("id")
         if not (isinstance(tid, str) and TASK_RE.match(tid)):
-            E(w, "id 必须形如 B-001"); continue
+            E(w, "id 必须是大写前缀加编号，如 B-001、DF-V1-BASE01"); continue
         w = "task %s" % tid
         if tid in tasks:
             E(w, "id 重复"); continue
@@ -149,7 +152,10 @@ def check(doc, prd_text=None):
         if not (isinstance(est, (int, float)) and not isinstance(est, bool) and est > 0):
             E(w, "est_min 必须是正数")
         elif est > LONG_TASK_MIN:
-            W(w, "est_min=%s 超过 %d，建议拆分" % (est, LONG_TASK_MIN))
+            if imported:
+                long_imported.append(tid)
+            else:
+                W(w, "est_min=%s 超过 %d，建议拆分" % (est, LONG_TASK_MIN))
         # tier
         sc = t.get("score")
         ok_score = isinstance(sc, dict) and all(is_int(sc.get(d)) and 0 <= sc[d] <= 2 for d in DIMS)
@@ -170,6 +176,10 @@ def check(doc, prd_text=None):
                     W(w, "档位 %s 低于分数线 %s（tier_score=%d），依据：%s" % (tier, base, ts, t["tier_note"]))
                 else:
                     E(w, "档位 %s 低于分数线 %s（tier_score=%d），必须在 tier_note 写依据" % (tier, base, ts))
+
+    if long_imported:
+        W("tasks", "%d 个任务 est_min 超过 %d（导入自 %s，保留原计划的粒度，/hq 派发时再拆）：%s" % (
+            len(long_imported), LONG_TASK_MIN, doc.get("imported_from"), "、".join(long_imported[:8]) + ("…" if len(long_imported) > 8 else "")))
 
     # dependencies
     for tid, t in tasks.items():
@@ -242,7 +252,9 @@ def check(doc, prd_text=None):
             elif q.get("priority") == "P1":
                 W("requirement %s" % qid, "P1 需求在 %s 及以前没有任务覆盖" % rel)
     if prd_text is not None:
-        missing = sorted(set(REQ_IN_TEXT.findall(prd_text)) - set(reqs))
+        prefixes = sorted({r.split("-")[0] for r in reqs} | {"F", "NFR"})  # the backlog's own prefixes plus hq's
+        in_text = re.findall(r"\b(?:%s)-\d+\b" % "|".join(map(re.escape, prefixes)), prd_text)
+        missing = sorted(set(in_text) - set(reqs))
         if missing:
             W("prd", "需求文档里有、清单里没有的编号：%s" % ", ".join(missing))
 

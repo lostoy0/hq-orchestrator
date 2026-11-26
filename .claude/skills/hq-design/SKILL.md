@@ -1,7 +1,7 @@
 ---
 name: hq-design
 description: HQ 设计阶段。仅在用户显式输入 /hq-design 时使用：根据需求文档（以及竞品调研、品牌素材、现有前端代码）按上线标准产出设计规范、页面与流程说明、可离线打开的高保真可点击原型（含模拟账号和模拟数据，主要流程能从头点到尾，每页都有空、加载、错误等状态），并自动走查截图；已有设计就评审后补全；交付前由产品、开发、测试评审，评审轮次有上限。用户只是提到“设计”“原型”时不要自动使用。
-argument-hint: "[补充说明] [--platform web|ios|android|mini] [--explore N] [--brand <文件或说明>] [--scope <模块或页面>] [--figma] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
+argument-hint: "[补充说明] [--platform web|ios|android|mini] [--explore N] [--brand <文件或说明>] [--scope <模块或页面>] [--figma] [--convert] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
 disable-model-invocation: true
 license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
@@ -23,6 +23,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - `--explore N`：先做 N 个风格方向（每个只做入口页和一个核心页），选定一个再铺开。默认 1（不探索）；全新产品、没有品牌素材时建议 `--explore 3`。
 - `--brand <文件或说明>`：品牌素材（logo、主色、字体、已有设计稿）。
 - `--scope <模块或页面>`：只新做或补全某个模块的页面，其余只做一致性检查。
+- `--convert`：已有可点击原型不是本格式时，按本格式重做（默认是接管）。
 - `--figma`：连了 Figma 的 MCP 时，把定稿的页面截图推送到 Figma 供标注和讨论；默认不推送。
 - `--ask`、`--review-only`、`--rounds N`、`--panel 角色,…`：见 `common.md` 第 4–6 节。默认评审团：`pm`、`engineer`、`qa`。
 
@@ -35,7 +36,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 | 有需求文档 | 正常设计；先运行 `doc-check.py prd`，有错误照常设计，把错误列进“假设与待确认” |
 | 只有想法或截图，没有需求文档 | 可以设计，但侦察任务先整理出功能清单（写进页面与流程说明的“假设与待确认”，注明“需求未经评审”）；汇报里建议运行 `/hq-prd` |
 | 已有原型（`design/prototype/manifest.js`） | 补全模式：先跑两个检查脚本和视觉走查，按完成标准列缺项，只增改不删；已有页面编号不改 |
-| 已有设计稿但不是本格式（图片、Figma 链接、其他原型） | 当作视觉参考：侦察任务描述出页面、风格和组件，按本格式重做原型，风格尽量延续；原文件不动 |
+| 已有能点击的原型，但不是本格式（别的工具生成的 HTML 原型等） | 按 `common.md` 第 10 节**接管**：先建或读对应表 `hq-artifacts.json`，再做接管评审（按完成标准判断内容，不看格式），把结果用 `stage-status.py --record-audit` 记下；已冻结的只写提案，没冻结的在原文件里按原结构补缺口，编号照用；评审时用浏览器逐页打开、走主要流程、切换状态（有 Playwright 就截图），对照第 4 节完成标准。只有带 `--convert` 时才按本格式重做 |
+| 只有静态设计稿（图片、Figma 链接） | 当作视觉参考：侦察任务描述出页面、风格和组件，按本格式做原型，风格尽量延续；原文件不动 |
 | 已有前端代码 | 原型沿用代码里的颜色、字体、间距和组件样式（抄进 `tokens.css`），保证开发时照做不走样 |
 | 什么都没有，命令后面也没写 | 问用户一句：“要设计的产品是什么？一两句话描述，或给需求文档路径。”这是本阶段唯一需要等用户的输入 |
 

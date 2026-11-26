@@ -1,7 +1,7 @@
 ---
 name: hq-prd
 description: HQ 需求阶段。仅在用户显式输入 /hq-prd 时使用：结合项目里的想法、产品描述、已有需求文档、设计稿、竞品截图或竞品调研报告，按上线标准写出或补全一份完整的需求文档（功能、非功能、商业化、埋点、上线必需项、需求索引），交付前由设计、架构、测试、安全等角色评审，评审轮次有上限。用户只是提到“需求”“PRD”时不要自动使用。
-argument-hint: "[补充说明] [--from <文件或目录>] [--scope <模块>] [--no-research] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
+argument-hint: "[补充说明] [--from <文件或目录>] [--scope <模块>] [--no-research] [--convert] [--ask] [--review-only] [--rounds N] [--panel 角色,…]"
 disable-model-invocation: true
 license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
@@ -22,6 +22,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - `--from <路径>`：指定输入（文件、目录、截图），可以写多次；不写时自动在项目里找。
 - `--scope <模块>`：只新写或补全某个模块的功能需求，其余章节只做一致性检查。
 - `--no-research`：没有竞品调研报告时也不做竞品速览（见第 2 节）。
+- `--convert`：已有需求文档不是本模板格式时，另写一份本模板格式的文档（默认是接管，不另写）。
 - `--ask`：侦察后先把待决定事项（`D-xx`）问一次，等回答再写（`common.md` 第 6 节）。
 - `--review-only`、`--rounds N`、`--panel 角色,…`：见 `common.md` 第 4、5 节。默认评审团：`designer`、`architect`、`qa`，第 4 个按产品选：涉及账号、支付、个人信息时加 `security`（多数产品都涉及），否则加 `engineer`；已有代码时 `engineer` 优先于 `architect`。
 
@@ -33,7 +34,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 |---|---|
 | 只有想法、一页纸、截图或设计稿 | 新建。截图和设计稿由侦察任务转成文字描述（页面、流程、功能点），宿主读不了图片时请用户补一两句文字说明 |
 | 已有按本模板写的需求文档 | 补全模式：按完成标准和 `doc-check.py` 找缺项，只增改不删 |
-| 已有需求文档，但不是本模板格式 | 原文件不动；新文档写到 `product/prd.md`（这个路径被原文件占用时写 `product/prd-hq.md`，并在 PLAYBOOK 记一行映射），`based_on` 引用原文件，原文件里的内容全部吸收，冲突的地方记进“假设与待确认” |
+| 已有需求文档，但不是本模板格式（别的工具或团队自己的模板） | 按 `common.md` 第 10 节**接管**：先建或读对应表 `hq-artifacts.json`，再做接管评审（按完成标准判断内容，不看格式），把结果用 `stage-status.py --record-audit` 记下；已冻结的只写提案，没冻结的在原文件里按原结构补缺口，编号照用。不另写一份 hq 格式的需求文档；只有带 `--convert` 时才写到 `product/prd.md`（被占用时写 `product/prd-hq.md`），原文件不动，对应表改指向新文件 |
 | 已有代码 | 已经实现的功能也写成需求，在“备注”写“已实现（位置）”，便于后面只规划剩下的 |
 | 什么都没有，命令后面也没写 | 问用户一句：“要做的产品是什么？一两句话描述，或给文件路径。”这是本阶段唯一需要等用户的输入 |
 
