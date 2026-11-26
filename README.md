@@ -310,6 +310,8 @@ cli-worker.sh list
 merge_default: ask        # ask | auto-if-gates-pass：质量门槛都通过时是否自动合入默认分支
 open_pr: ask              # ask | auto
 budget_usd: 20            # 单次运行的花费上限，超出前停下来问
+remote_concurrency: 4     # 远程子会话并发上限（默认 4）；只调并发，不影响档位
+max_subtasks: 12          # 单批最多派多少个子任务（默认 12）
 autonomy: auto            # auto | confirm-plan：confirm-plan 时计划要等你确认再派发
 worker_clis: []           # 跨厂商 worker，可选 codex/claude/opencode/gemini/cursor；默认空即关闭
 runs_persist: off         # off | branch | commit：运行记录是否保存进仓库；云端没写时问一次

@@ -310,6 +310,8 @@ Set once in the "Authorization" section of the project's `.hq/PLAYBOOK.md` (temp
 merge_default: ask        # ask | auto-if-gates-pass: auto-merge into the default branch when all quality gates pass
 open_pr: ask              # ask | auto
 budget_usd: 20            # spending cap per run; stops to ask before exceeding it
+remote_concurrency: 4     # cap on concurrent remote sessions (default 4); changes concurrency only, never tiers
+max_subtasks: 12          # max subtasks per batch (default 12)
 autonomy: auto            # auto | confirm-plan: with confirm-plan, the plan waits for your confirmation before dispatch
 worker_clis: []           # cross-vendor workers: any of codex/claude/opencode/gemini/cursor; empty (off) by default
 runs_persist: off         # off | branch | commit: whether run records are saved into the repository; asked once in the cloud if unset
