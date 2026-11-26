@@ -276,6 +276,18 @@ class PrototypeCheckForeignTest(unittest.TestCase):
             rc, out = f.check("--prd", f.prd, "--id-prefixes", "REQ")
             self.assertEqual([w.split()[1] for w in out["warnings"]], ["REQ-003", "REQ-009"])
 
+    def test_multi_segment_ids(self):
+        # AC-002-1 must be taken whole (not cut to AC-002), and AC-002-10 in the html must not count as AC-002-1
+        with Foreign() as f:
+            write(f.prd, "# 需求\n- AC-002-1：加入购物车\n- AC-002-2：删除商品\n- AC-002-10：清空购物车\n")
+            write(os.path.join(f.dir, "cart.html"), '<p data-req="AC-002-10">清空</p><p data-req="AC-002-2">删除</p>')
+            rc, out = f.check("--prd", f.prd, "--allow-external")
+            missing = [w.split()[1] for w in out["warnings"] if w.startswith("需求")]
+            self.assertEqual(missing, ["AC-002-1"], out["warnings"])
+            self.assertEqual(out["summary"]["prd_ids"], 3)
+            rc, out = f.check("--prd", f.prd, "--allow-external", "--id-prefixes", "AC")
+            self.assertEqual([w.split()[1] for w in out["warnings"] if w.startswith("需求")], ["AC-002-1"])
+
     def test_forced_on_hq_prototype_and_empty_dir(self):
         with Proto() as p:
             r = subprocess.run([sys.executable, CHECK, p.dir, "--foreign", "--format", "json"], capture_output=True, text=True)

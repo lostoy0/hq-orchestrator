@@ -30,7 +30,7 @@ TESTID_RE = re.compile(r"^\[data-testid=['\"]?([\w-]+)['\"]?\]$")
 RESOURCE_TAGS = {"script", "link", "img", "iframe", "source", "video", "audio", "embed"}
 # requirement-like IDs (same shape as backlog-check.py: upper-case prefix, dash, number), taken where they
 # are defined: at the start of a heading, list item or table cell, or in bold at the start of a line
-ID_DEF_RE = re.compile(r"^\s*(?:(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)(?:\*\*|`)?|\*\*|`)([A-Z][A-Z0-9]*-\d+)\b", re.M)
+ID_DEF_RE = re.compile(r"^\s*(?:(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)(?:\*\*|`)?|\*\*|`)([A-Z][A-Z0-9]*(?:-\d+)+)(?![\w-])", re.M)
 NOT_IDS = {"UTF", "ISO", "SHA", "HTTP", "TLS", "ES", "RFC", "CVE", "GB", "IPV"}  # standards, not requirements
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 SKIP_DIRS = {"node_modules", ".git", "__pycache__"}
@@ -334,7 +334,7 @@ def prd_ids(text, prefixes=None):
     """Requirement-like IDs defined in a PRD of any format, in order of first appearance."""
     text = COMMENT_RE.sub("", text.replace("\r\n", "\n"))
     if prefixes:
-        found = re.findall(r"\b((?:%s)-\d+)\b" % "|".join(map(re.escape, prefixes)), text)
+        found = re.findall(r"(?<![\w-])((?:%s)(?:-\d+)+)(?![\w-])" % "|".join(map(re.escape, prefixes)), text)
     else:
         found = [x for x in ID_DEF_RE.findall(text) if x.split("-")[0] not in NOT_IDS]
     return list(dict.fromkeys(found))
@@ -374,7 +374,7 @@ def check_foreign(root, prd_text=None, allow_external=False, prefixes=None):
     if prd_text is not None:
         ids = prd_ids(prd_text, prefixes)
         blob = "\n".join(texts)
-        missing = [i for i in ids if not re.search(r"(?<![\w-])%s(?!\d)" % re.escape(i), blob)]
+        missing = [i for i in ids if not re.search(r"(?<![\w-])%s(?![\w]|-\d)" % re.escape(i), blob)]
         for i in missing:
             warns.append("需求: %s 在任何 HTML 文件里都没出现（只是覆盖信号，不代表没做）" % i)
         summary.update(prd_ids=len(ids), prd_ids_missing=len(missing))
