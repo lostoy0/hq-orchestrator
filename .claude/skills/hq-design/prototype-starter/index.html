@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原型目录</title>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/base.css">
+</head>
+<!-- 原型入口：给评审和用户看的目录。从 manifest.js 生成，不用手改。 -->
+<body data-hq-page="index">
+  <div class="app">
+    <main class="main stack">
+      <div>
+        <h1 data-testid="product"></h1>
+        <p class="muted">可点击原型：数据都是模拟的，保存在你的浏览器里。左下角的“原型”按钮可以切换页面、状态、账号和重置数据。</p>
+        <a class="btn btn-primary" id="start" data-testid="start">开始体验</a>
+      </div>
+      <div class="card"><h3>演示账号</h3><ul class="list" id="accounts"></ul></div>
+      <div class="card"><h3>页面</h3><ul class="list" id="pages"></ul></div>
+      <div class="card"><h3>流程</h3><ul class="list" id="flows"></ul></div>
+    </main>
+  </div>
+  <script src="manifest.js"></script>
+  <script src="data/seed.js"></script>
+  <script src="assets/app.js"></script>
+  <script>
+    var M = HQ.manifest;
+    document.title = M.product + " · 原型";
+    document.querySelector("[data-testid=product]").textContent = M.product;
+    document.getElementById("start").href = HQ.url(M.entry);
+    function li(html) { var e = document.createElement("li"); e.innerHTML = html; return e; }
+    function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; }
+    M.accounts.forEach(function (a) {
+      document.getElementById("accounts").appendChild(li("<div style='flex:1'>" + esc(a.note || a.role) + "<div class='small muted'>" + esc(a.email) + " / " + esc(a.password) + "</div></div>"));
+    });
+    M.pages.forEach(function (p) {
+      var states = (p.states || []).map(function (s) { return "<a class='small' href='" + HQ.url(p.id, "state=" + s) + "'>" + esc(s) + "</a>"; }).join(" · ");
+      document.getElementById("pages").appendChild(li("<div style='flex:1'><a href='" + HQ.url(p.id) + "'>" + esc(p.id + " " + p.title) + "</a><div>" + states + "</div></div>" + (p.auth ? "<span class='badge'>需登录</span>" : "")));
+    });
+    (M.flows || []).forEach(function (f) {
+      document.getElementById("flows").appendChild(li("<div style='flex:1'>" + esc(f.id + " " + f.title) + "<div class='small muted'>" + esc((f.requirements || []).join("、")) + "</div></div>"));
+    });
+  </script>
+</body>
+</html>

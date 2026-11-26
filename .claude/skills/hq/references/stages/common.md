@@ -19,7 +19,10 @@
   product/brief.md          一页纸：想法、目标用户、要解决的问题（输入不足时由阶段技能生成）
   product/prd.md            需求文档（/hq-prd）
   research/competitors.md   竞品调研（/hq-research）
-  design/                   设计规范、视觉稿、可点击原型（/hq-design）
+  design/design-system.md   设计规范（/hq-design）
+  design/screens.md         页面与流程说明（/hq-design）
+  design/prototype/         可点击原型，manifest.js 是页面、账号、流程清单（/hq-design）
+  design/screens/           原型走查截图（/hq-design）
   tech/architecture.md      架构设计（/hq-arch）
   tech/detailed-design.md   详细技术设计（/hq-arch）
   tech/adr/NNNN-<名>.md     架构决策记录
@@ -144,4 +147,4 @@ updated: 2026-11-26
 
 ## 9. 机械检查
 
-能用脚本检查的完成标准都用脚本检查，结果写进评审记录：计划清单用 `scripts/backlog-check.py`，需求文档和竞品报告用 `scripts/doc-check.py prd|research <文件>`。脚本报错误时先修再评审，不要把格式问题留给评审者。
+能用脚本检查的完成标准都用脚本检查，结果写进评审记录：计划清单用 `scripts/backlog-check.py`，需求文档和竞品报告用 `scripts/doc-check.py prd|research <文件>`，架构文档用 `scripts/doc-check.py arch <architecture.md> --detailed <detailed-design.md> --prd <需求文档>`，原型用 `scripts/prototype-check.py`（静态）和 `scripts/prototype-walk.mjs`（需要 Playwright，逐页逐状态截图并执行流程）。脚本报错误时先修再评审，不要把格式问题留给评审者。
