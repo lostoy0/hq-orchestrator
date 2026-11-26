@@ -28,7 +28,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ## 1. 侦察：哪些阶段要跑
 
-运行 `python3 <hq>/scripts/stage-status.py --docs <docs_root> --format json`（`docs_root` 按 `common.md` 第 2 节确定）。它对每个阶段给出状态：
+1. **先看项目里已有什么**：`docs_root` 下还没有对应表 `hq-artifacts.json` 时，运行 `python3 <hq>/scripts/stage-status.py --discover --root <仓库根目录>`。发现了已有的需求、设计、架构、计划文档（不管什么格式、放在哪），按 `common.md` 第 10 节核对后写成对应表，`docs_root` 用对应表里的。**不要在已有文档之外从头再写一套。**
+2. 运行 `python3 <hq>/scripts/stage-status.py --docs <docs_root> --format json`。它对每个阶段给出状态：
 
 | 状态 | 含义 | 本次怎么做 |
 |---|---|---|
@@ -37,6 +38,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 | `partial` | 产物不全 | 补全模式 |
 | `needs_work` | 检查有错误 | 补全模式 |
 | `stale` | 依据的上游已更新 | 补全模式，先对齐上游的变化 |
+| `unaudited` | 外来格式的已有文档，还没做接管评审，或评审后文件改过 | 只做该阶段的**接管评审**（`common.md` 第 10 节），不新建、不改写；计划阶段是**导入**（`/hq-plan` 第 6 节） |
 
 再按 `--until`、`--skip`、`--from` 定出本次要跑的阶段。**上游阶段一旦重跑，它下游所有已存在的阶段都要跟着对齐**（上游版本变了，下游会变成 `stale`）。
 
@@ -59,6 +61,7 @@ research → prd → design（g1 侦察、g2 页面与流程）→ design 其余
 
 **阶段关卡**（每个阶段结束、下一个阶段开始前）：
 - 再跑一次 `stage-status.py`，这个阶段必须是 `ok`；评审没有未解决的 blocker。
+- 接管的阶段评审出 blocker 时：没冻结的按 `common.md` 第 10 节在原文件里补，再评审；**已冻结的不能改**，停在这里，把提案交给用户决定（这属于改不回来的决定）。只有 major 和 minor 的，提案留给用户，链条继续。
 - 不满足时，在该阶段的轮次上限内补一轮修改；仍不满足就**停在这里**，汇报卡在哪、为什么，不在有问题的基础上继续往下做。
 
 **决策暂停**（需求阶段之后，只停这一次）：
@@ -92,7 +95,7 @@ updated: YYYY-MM-DD
 ## 下一步
 ```
 
-内容只从各产物里汇总，不重新写；每条都写出处（文件和编号）。
+内容只从各产物里汇总，不重新写；每条都写出处（文件和编号）。接管的阶段在“阶段与产物”表里注明“接管（外来格式）”和评审记录，提案文件单独列一节“待你决定的修改提案”。
 
 ## 5. 完成标准
 

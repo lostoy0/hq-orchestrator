@@ -135,5 +135,113 @@ class StageStatusTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+def foreign_repo(tmp):
+    """A repository laid out like a project made by another tool (.opc/, REQ ids, a DAG plan)."""
+    r = os.path.join(tmp, "repo")
+    os.makedirs(os.path.join(r, ".git"))
+    write(os.path.join(r, ".opc", "product", "prd.md"), "# 需求文档\n\n| 项 | 值 |\n|---|---|\n| 状态 | 已冻结 |\n\n### REQ-001 〔P0〕登录\n")
+    write(os.path.join(r, ".opc", "product", "prototype", "index.html"), "<html></html>")
+    write(os.path.join(r, ".opc", "product", "prototype", "web.html"), "<html></html>")
+    write(os.path.join(r, ".opc", "tech", "design.md"), "# 技术设计\n")
+    write(os.path.join(r, ".opc", "tech", "adr", "ADR-001-a.md"), "# a\n")
+    write(os.path.join(r, ".opc", "tech", "adr", "ADR-002-b.md"), "# b\n")
+    write(os.path.join(r, ".opc", "tech", "contracts", "api.yaml"), "openapi: 3.0.0\n")
+    write(os.path.join(r, ".opc", "plan", "v1.dag.yaml"), "tasks: []\n")
+    write(os.path.join(r, ".opc", "reviews", "prd-v0.1.md"), "# 评审\n")
+    write(os.path.join(r, "node_modules", "x", "prd.md"), "# not ours\n")
+    return r
+
+
+def ss(*args):
+    r = subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True)
+    return r.returncode, r.stdout, r.stderr
+
+
+class ForeignArtifactsTest(unittest.TestCase):
+    def test_discover(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = foreign_repo(tmp)
+            rc, out, _ = ss("--discover", "--root", r)
+            self.assertEqual(rc, 0)
+            m = json.loads(out)
+            self.assertEqual(m["docs_root"], ".opc")
+            st = m["stages"]
+            self.assertEqual(st["prd"], {"format": "foreign", "paths": [".opc/product/prd.md"], "frozen": True})
+            self.assertEqual(st["design"]["paths"], [".opc/product/prototype"])
+            self.assertEqual(st["arch"]["paths"], [".opc/tech/adr", ".opc/tech/contracts", ".opc/tech/design.md"])
+            self.assertEqual(st["plan"]["paths"], [".opc/plan/v1.dag.yaml"])
+            self.assertNotIn("research", st)
+
+    def test_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = foreign_repo(tmp)
+            docs = os.path.join(r, ".opc")
+            _, out, _ = ss("--discover", "--root", r)
+            write(os.path.join(docs, "hq-artifacts.json"), out)
+
+            def states():
+                rc, o, e = ss("--docs", docs, "--format", "json")
+                self.assertEqual(rc, 0, e)
+                return {s["stage"]: s for s in json.loads(o)["stages"]}
+
+            st = states()
+            self.assertEqual(st["prd"]["state"], "unaudited")
+            self.assertTrue(st["prd"]["frozen"])
+            self.assertEqual(st["research"]["state"], "missing")  # not mapped -> hq layout under .opc
+
+            rc, o, e = ss("--docs", docs, "--record-audit", "prd", "--report", ".opc/reviews/prd-audit.md", "--blockers", "0")
+            self.assertEqual(rc, 0, e)
+            self.assertEqual(states()["prd"]["state"], "ok")
+
+            with open(os.path.join(docs, "product", "prd.md"), "a", encoding="utf-8") as fh:
+                fh.write("### REQ-002 〔P1〕搜索\n")
+            st = states()
+            self.assertEqual(st["prd"]["state"], "unaudited")
+            self.assertFalse(st["prd"]["audit_current"])
+
+            ss("--docs", docs, "--record-audit", "arch", "--report", "x.md", "--blockers", "2", "--majors", "1")
+            self.assertEqual(states()["arch"]["state"], "needs_work")
+
+    def test_record_audit_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = foreign_repo(tmp)
+            docs = os.path.join(r, ".opc")
+            rc, _, e = ss("--docs", docs, "--record-audit", "prd", "--report", "x.md", "--blockers", "0")
+            self.assertEqual(rc, 2)
+            self.assertIn("不存在", e)
+            write(os.path.join(docs, "hq-artifacts.json"), json.dumps({"schema": "hq-artifacts/1", "stages": {"prd": {"format": "hq"}}}))
+            rc, _, e = ss("--docs", docs, "--record-audit", "prd", "--report", "x.md", "--blockers", "0")
+            self.assertIn("不是 foreign", e)
+            write(os.path.join(docs, "hq-artifacts.json"), json.dumps({"schema": "nope"}))
+            rc, _, e = ss("--docs", docs)
+            self.assertEqual(rc, 2)
+
+    def test_hq_path_override(self):
+        with Project() as p:
+            os.rename(p.path("product/prd.md"), p.path("product/requirements-v2.md"))
+            write(p.path("hq-artifacts.json"), json.dumps({"schema": "hq-artifacts/1", "stages": {
+                "prd": {"format": "hq", "paths": {"prd": "product/requirements-v2.md"}}}}))
+            st, _ = p.status()
+            self.assertEqual(st["prd"]["state"], "ok")
+            self.assertEqual(st["prd"]["artifacts"][0]["path"], "product/requirements-v2.md")
+
+    def test_imported_plan_skip_and_source(self):
+        with Project() as p:
+            os.remove(p.path("plan/roadmap.md"))
+            write(os.path.join(p.tmp, ".git", "HEAD"), "x")  # repo root = p.tmp
+            write(os.path.join(p.tmp, ".opc", "plan.dag.yaml"), "tasks: [a]\n")
+            write(p.path("hq-artifacts.json"), json.dumps({"schema": "hq-artifacts/1", "stages": {
+                "plan": {"format": "hq", "skip": ["roadmap"], "source": ".opc/plan.dag.yaml"}}}))
+            rc, _, e = ss("--docs", p.docs, "--record-source", "plan")
+            self.assertEqual(rc, 0, e)
+            st, todo = p.status()
+            self.assertEqual(st["plan"]["state"], "ok", st["plan"])
+            self.assertEqual([x["key"] for x in st["plan"]["artifacts"]], ["backlog"])
+            write(os.path.join(p.tmp, ".opc", "plan.dag.yaml"), "tasks: [a, b]\n")
+            st, _ = p.status()
+            self.assertEqual(st["plan"]["state"], "stale")
+            self.assertIn("转换后改过", st["plan"]["artifacts"][0]["stale"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

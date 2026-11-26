@@ -11,8 +11,9 @@
 
 ## 2. 产物目录
 
-- 根目录 `docs_root`：先看 PLAYBOOK“项目事实”里的 `docs_root`；没写时，项目已有 `docs/`、`doc/` 或 `documentation/` 就沿用，否则用 `docs/`。定下后写进 PLAYBOOK。
-- 目录约定（项目已有等价文件时沿用原路径，并在 PLAYBOOK 里记一行映射）：
+- 根目录 `docs_root`：先看 PLAYBOOK“项目事实”里的 `docs_root`，再看已有的对应表 `hq-artifacts.json`（第 10 节）；都没有时，项目已有 `docs/`、`doc/`、`documentation/`、`.opc/`、`specs/` 之一就沿用，否则用 `docs/`。定下后写进 PLAYBOOK。
+- **项目里已经有需求、设计、架构、计划之类的文档时（不管放在哪、什么格式），先按第 10 节接管，不要在 `docs_root` 下从头再写一套。**
+- 目录约定（项目已有等价文件时沿用原路径，写进对应表）：
 
 ```
 <docs_root>/
@@ -64,13 +65,15 @@ updated: 2026-11-26
 | `S1` | 来源（链接和访问日期） | 各产物的“来源”表 |
 
 - 下游引用上游编号（任务写它实现哪些 `F-`，页面写它服务哪些 `F-`），编号一经发布不复用；删掉的写“已废弃”。
-- 上游没有编号时（例如用户自己写的需求文档）：下游在自己的产物里建一张“需求索引”（编号、标题、出处），不改上游文件；汇报里建议用户运行对应阶段补上编号。
+- 上游用了自己的编号（如 `REQ-001`、`NFR-01`、`LC-01`、`PG-001`）：下游照用原编号，不换成 `F-001`；对应表里记下前缀（第 10 节）。各检查脚本只要求“大写前缀-编号”的形状。
+- 上游完全没有编号时（例如用户自己写的需求文档）：下游在自己的产物里建一张“需求索引”（编号、标题、出处），不改上游文件；汇报里建议用户运行对应阶段补上编号。
 
 ## 4. 模式
 
 - **新建**：产物不存在。
 - **补全**（产物已存在，默认）：先派只读子会话按本阶段完成标准逐条检查，列出缺项和问题，再按缺项派写作任务。只增改，不删除用户写的内容；用户内容和标准冲突时，保留原文，在“假设与待确认”里写明冲突和建议。
 - **只评审**（`--review-only`）：只做检查和第 5 节的评审，产出评审记录，不改产物。
+- **接管**（已有产物不是本阶段模板的格式，即对应表里的 `foreign`）：按第 10 节做内容评审、补缺口，不改写成本模板的格式。
 
 ## 5. 评审协议
 
@@ -150,3 +153,38 @@ updated: 2026-11-26
 ## 9. 机械检查
 
 能用脚本检查的完成标准都用脚本检查，结果写进评审记录：计划清单用 `scripts/backlog-check.py`，需求文档和竞品报告用 `scripts/doc-check.py prd|research <文件>`，架构文档用 `scripts/doc-check.py arch <architecture.md> --detailed <detailed-design.md> --prd <需求文档>`，原型用 `scripts/prototype-check.py`（静态）和 `scripts/prototype-walk.mjs`（需要 Playwright，逐页逐状态截图并执行流程），上线检查用 `scripts/doc-check.py launch <checklist.md>`。`scripts/stage-status.py --docs <docs_root>` 一次列出所有阶段产物的状态（齐不齐、检查有没有错误、依据的上游是否已更新），`/hq-blueprint` 用它决定跑哪些阶段。脚本报错误时先修再评审，不要把格式问题留给评审者。
+
+## 10. 接管已有产物
+
+真实项目常常已经有文档：别的工具生成的（如 `.opc/` 下的一整套）、团队自己的模板、旧版本的需求文档。阶段技能遇到它们时**接管**，而不是重写。
+
+**1. 发现**（侦察时做）：运行 `python3 <hq>/scripts/stage-status.py --discover --root <仓库根目录>`。它按路径和文件名在全仓库找各阶段的文档（跳过 `node_modules`、`.git` 等，评审记录目录不算），给出一份建议的对应表：每个阶段的路径、格式（文件开头有 `hq_stage` 元数据的算 `hq`，否则 `foreign`）、是否已冻结（开头 30 行里写了“已冻结”“frozen”“status: approved”等）。侦察任务核对这份建议：删掉找错的、补上漏掉的（比如没被认出的原型目录）、确认冻结状态，然后写成 `<docs_root>/hq-artifacts.json`，和文档一起提交（不要放在不提交的 `.hq/` 里）。
+
+```json
+{
+  "schema": "hq-artifacts/1",
+  "docs_root": ".opc",
+  "stages": {
+    "prd":    {"format": "foreign", "paths": [".opc/product/prd.md"], "frozen": true, "id_prefixes": ["REQ", "NFR", "LC"]},
+    "design": {"format": "foreign", "paths": [".opc/product/prototype"], "frozen": false},
+    "arch":   {"format": "foreign", "paths": [".opc/tech/design.md", ".opc/tech/adr", ".opc/tech/contracts"], "frozen": false},
+    "plan":   {"format": "foreign", "paths": [".opc/plan/v1.1-standard.dag.yaml"], "frozen": false}
+  }
+}
+```
+
+- `paths` 写相对仓库根目录的路径，可以是文件或目录；没列出的阶段按 hq 格式放在 `docs_root` 下。
+- `hq` 格式的阶段只是换了位置时，写 `{"format": "hq", "paths": {"prd": "product/requirements-v2.md"}}`（相对 `docs_root`，键名同 `stage-status.py` 里的产物名）。
+- `id_prefixes`：这个阶段的编号前缀，下游照用。
+
+**2. 接管评审**（代替这个阶段的“新建”）：按本阶段的完成标准逐条判断**内容**是否满足，不看格式和章节名。
+- 派该阶段默认的评审团（只读），说明里给：对应表里的文件、本阶段完成标准、第 5 节的意见格式。每个评审者多交一张表：完成标准每条一行，写“满足 / 部分满足 / 缺失”和依据（文件和位置）。
+- 不跑只认 hq 格式的检查脚本（`doc-check.py`、`prototype-check.py`、`backlog-check.py`）；能用的通用验证照做（如打开原型逐页看、对照需求核对计划覆盖）。
+- 主会话分诊后写评审记录 `<docs_root>/reviews/<阶段>-audit-<YYYYMMDD>.md`，然后运行 `stage-status.py --docs <docs_root> --record-audit <阶段> --report <评审记录路径> --blockers <未解决的 blocker 数> --majors <数>`。脚本会记下文件指纹：之后文件一改，这个阶段就回到“待接管评审”。
+
+**3. 补缺口**：
+- **已冻结的产物不改**。缺口写成提案 `<docs_root>/reviews/<阶段>-proposals-<YYYYMMDD>.md`（每条：问题、依据、建议怎么改、影响哪些下游），交给用户决定；用户同意后再按下一条改。blocker 也只写提案，汇报时醒目列出。
+- **没冻结的产物**：在原文件里、按原文件自己的结构和编号补（加条目、补验收标准、补状态说明），只增改不删除；改完重新做第 2 步的评审（指纹变了）。
+- 不把外来格式整份改写成本模板的格式，除非用户明确要求（参数 `--convert`）；那时新文件写到 hq 默认位置，原文件不动，对应表改指向新文件。
+
+**4. 下游怎么用**：下游阶段把外来格式的上游当作正常输入读（按内容理解，编号照用）；需要机器可读的上游（如 `/hq --backlog` 要的计划清单）时，由对应阶段技能做转换，见 `/hq-plan` 的“导入”。
