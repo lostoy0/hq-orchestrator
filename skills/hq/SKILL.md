@@ -115,7 +115,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
 - **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
 - **辅助执行者**（开启时）：先去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥；辅助都走 W 通道，还要确认本会话能建 worktree（`git worktree add` 要写 `.git`，Codex 等宿主的沙箱可能禁止），不能建就整个名单按“不可用”停用。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
-- **预算**：默认远程并发上限 4（宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、总子任务数不超过 12、金额上限取 PLAYBOOK 的 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。
+- **预算**：远程并发上限取 PLAYBOOK 的 `remote_concurrency`（默认 4；宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、单批子任务数上限取 `max_subtasks`（默认 12）、金额上限取 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。并发上限只决定同时开几个，不影响每个任务的档位（铁律 8）。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
 ## 第 2 步：规划成任务图（DAG）
@@ -251,6 +251,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - `merge_default: auto-if-gates-pass | ask`（默认 `ask`）：质量门槛通过后是否自动合入默认分支。
 - `open_pr: auto | ask`（默认 `ask`）。
 - `budget_usd: <数额>`：单次运行的花费上限，超出前按停止条件 2 处理。
+- `remote_concurrency: <数>`（默认 4）：远程子会话（B 通道）同时运行的上限；本地槽位仍按第 5 步的资源检查。调高前确认审核和归并跟得上，否则任务会堆在审核环节。
+- `max_subtasks: <数>`（默认 12）：单批最多派多少个子任务。按计划清单整版推进（`--backlog`）时可以设成该版本的任务数。
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 - `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
 - `runs_persist: off | branch | commit`（本地默认 `off`，云端没写时问一次）：运行记录是否保存进仓库，见第 9 步。

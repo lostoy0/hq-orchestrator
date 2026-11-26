@@ -11,6 +11,8 @@
 merge_default: ask        # ask | auto-if-gates-pass：合入默认分支。默认 ask；auto-if-gates-pass 仅在三项质量门槛都通过时自动合入
 open_pr: ask              # ask | auto：开 PR。默认 ask
 budget_usd: <数额>        # 本项目单次运行的预算上限（美元）。超出前必须停下来问用户
+remote_concurrency: 4     # 远程子会话（B 通道）并发上限，默认 4；调高前确认审核和归并跟得上。只调并发，不影响档位
+max_subtasks: 12          # 单批最多派多少个子任务，默认 12；按计划清单整版推进时可设成该版本的任务数
 autonomy: auto            # auto | confirm-plan：默认 auto；confirm-plan 表示派发前计划必须经用户确认
 worker_clis: []           # 跨厂商 worker（W 通道）可用的 CLI，可选 codex、claude、opencode、gemini、cursor。默认空，即关闭；宿主自己的 CLI 不需要列
 runs_persist: off         # off | branch | commit：运行记录是否保存进仓库。branch 写进专用分支 hq/runs（推荐，云端必开）；commit 随本批改动提交；本地默认 off，云端没写时 /hq 问一次
