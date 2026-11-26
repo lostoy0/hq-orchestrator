@@ -1,7 +1,0 @@
-# Gemini CLI 扩展命令：/hq-家、3 [参数]。只在 Gemini CLI 里生效（Claude Code 插件只读 commands/*.md，不读 .toml）。
-description = "HQ 家、3"
-prompt = """
-激活 hq-家、3 技能（activate_skill，技能名 hq-家、3），然后严格按它的流程处理下面的参数和补充说明。宿主是 Gemini CLI，按 hq 技能里的 references/hosts/gemini.md 使用。
-
-参数和补充说明：{{args}}
-"""

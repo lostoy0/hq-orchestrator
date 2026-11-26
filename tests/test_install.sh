@@ -247,6 +247,8 @@ for c,skill in (("hq","hq"),("hq-retro","hq-retro"),("hq-plan","hq-plan"),("hq-p
     t=tomllib.load(open(os.path.join(r,"commands",c+".toml"),"rb"))
     if not t.get("description") or "{{args}}" not in t.get("prompt","") or ("技能名 "+skill) not in t["prompt"]: errs.append("commands/"+c)
 if [f for f in os.listdir(os.path.join(r,"commands")) if not f.endswith(".toml")]: errs.append("commands/ 只放 .toml")
+for f in os.listdir(os.path.join(r,"commands")):
+    if f.endswith(".toml") and not os.path.isfile(os.path.join(r,"skills",f[:-5],"SKILL.md")): errs.append("commands/"+f+" 没有对应的技能 skills/"+f[:-5])
 print("\n".join(errs)); sys.exit(1 if errs else 0)
 PY2
 [ $? = 0 ] && ok "Gemini 扩展清单、技能、命令结构正确" || bad "gemini extension" "$(cat "$T/out")"
