@@ -86,7 +86,7 @@
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
 | assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
-| stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 7 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
+| stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 8 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
 
 示例：
 
