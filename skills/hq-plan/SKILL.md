@@ -1,7 +1,7 @@
 ---
 name: hq-plan
 description: HQ 计划阶段。仅在用户显式输入 /hq-plan 时使用：根据需求、设计、技术文档和现有代码，拆出版本迭代计划和任务清单，每个任务按难度预估档位，产出 roadmap.md 和给 /hq 执行的 backlog.json，交付前由架构、开发、QA 评审，评审轮次有上限。用户只是提到“计划”“排期”时不要自动使用。
-argument-hint: "[--release <版本名>] [--horizon <版本数>] [--review-only] [--rounds N] [--panel 角色,…] [补充说明]"
+argument-hint: "[--release <版本名>] [--horizon <版本数>] [--import] [--review-only] [--rounds N] [--panel 角色,…] [补充说明]"
 disable-model-invocation: true
 license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orchestrator/blob/main/LICENSE)"
 ---
@@ -20,6 +20,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 - `--release <版本名>`：只规划（或重排）到这个版本，例如只出 MVP。
 - `--horizon <N>`：规划几个版本。默认 MVP 加后续 1–2 个版本；P2 需求可以不排（`release: null`）。
+- `--import`：强制按第 6 节导入已有计划（发现了外来格式的计划时默认就是导入）。
 - `--review-only`、`--rounds N`、`--panel 角色,…`：见 `common.md` 第 4、5 节。默认评审团：`architect,engineer,qa`；需求是本阶段自己整理的（没有需求文档）时加 `pm`。
 - 其余文字是补充说明（如“先做 Web 端”“两周内上线”“一个人做”），写进台账头部，作为约束交给起草任务。
 
@@ -29,6 +30,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 | 情况 | 做法 |
 |---|---|
+| 已有计划，但不是本格式（别的工具生成的任务图、表格、YAML 等） | **导入**（见第 6 节），不重新拆任务 |
+| 需求文档是外来格式（对应表里 `prd` 为 `foreign`） | 正常规划；需求编号用原文件的编号（如 `REQ-001`），优先级按原文件的写法换算成 P0/P1/P2 |
 | 有需求文档 | 正常规划。`/hq-prd` 写的需求文档有“需求索引”表时，直接用它作为 `requirements`（建议版本为 MVP 的放进 R1），先运行 `doc-check.py prd` 确认文档没有错误；有错误时照常规划，把错误列进“假设与待确认”，汇报里建议先修需求文档 |
 | 只有想法描述、一页纸、截图或竞品资料 | 可以规划：需求索引由本阶段整理，在 roadmap 开头写明“需求未经评审”，评审团加 `pm`；汇报里推荐先运行 `/hq-prd` |
 | 什么都没有，命令后面也没写 | 问用户一句：“要规划的产品或目标是什么？可以直接贴描述，或给文件路径。”这是本阶段唯一需要等用户的输入 |
@@ -100,3 +103,18 @@ roadmap.md 和 backlog.json 不一致时以 backlog.json 为准；改动清单�
   - 评审轮次、各级问题数、未解决项；
   - 假设与待确认，每条附推荐选项；
   - 下一步：`/hq --backlog <backlog.json 路径> R1`（或直接说“执行 R1”）开始执行第一个版本；缺需求文档或架构文档时，同时建议运行对应的阶段命令。
+
+## 6. 导入已有计划
+
+项目已有别的格式的计划时（对应表里 `plan` 为 `foreign`），不重新拆任务，而是把它转成 `backlog.json`，让 `/hq --backlog` 能直接执行。
+
+- **转换**（一个 T2–T3 子任务；计划很大时按版本或模块分几个任务并行，各写一段，最后合并）：
+  - 编号、标题、依赖、负责的文件（`owns`）、验收标准、预计用时照原计划搬，**编号保留原样**（如 `DF-V1-BASE01`），需求编号用需求文档的原编号。
+  - 原计划没有的字段按本技能第 3 节补：版本（原计划只有一个里程碑时就是一个版本）、`verify_level`、5 维打分 `score`。
+  - 顶层写 `imported_from`（原计划路径）。原计划的任务粒度照搬，不为了满足 15–120 分钟的规则而拆合（会破坏编号和依赖），`/hq` 派发时再按第 2 步打包或拆分。
+  - 原计划有自己的难度分级时，写进 `tier_note`（如“原难度 D4”），作为打分的对照；两者明显不一致时以 5 维打分为准，在 `tier_note` 里写一句原因。
+  - 原计划里的“假设与未决问题”搬进 `roadmap.md` 不需要写：原计划文件本身就是给人看的版本计划。
+- **检查**：`backlog-check.py <backlog.json> --prd <需求文档>`，没有错误为止；警告逐条处理或写明理由。再核对任务数、总用时和关键路径与原计划一致，不一致时写明原因。
+- **对应表**：`plan` 改成 `{"format": "hq", "skip": ["roadmap"], "source": "<原计划路径>"}`，然后运行 `stage-status.py --docs <docs_root> --record-source plan` 记下原计划的指纹。原计划之后被改动，`stage-status.py` 会把计划阶段标成“上游已更新”，重新导入即可。
+- 原计划文件不动。评审只做 1 轮，评审团 `engineer`、`qa`，只看转换有没有丢信息、打分是否合理。
+

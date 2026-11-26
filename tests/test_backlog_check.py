@@ -157,6 +157,31 @@ class BacklogCheckTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(any("F-007" in w and "NFR-001" in w for w in out["warnings"]))
 
+    def test_foreign_ids_are_accepted(self):
+        def conv(d):
+            d["requirements"] = [{"id": "REQ-001", "title": "login", "priority": "P0", "release": "M1"},
+                                 {"id": "NFR-01", "title": "fast", "priority": "P0", "release": "M1"}]
+            d["releases"] = [{"id": "M1", "name": "首发", "goal": "上线", "exit_criteria": ["REQ-001 通过"]}]
+            d["tasks"] = [task("DF-V1-BASE01", release="M1", reqs=["REQ-001", "NFR-01"]),
+                          task("DF-V1-AUTH01", release="M1", reqs=["REQ-001"], deps=["DF-V1-BASE01"])]
+        rc, out = run(mutate(conv), ("--prd", "### REQ-001 登录\n### REQ-002 搜索\nNFR-01 快\n"))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(any("REQ-002" in w for w in out["warnings"]), out["warnings"])
+
+    def test_bad_id_shapes(self):
+        e = self.errs(mutate(lambda d: d["tasks"].append(task("b-1"))))
+        self.assertIn("大写前缀加编号", e)
+
+    def test_imported_long_tasks_collapse(self):
+        def conv(d):
+            d["imported_from"] = ".opc/plan/x.dag.yaml"
+            for t in d["tasks"]:
+                t["est_min"] = 230
+        rc, out = run(mutate(conv))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(out["warnings"]), 1, out["warnings"])
+        self.assertIn("3 个任务 est_min 超过 120", out["warnings"][0])
+
     def test_garbage(self):
         for doc in ([], {"schema": "nope"}, mutate(lambda d: d.update(tasks=[1, "x", None]))):
             rc, out = run(doc)
