@@ -38,7 +38,7 @@ For Codex, OpenCode, Gemini CLI, Cursor and dsh use the one-line script; see [In
 
 ## What's included
 ```
-.claude-plugin/plugin.json             plugin manifest (v0.10.1)
+.claude-plugin/plugin.json             plugin manifest (v0.10.2)
 .claude-plugin/marketplace.json        for installing with /plugin marketplace add
 skills/hq/SKILL.md                     core workflow: orchestrate or not → recon → plan → pick tier → pick location → control concurrency → dispatch → monitor and re-tier → review and merge → record data → report
 skills/hq/calibration.md               tier calibration: 5-dimension scoring, T0–T4 tiers, adjustment rules (retros only tune this file)
@@ -98,9 +98,9 @@ SECURITY.md                            how to report security issues privately
 
 **Option 0: one-line install (recommended, works for every host)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.1/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.2/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.10.1` tag to `~/.hq-orchestrator/v0.10.1`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
+When not run from inside the repository, the script first uses git to download the `v0.10.2` tag to `~/.hq-orchestrator/v0.10.2`, then installs (`HQ_REF=<tag or branch>` picks another version). To look before running, download `install.sh` and use `--list` or `--dry-run`. With a clone of this repository, run `./install.sh` directly:
 ```bash
 ./install.sh --host auto|all|claude,codex,dsh,opencode,cursor,gemini [--scope user|project] [--project-dir <path>]
              [--layout minimal|per-host] [--with-agents [--model-map 'T0=…,…,T4=…']] [--force] [--dry-run]
@@ -128,7 +128,7 @@ When not run from inside the repository, the script first uses git to download t
 
 **Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq`, `/hq-retro` and the stage commands `/hq-research`, `/hq-prd`, `/hq-design`, `/hq-arch`, `/hq-plan`, `/hq-blueprint`, `/hq-launch`)
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.10.1
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.10.2
 ```
 The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so. Update with `gemini extensions update hq-orchestrator`.
 
@@ -186,7 +186,7 @@ First check what you have: `./install.sh --list` shows each installed copy with 
 
 | Install method | How to upgrade |
 |---|---|
-| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.1/install.sh \| bash -s -- --update` |
+| Option 0 (one-line install) | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.2/install.sh \| bash -s -- --update` |
 | Option 0 (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
 | Option 0a (Gemini extension) | `gemini extensions update hq-orchestrator` |
 | Option 0b (`npx skills add`) | Run the same `npx skills add` command again to overwrite |
