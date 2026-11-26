@@ -68,6 +68,7 @@ skills/hq/scripts/doc-check.py         requirements doc, research report and arc
 skills/hq/scripts/prototype-check.py   clickable prototype static checker (read-only)
 skills/hq/scripts/prototype-walk.mjs   clickable prototype walk-through: screenshots every page and state, runs flows (needs Playwright)
 skills/hq/scripts/stage-status.py      reports each stage's outputs: complete or not, check results, stale or not (read-only)
+skills/hq/scripts/fetch-page.py        fetches a page's text with curl through the session proxy (for research when the host's own fetch tool cannot reach sites)
 docs/design-stages.md                  design draft and roadmap for stage skills (in Chinese)
 CHANGELOG.md                           reason, acceptance metric and verification status of every change
 PROMPT.md                              condensed prompt to paste directly when the plugin is not installed
