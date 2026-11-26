@@ -28,6 +28,8 @@
   tech/adr/NNNN-<名>.md     架构决策记录
   plan/roadmap.md           版本计划（/hq-plan）
   plan/backlog.json         计划清单，给 /hq 读（/hq-plan，格式见 ../backlog-schema.md）
+  launch/checklist.md       上线检查（/hq-launch），同目录还有运维手册、发布说明、运营计划和 legal/ 下的法律文本草稿
+  blueprint.md              项目蓝图索引（/hq-blueprint）
   reviews/<阶段>-<YYYYMMDD>.md  评审记录
 ```
 
@@ -137,7 +139,7 @@ updated: 2026-11-26
 
 | 字段 | 含义 |
 |---|---|
-| stage | 阶段名：`plan`、`prd`、`research`、`design`、`arch` |
+| stage | 阶段名：`plan`、`prd`、`research`、`design`、`arch`、`launch`、`blueprint`（`blueprint` 另记 `stages_run`：实际跑了哪些阶段） |
 | stage_mode | `create` / `complete` / `review_only` |
 | review_rounds | 实际评审轮数 |
 | review_findings | `{blocker, major, minor, accepted, rejected, deferred, unresolved}` 各几条 |
@@ -147,4 +149,4 @@ updated: 2026-11-26
 
 ## 9. 机械检查
 
-能用脚本检查的完成标准都用脚本检查，结果写进评审记录：计划清单用 `scripts/backlog-check.py`，需求文档和竞品报告用 `scripts/doc-check.py prd|research <文件>`，架构文档用 `scripts/doc-check.py arch <architecture.md> --detailed <detailed-design.md> --prd <需求文档>`，原型用 `scripts/prototype-check.py`（静态）和 `scripts/prototype-walk.mjs`（需要 Playwright，逐页逐状态截图并执行流程）。脚本报错误时先修再评审，不要把格式问题留给评审者。
+能用脚本检查的完成标准都用脚本检查，结果写进评审记录：计划清单用 `scripts/backlog-check.py`，需求文档和竞品报告用 `scripts/doc-check.py prd|research <文件>`，架构文档用 `scripts/doc-check.py arch <architecture.md> --detailed <detailed-design.md> --prd <需求文档>`，原型用 `scripts/prototype-check.py`（静态）和 `scripts/prototype-walk.mjs`（需要 Playwright，逐页逐状态截图并执行流程），上线检查用 `scripts/doc-check.py launch <checklist.md>`。`scripts/stage-status.py --docs <docs_root>` 一次列出所有阶段产物的状态（齐不齐、检查有没有错误、依据的上游是否已更新），`/hq-blueprint` 用它决定跑哪些阶段。脚本报错误时先修再评审，不要把格式问题留给评审者。
