@@ -55,12 +55,16 @@ skills/hq/scripts/backends/*.sh        W channel per-CLI argument building and u
 skills/hq-retro/SKILL.md               /hq-retro: checks earlier changes, makes evidence-backed suggestions, generates a prompt for changing the plugin
 skills/hq-research/SKILL.md            /hq-research: online competitor research with every claim sourced; template.md alongside is the report format
 skills/hq-prd/SKILL.md                 /hq-prd: writes or completes a requirements doc to the launch standard; template.md alongside is the doc format
+skills/hq-design/SKILL.md              /hq-design: design system and high-fidelity clickable prototype; prototype-starter/ is the prototype starter kit
+skills/hq-arch/SKILL.md                /hq-arch: architecture, detailed design and decision records; diagram-style.md is the diagram guide
 skills/hq-plan/SKILL.md                /hq-plan: turns requirements into a release plan and task backlog with estimated tiers, reviewed, for /hq to execute
-skills/hq/references/roles/*.md        role cards (product, design, architecture, engineering, QA, security, market and competitor research) used by stage skills for writing and review
+skills/hq/references/roles/*.md        role cards (product, design, architecture, engineering, QA, security, market and competitor research, ops) used by stage skills for writing and review
 skills/hq/references/stages/common.md  shared rules for stage skills: output layout, ids and traceability, modes, review protocol, decision order
 skills/hq/references/backlog-schema.md format of the backlog.json plan
 skills/hq/scripts/backlog-check.py     backlog checker (read-only): ids, dependencies, tier vs score, requirement coverage
-skills/hq/scripts/doc-check.py         requirements doc and research report checker (read-only)
+skills/hq/scripts/doc-check.py         requirements doc, research report and architecture checker (read-only)
+skills/hq/scripts/prototype-check.py   clickable prototype static checker (read-only)
+skills/hq/scripts/prototype-walk.mjs   clickable prototype walk-through: screenshots every page and state, runs flows (needs Playwright)
 docs/design-stages.md                  design draft and roadmap for stage skills (in Chinese)
 CHANGELOG.md                           reason, acceptance metric and verification status of every change
 PROMPT.md                              condensed prompt to paste directly when the plugin is not installed
@@ -118,7 +122,7 @@ When not run from inside the repository, the script first uses git to download t
 - Exit codes: 0 success; 2 invalid arguments; 3 target exists (add `--force`, or use `--update`); 4 nothing to act on (no tool detected, nothing to update or remove); 5 download failed. All targets are checked first, so it never installs halfway.
 - Host notes: Codex usage in `hosts/codex.md`; dsh first-run steps in `hosts/dsh.md`; OpenCode in `hosts/opencode.md`; Gemini CLI in `hosts/gemini.md`; Cursor in `hosts/generic.md`.
 
-**Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq`, `/hq-retro` and the `/hq-research`, `/hq-prd`, `/hq-plan` commands)
+**Option 0a: Gemini extension** (simplest if you only use Gemini CLI; includes `/hq`, `/hq-retro` and the stage commands `/hq-research`, `/hq-prd`, `/hq-design`, `/hq-arch`, `/hq-plan`)
 ```bash
 gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.7.0
 ```
@@ -133,7 +137,7 @@ Whether it copies `scripts/` and `references/` in full is unverified; without th
 
 **Option 1: personal skill (simplest locally)**
 ```bash
-mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skills/hq-prd skills/hq-research ~/.claude/skills/
+mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skills/hq-prd skills/hq-research skills/hq-arch skills/hq-design ~/.claude/skills/
 ```
 After installing, type `/hq <goal>` and `/hq-retro` in any project to use them.
 
@@ -151,7 +155,7 @@ Each cloud session clones the repository into a fresh container and **cannot see
 *Recommended (verified in the cloud): copy the skills into the project repository.*
 ```bash
 ./install.sh --host claude --scope project --project-dir <project path>
-# or by hand: mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/skills/hq-retro <this directory>/skills/hq-plan <this directory>/skills/hq-prd <this directory>/skills/hq-research .claude/skills/
+# or by hand: mkdir -p .claude/skills && cp -r <this directory>/skills/hq <this directory>/skills/hq-retro <this directory>/skills/hq-plan <this directory>/skills/hq-prd <this directory>/skills/hq-research <this directory>/skills/hq-arch <this directory>/skills/hq-design .claude/skills/
 ```
 After committing `.claude/skills/`, cloud sessions started from this repository can use `/hq` and `/hq-retro`, and the helper scripts (such as `scripts/resources.sh`) run as well. It needs no network or marketplace and pins the version, but every project holds its own copy to upgrade.
 
@@ -189,7 +193,7 @@ First check what you have: `./install.sh --list` shows each installed copy with 
 Notes:
 
 - `--update` updates copies to the version of **the script you are running**; it does not check online for a newer one. Get the new script first (the one-line command with the new tag, or `git pull`).
-- Skills added in a new version (such as `hq-plan` in v0.6.0, `hq-prd` and `hq-research` in v0.7.0): `--update` installs them next to each updated `hq`.
+- Skills added in a new version (such as `hq-plan` in v0.6.0, `hq-prd` and `hq-research` in v0.7.0, `hq-arch` and `hq-design` in v0.8.0): `--update` installs them next to each updated `hq`.
 - `--update` only touches copies with an install record. Copies installed by v0.3 or earlier, or copied by hand, are skipped with a notice; reinstall once with `./install.sh --host <host> --force` and `--update` will handle them from then on.
 - `--update` **does not update sub-agent templates** (`hq-t0…t4` installed with `--with-agents`). When a release changes them (see `CHANGELOG.md`), reinstall with your original flags plus `--force`: `./install.sh --host <host> --with-agents [--model-map '…'] --force`. `--force` overwrites templates you edited by hand.
 - Start a new session after upgrading so the host picks up the new skills.
@@ -263,6 +267,8 @@ Notes:
 /hq-research --n 6 --deep 2 --market global
 /hq-prd                                   # write or complete the requirements doc from ideas, screenshots and the research report
 /hq-prd --scope accounts --ask            # only the "accounts" module; ask key decisions first
+/hq-design --platform ios --explore 3     # design system + a high-fidelity prototype you can click end to end; 3 style directions first
+/hq-arch --stack nextjs,postgres          # architecture and detailed design, with overview diagrams and decision records
 /hq-plan                                  # read requirements, design, tech docs and existing code; produce a release plan and task backlog
 /hq-plan --release MVP solo developer, ship in two weeks
 /hq --backlog R1                          # execute the first release from the backlog (or just say "execute R1")
@@ -270,14 +276,15 @@ Notes:
 
 - **`/hq-research`**: writes `docs/research/competitors.md`. Competitors are grouped as direct, indirect and substitutes; in-depth entries cover positioning, features, pricing, user numbers, user reviews, strengths and weaknesses; the report ends with a comparison matrix, pricing comparison, opportunities and "suggestions for the requirements". Every fact carries a source id, and the source table at the end has links and access dates; inferences are marked as such. Without web access it says so instead of passing off model memory as research; if you explicitly accept that, `--offline` writes a version marked unverified. In review, the researcher spot-checks 5 claims against their sources.
 - **`/hq-prd`**: writes `docs/product/prd.md`: target users, first-release scope and "not doing", each feature's user story, acceptance criteria and all UI states, non-functional requirements, monetization, success metrics and tracking, a launch-essentials table (sign-up and sign-in, password reset, account deletion, privacy policy and so on, 24 items, each marked included, not doing or not applicable), and a requirement index that `/hq-plan` reads directly. Without a research report it first runs a 5-competitor quick scan (`--no-research` skips it). An existing requirements doc is completed to the launch standard without deleting what you wrote; one in another format is left untouched and a new doc is written alongside. Reviewers: design, architecture, QA, plus security when accounts, payments or personal data are involved.
-
-- **Outputs**: `docs/plan/roadmap.md` (for people: releases, scope, release criteria, dependency graph, requirement coverage) and `docs/plan/backlog.json` (for `/hq`: each task's dependencies, owned files, acceptance criteria, verification level, and an estimated tier from the 5-dimension score). An existing docs directory in the project is reused.
+- **`/hq-design`**: writes `docs/design/`: a design system (tokens, components, interaction, copy, accessibility), a pages-and-flows doc, and a high-fidelity clickable prototype that opens offline. The prototype is built on a bundled starter kit: mock sign-in with demo accounts (new user, existing user, paying user, admin and so on), realistic mock data, empty, loading, error, no-permission and first-use states on every page, main flows (including sign-up and sign-in) that click through end to end, and a toolbar in the bottom-left to switch pages, states and accounts. `prototype-check.py` checks it statically and `prototype-walk.mjs` uses Playwright to screenshot every page in every state and run every flow; a designer role then reviews the screenshots. The default style is clear and modern, with an explicit list of "AI-looking" patterns to avoid. Reviewers: product, engineering, QA.
+- **`/hq-arch`**: writes `docs/tech/architecture.md`, `detailed-design.md` and `adr/`: constraints and quality attributes; six kinds of diagrams (system context, containers, components, data model, key-flow sequences, deployment) in Mermaid, drawn per `skills/hq-arch/diagram-style.md` (one layer per diagram, at most 15 nodes, subgraphs for boundaries, labeled edges, one color scheme); module responsibilities and requirement mapping; non-functional design; technology choices with decision records; risks to validate (which `/hq-plan` schedules as early research tasks). It defaults to mature, managed options one person can run. Reviewers: engineering, security, QA, plus ops when there are deployment or cost constraints.
+- **`/hq-plan`**: writes `docs/plan/roadmap.md` (for people: releases, scope, release criteria, dependency graph, requirement coverage) and `docs/plan/backlog.json` (for `/hq`: each task's dependencies, owned files, acceptance criteria, verification level, and an estimated tier from the 5-dimension score). An existing docs directory in the project is reused.
 - **`/hq-plan` review**: architect, engineer and QA (plus product when there is no requirements doc).
 - **Review rules** (the same for every stage): several roles review in parallel. Findings are blocker, major or minor; at most 2 rounds by default, the second only checks blockers and majors, and anything still open at the limit goes to you, so it never loops. Role cards are in `skills/hq/references/roles/`.
 - **Decisions**: made on its own in the order "compliance and security baseline > user value and experience > business viability > technical simplicity > cost". Decisions that cannot be undone (pricing and business model, brand naming, target market, legal risk) are yours, but they do not block writing: it writes with the recommended option, records the decision as pending, and asks you once at the end of the stage (with `--ask`, before writing). A document with pending decisions cannot be marked approved. Other assumptions are listed for you at the same time.
-- **Checks**: `skills/hq/scripts/backlog-check.py` checks the backlog mechanically (unique ids, no dependency cycles, tier matches score, every P0 requirement covered by a task); `skills/hq/scripts/doc-check.py prd|research` checks requirements docs and research reports (fields present, all UI states written, requirement index matches the body, every launch-essentials row decided, every cited source in the source table, enough sources per competitor).
+- **Checks**: `skills/hq/scripts/backlog-check.py` checks the backlog mechanically (unique ids, no dependency cycles, tier matches score, every P0 requirement covered by a task); `skills/hq/scripts/doc-check.py prd|research|arch` checks requirements docs, research reports and architecture docs (architecture: every chapter's diagram present, node counts, shared color scheme, module fields, every requirement mapped to a module, ADR format; fields present, all UI states written, requirement index matches the body, every launch-essentials row decided, every cited source in the source table, enough sources per competitor).
 - **Loop**: when `/hq` executes it re-scores tasks against the current code and records the planned tier; the `metrics.py` report has a "3e planned vs actual tier" section that `/hq-retro` uses to calibrate planning.
-- **Not invoked automatically**: stage skills are heavy, so in Claude Code they set `disable-model-invocation` and run only when you type the command (`/hq-research`, `/hq-prd`, `/hq-plan`); on other hosts the skill description ("use only when the user types it explicitly") is the fallback.
+- **Not invoked automatically**: stage skills are heavy, so in Claude Code they set `disable-model-invocation` and run only when you type the command (`/hq-research`, `/hq-prd`, `/hq-design`, `/hq-arch`, `/hq-plan`); on other hosts the skill description ("use only when the user types it explicitly") is the fallback.
 
 ## Autonomous execution and stop conditions
 - The main session decides technical approach, models, task split and retries on its own, and logs each decision in the ledger's "Decisions" section.

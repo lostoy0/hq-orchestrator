@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>首页</title>
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/base.css">
+</head>
+<body data-hq-page="P-02">
+  <div class="app">
+    <header class="header">
+      <div class="title">首页</div>
+      <a class="btn btn-ghost" href="login.html" data-testid="sign-out">退出</a>
+    </header>
+    <main class="main">
+      <section data-hq-state="default">
+        <div class="row" style="margin-bottom: var(--space-4);">
+          <h2 style="margin: 0;">我的事项</h2><span class="spacer"></span>
+          <button class="btn btn-primary" type="button" data-testid="add">新建</button>
+        </div>
+        <ul class="list" data-testid="item-list"></ul>
+      </section>
+      <section data-hq-state="loading" hidden aria-busy="true">
+        <div class="list">
+          <div style="padding: var(--space-4);" class="stack">
+            <div class="skeleton" style="height: 16px; width: 60%;"></div>
+            <div class="skeleton" style="height: 12px; width: 40%;"></div>
+            <div class="skeleton" style="height: 16px; width: 70%;"></div>
+          </div>
+        </div>
+      </section>
+      <section data-hq-state="empty" hidden>
+        <div class="state">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8M12 8v8"/></svg>
+          <h2>还没有事项</h2>
+          <p>新建第一条，开始记录吧</p>
+          <button class="btn btn-primary" type="button">新建事项</button>
+        </div>
+      </section>
+      <section data-hq-state="error" hidden>
+        <div class="state" role="alert">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>
+          <h2>加载失败</h2>
+          <p>网络好像出了点问题</p>
+          <a class="btn" href="home.html">重试</a>
+        </div>
+      </section>
+      <section data-hq-state="forbidden" hidden>
+        <div class="state">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <h2>没有访问权限</h2>
+          <p>请联系管理员开通，或切换账号</p>
+          <a class="btn" href="login.html">切换账号</a>
+        </div>
+      </section>
+      <section data-hq-state="first" hidden>
+        <div class="card stack" style="text-align: center;">
+          <h2>欢迎使用</h2>
+          <p class="muted">三步上手：新建事项、设置提醒、完成后打勾。</p>
+          <button class="btn btn-primary" type="button" data-testid="onboard-done">开始使用</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../manifest.js"></script>
+  <script src="../data/seed.js"></script>
+  <script src="../assets/app.js"></script>
+  <script>
+    document.querySelector("[data-testid=sign-out]").addEventListener("click", function () { HQ.auth.signOut(); });
+    function render() {
+      var user = HQ.auth.current();
+      if (user && user.first && !HQ.state) { HQ.show("first"); return; }
+      HQ.show("loading");
+      HQ.api(function () { return HQ.db.all("items"); }).then(function (items) {
+        if (!items.length) { HQ.show("empty"); return; }
+        var ul = document.querySelector("[data-testid=item-list]");
+        ul.innerHTML = "";
+        items.forEach(function (it) {
+          var li = document.createElement("li");
+          li.innerHTML = '<div style="flex:1"><div></div><div class="small muted"></div></div><span class="badge"></span>';
+          li.querySelector("div > div").textContent = it.title;
+          li.querySelector(".small").textContent = it.meta;
+          li.querySelector(".badge").textContent = it.tag;
+          ul.appendChild(li);
+        });
+        HQ.show("default");
+      }, function () { HQ.show("error"); });
+    }
+    document.querySelector("[data-testid=onboard-done]").addEventListener("click", function () { HQ.auth.markOnboarded(); render(); });
+    document.querySelector("[data-testid=add]").addEventListener("click", function () {
+      HQ.db.insert("items", { title: "新事项", meta: "刚刚", tag: "待处理" }); HQ.toast("已新建"); render();
+    });
+    if (!HQ.state || HQ.state === "default") render();
+  </script>
+</body>
+</html>

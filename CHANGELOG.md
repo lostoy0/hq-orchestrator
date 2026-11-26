@@ -18,6 +18,26 @@
 
 ---
 
+## 未发布（v0.8.0）
+
+新增 `/hq-design`（设计规范和高保真可点击原型）和 `/hq-arch`（架构设计、详细设计和决策记录）两个阶段技能，以及配套的检查脚本。
+
+### 新增 `/hq-design` 设计阶段
+- **改动**：新增 `skills/hq-design/SKILL.md`（`disable-model-invocation: true`）、`template-design-system.md`、`template-screens.md`、`prototype-schema.md`（`hq-prototype/1`），以及原型起步套件 `prototype-starter/`：纯 HTML/CSS/JS、离线可开；`assets/tokens.css`（默认“简洁易懂、现代好看”的设计变量，含深色模式）、`assets/base.css`（通用组件和五种状态样式）、`assets/app.js`（模拟登录和演示账号、本地模拟数据、模拟接口延迟、`?state=` 强制状态、原型工具条）、`manifest.js`（页面、账号、流程的单一清单）、登录和首页两个示例页、页面模板、原型目录页。参数 `--platform`、`--explore N`、`--brand`、`--scope`、`--figma`。任务图：侦察 → 页面与流程 → 风格（可并行探索 N 个方向）→ 模拟数据 → 页面按流程分组并行 → 静态检查和自动走查 → 视觉走查 → 产品、开发、测试评审。设计规则写明了默认风格和要避免的“AI 风格”。新增 `scripts/prototype-check.py`（静态检查：清单格式、状态区块齐全、本地链接、从入口可达、流程引用的页面和 testid、外部资源、写死颜色、带 `--prd` 时的需求覆盖）和 `scripts/prototype-walk.mjs`（Playwright：逐页逐状态截图、记录控制台报错、执行流程；没有 Playwright 时退出码 3）。测试 `tests/test_prototype.py`（走查部分在没有 Node 或 Playwright 的环境自动跳过）。
+- **原因/假设**：用户要求原型按上线标准把所有页面串起来，有一比一的完整交互流程、模拟账号和模拟数据，覆盖尽量多的场景，风格默认简洁易懂又时尚美观，交付前由相关专家评审且轮次可控。起步套件让并行写页面的子会话共用同一套登录、数据、状态和变量，保证一致；“状态区块 + 清单 + testid”让完整性可以用脚本验证，而不是靠自述。
+- **验收指标**：首次交付时 `prototype-check.py` 错误数 = 0、`prototype-walk.mjs` 全部通过；评审中“流程走不通”“缺状态”类 blocker = 0；用户事后指出的缺页或走不通的流程 ≤ 1 处/次（至少 3 次运行后统计）。
+- **状态**：待验证（自测通过：起步套件静态检查和 Playwright 走查都通过，手机和桌面截图人工看过；尚未在真实项目上运行）
+- **复盘报告**：无（人工改动）
+
+### 新增 `/hq-arch` 架构阶段
+- **改动**：新增 `skills/hq-arch/SKILL.md`（`disable-model-invocation: true`）、`template-architecture.md`（12 章，含上下文、容器、数据、时序、部署图和需求映射）、`template-detailed.md`、`template-adr.md`、`diagram-style.md`（一张图一层、节点不超过 15 个、子图画边界、连线写标签、统一 `classDef` 配色，附示例）。参数 `--stack`、`--only arch|detailed`。任务图：侦察 → 关键选择并行调研 → 架构设计（T4）→ 详细设计（按模块并行）→ 检查 → 开发、安全、测试评审（有部署或成本约束时加运维）。`doc-check.py` 新增 `arch` 子命令：章节、第 2/3/5/6/7 章的图及类型、空图、节点数、配色、连线标签、模块字段、需求映射和 `--prd` 覆盖（P0 和非功能需求必须落到模块）、ADR 格式（标题、状态、背景、至少两个选项、决定、后果）、`--detailed` 覆盖每个模块。新增角色卡 `roles/ops.md`。`/hq-plan` 的输入表加一条：按模块写 `owns`，风险与待验证项排成先行调研任务，界面任务引用 `P-xx`、`FL-xx`。新增 Gemini 命令 `commands/hq-arch.toml`、`commands/hq-design.toml`；`install.sh` 技能列表加入两者；`stages/common.md` 的产物目录和第 9 节同步；README 中英文、`hosts/claude-code.md`、`hosts/gemini.md`、`adapters/gemini/README.md`、`docs/design-stages.md` 同步。
+- **原因/假设**：用户要求根据需求文档和设计稿做架构设计和详细设计，架构图要简洁清晰、美观，让人一眼看懂全景和模块关联。画图规范把“好看、清楚”变成可检查的规则；需求映射保证没有需求落空；默认选一个人维护得了的方案，避免过度设计。
+- **验收指标**：首次交付时 `doc-check.py arch`（带 `--detailed`、`--prd`）错误数 = 0；评审中架构图可读性类意见 ≤ 1 条/次；后续 `/hq --backlog` 执行中因架构缺项导致的升档或返工 ≤ 10%（至少 3 次运行后统计）。
+- **状态**：待验证（自测通过；画图规范里的示例通过同一套检查；Mermaid 渲染未在本环境实测；尚未在真实项目上运行）
+- **复盘报告**：无（人工改动）
+
+---
+
 ## v0.7.0（2026-11-26）
 
 新增 `/hq-research`（竞品调研）和 `/hq-prd`（需求文档）两个阶段技能，以及检查这两类文档的 `doc-check.py`。
