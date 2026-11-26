@@ -32,7 +32,7 @@ Codex、OpenCode、Gemini CLI、Cursor、dsh 用一行脚本安装，见[安装]
 | DeepSeek 后端 · 路径二：Claude Code 接 DeepSeek | `hosts/deepseek.md` | 档位压成 flash/pro 两档；云端子会话（B）仍用 Claude 模型 |
 | DeepSeek 后端 · 路径三：Codex 接 DeepSeek | `hosts/deepseek.md` + `hosts/codex.md` | 配置示例来自官方摘要，待实测 |
 | **OpenCode（V2）** | `hosts/opencode.md` + `adapters/opencode/` | v0.4.1 起原生宿主：`hq-t0…t4` 子代理各带 `provider/model#variant`，档位逐任务生效；**只读过官方文档，未实机运行** |
-| **Gemini CLI** | `hosts/gemini.md` + `adapters/gemini/` + `gemini-extension.json` | v0.4.3 起原生宿主：`hq-t0…t4` 子代理各带 `model`（没有思考深度，只靠模型区分档位）；可作为 Gemini 扩展安装，带 `/hq`、`/hq-retro` 命令；**只读过官方文档，未实机运行** |
+| **Gemini CLI** | `hosts/gemini.md` + `adapters/gemini/` + `gemini-extension.json` | v0.4.3 起原生宿主：`hq-t0…t4` 子代理各带 `model`（没有思考深度，只靠模型区分档位）；可作为 Gemini 扩展安装，带 `/hq`、`/hq-retro`、`/hq-plan` 命令；**只读过官方文档，未实机运行** |
 | Cursor（v0.4 起可一键安装） | `hosts/generic.md` | 基础支持：技能目录按官方文档登记，**未实机运行**；有 shell 用 W 通道，否则**降级模式**（主会话按同样的计划、台账和质量门槛串行亲自执行）。原生子代理适配见 `docs/design-more-hosts.md` |
 | 其他支持 SKILL.md 的工具 | `hosts/generic.md` | 同上；可用 `npx skills add` 安装（见“安装”） |
 
@@ -53,6 +53,12 @@ skills/hq/scripts/runs-persist.sh      把运行记录保存进仓库（专用�
 skills/hq/scripts/cli-worker.sh        W 通道：在独立 git worktree 里后台运行 codex / claude / opencode / gemini / cursor 的命令行
 skills/hq/scripts/backends/*.sh        W 通道各 CLI 的参数拼装和用量解析（新增 CLI 加一个文件）
 skills/hq-retro/SKILL.md               /hq-retro 复盘：验证上次改动、出有证据的建议、生成改插件的提示词
+skills/hq-plan/SKILL.md                /hq-plan 计划阶段：把需求拆成版本计划和任务清单（带预估档位），评审后交给 /hq 执行
+skills/hq/references/roles/*.md        角色卡（产品、设计、架构、开发、测试、安全），阶段技能写作和评审时用
+skills/hq/references/stages/common.md  阶段技能通用规则：产物目录、编号与追溯、模式、评审协议、决策优先级
+skills/hq/references/backlog-schema.md 计划清单 backlog.json 的格式
+skills/hq/scripts/backlog-check.py     计划清单检查（只读）：编号、依赖、档位与分数、需求覆盖
+docs/design-stages.md                  阶段技能设计草案和路线图
 CHANGELOG.md                           每条改动的原因、验收指标和验证状态
 PROMPT.md                              不装 plugin 时直接粘贴用的精简提示词
 adapters/tiers.tsv                     档位登记表：T0–T4 的思考深度、模型档次、适合任务（子代理模板的唯一来源）
@@ -62,7 +68,7 @@ adapters/codex/                        Codex 自定义 agent 模板 hq-t0…hq-t
 adapters/opencode/                     OpenCode V2 子代理模板 hq-t0…hq-t4（生成，默认不设 model）
 adapters/gemini/                       Gemini CLI 子代理模板 hq-t0…hq-t4（生成，默认不设 model）
 gemini-extension.json                  Gemini CLI 扩展清单：整个仓库可用 gemini extensions install 安装
-commands/*.toml                        Gemini 扩展的 /hq、/hq-retro 命令（Claude Code 不读 .toml）
+commands/*.toml                        Gemini 扩展的 /hq、/hq-retro、/hq-plan 命令（Claude Code 不读 .toml）
 adapters/hosts.tsv                     宿主登记表：每个工具读哪些技能目录、怎么检测（新增宿主加一行）
 adapters/skill-dirs.tsv                技能目录登记表：个人/项目范围路径
 install.sh                             一键安装：自动检测工具、按最小目录集合复制技能，支持 --list/--update/--uninstall，不改任何配置
@@ -109,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.5.4/inst
 - 退出码：0 成功；2 参数错误；3 目标已存在（加 `--force` 覆盖，或用 `--update`）；4 没有可操作的对象（未检测到工具、没有可更新/卸载的副本）；5 下载失败。会先检查所有目标，不会装一半。
 - 宿主说明：Codex 的调用方式见 `hosts/codex.md`；dsh 的首次运行步骤见 `hosts/dsh.md`；OpenCode 见 `hosts/opencode.md`；Gemini CLI 见 `hosts/gemini.md`；Cursor 见 `hosts/generic.md`。
 
-**方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 命令）
+**方式 0a：Gemini 扩展**（只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro`、`/hq-plan` 命令）
 ```bash
 gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.5.4
 ```
@@ -124,7 +130,7 @@ npx skills add lostoy0/hq-orchestrator -a opencode -a cursor
 
 **方式 1：个人 skill（本地最简单）**
 ```bash
-mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
+mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan ~/.claude/skills/
 ```
 装好后在任意项目里输入 `/hq <目标>` 和 `/hq-retro` 即可使用。
 
@@ -142,7 +148,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 *推荐做法（云端已实测可用）：把 skill 复制进项目仓库。*
 ```bash
 ./install.sh --host claude --scope project --project-dir <项目路径>
-# 或手动：mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro .claude/skills/
+# 或手动：mkdir -p .claude/skills && cp -r <本目录>/skills/hq <本目录>/skills/hq-retro <本目录>/skills/hq-plan .claude/skills/
 ```
 提交 `.claude/skills/` 后，基于这个仓库新开的云端会话都能用 `/hq`、`/hq-retro`，辅助脚本（如 `scripts/resources.sh`）也能正常运行。好处是不依赖网络和 marketplace，还能锁定版本；坏处是每个项目一份副本，要逐个升级。
 
@@ -180,6 +186,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro ~/.claude/skills/
 注意：
 
 - `--update` 会把副本更新成**正在运行的这份脚本**的版本，不会自己联网查新版。所以一定要先拿到新版本的脚本（用新标签的一行命令，或先 `git pull`）。
+- 新版本新增的技能（如 v0.6.0 的 `hq-plan`）：`--update` 会补装到已更新 `hq` 的目录里。
 - `--update` 只处理有安装记录的副本。v0.3 及更早装的、或手动复制的副本会被跳过并提示，用 `./install.sh --host <宿主> --force` 重装一次，以后就能正常 `--update`。
 - `--update` **不更新子代理模板**（`--with-agents` 装的 `hq-t0…t4`）。新版本改了模板时（见 `CHANGELOG.md`），用原来的参数加 `--force` 重装：`./install.sh --host <宿主> --with-agents [--model-map '…'] --force`。注意 `--force` 会覆盖你手动改过的模板。
 - 升级后重开会话，宿主才会读到新技能。
@@ -243,6 +250,23 @@ cli-worker.sh list
 - 主会话会把技能路径记在 `.hq/LEDGER.md` 头部（`skill_path`），上下文被压缩后自己重读技能和台账。万一发现它开始亲自干活、不再派子会话，说一句“重新读取 SKILL.md，继续常驻”即可。
 - 子会话看不到聊天记录，所以接管时之前的进度要写进台账“接管背景”。以后即使必须换新会话，也只要让新会话读 SKILL.md 和台账就能接上。
 - 每批仍会先判断值不值得编排，小目标会直接自己做；要强制派发就在目标里写“这批也全部派出去”。
+
+## 阶段技能：从需求到计划（v0.6.0 起）
+
+`/hq` 管“怎么把活干完”，阶段技能管“该做出什么”，跑在同一套引擎上（台账、选档、派发、审核、记录都一样）。整体设计和后续路线见 `docs/design-stages.md`；目前已有：
+
+```
+/hq-plan                        # 读需求、设计、技术文档和现有代码，产出版本计划和任务清单
+/hq-plan --release MVP 一个人做，两周内上线
+/hq --backlog R1                # 按清单执行第一个版本（也可以直接说“执行 R1”）
+```
+
+- **产物**：`docs/plan/roadmap.md`（给人看：版本、范围、发布条件、依赖图、需求覆盖表）和 `docs/plan/backlog.json`（给 `/hq` 读：每个任务的依赖、负责的文件、验收标准、验证级别和按 5 维打分得到的预估档位）。项目已有文档目录时沿用。
+- **评审**：交付前由架构、开发、QA 三个角色并行评审（没有需求文档时加产品），意见分阻塞、重要、次要三级；默认最多 2 轮，第 2 轮只核对阻塞和重要问题，到上限还没解决的交给你确认，不会无限来回。角色卡在 `skills/hq/references/roles/`。
+- **决策**：按“合规与安全底线 > 用户价值与体验 > 商业可行 > 技术简单 > 成本”自己定；只有定价和商业模式、品牌命名、目标市场、法务风险、需要真实付费或外部账号这类改不回来的决定才问你，其余记进“假设与待确认”，阶段结束时一次性列给你。
+- **检查**：`skills/hq/scripts/backlog-check.py` 机械检查清单（编号唯一、依赖无环、档位和分数一致、P0 需求都有任务覆盖）。
+- **闭环**：`/hq` 执行时按当时的代码重新打分，记下计划预估的档位；`metrics.py` 报告“3e 计划预估档位 vs 实际”，`/hq-retro` 据此校准计划阶段的打分。
+- **不会被自动调用**：阶段技能很重，在 Claude Code 里设了 `disable-model-invocation`，只有输入 `/hq-plan` 才执行；其他宿主靠技能说明里的“仅在用户显式输入时使用”兜底。
 
 ## 自主执行与停止条件
 - 技术方案、模型、拆分、重试都由主会话自己决定，每个决策记进台账“决策”区。
