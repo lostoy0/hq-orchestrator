@@ -29,8 +29,9 @@ HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 TESTID_RE = re.compile(r"^\[data-testid=['\"]?([\w-]+)['\"]?\]$")
 RESOURCE_TAGS = {"script", "link", "img", "iframe", "source", "video", "audio", "embed"}
 # requirement-like IDs (same shape as backlog-check.py: upper-case prefix, dash, number), taken where they
-# are defined: at the start of a heading, list item or table cell, optionally in bold
-ID_DEF_RE = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)?(?:\*\*|`)?([A-Z][A-Z0-9]*-\d+)\b", re.M)
+# are defined: at the start of a heading, list item or table cell, or in bold at the start of a line
+ID_DEF_RE = re.compile(r"^\s*(?:(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|\|\s*)(?:\*\*|`)?|\*\*|`)([A-Z][A-Z0-9]*-\d+)\b", re.M)
+NOT_IDS = {"UTF", "ISO", "SHA", "HTTP", "TLS", "ES", "RFC", "CVE", "GB", "IPV"}  # standards, not requirements
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 SKIP_DIRS = {"node_modules", ".git", "__pycache__"}
 
@@ -335,7 +336,7 @@ def prd_ids(text, prefixes=None):
     if prefixes:
         found = re.findall(r"\b((?:%s)-\d+)\b" % "|".join(map(re.escape, prefixes)), text)
     else:
-        found = ID_DEF_RE.findall(text)
+        found = [x for x in ID_DEF_RE.findall(text) if x.split("-")[0] not in NOT_IDS]
     return list(dict.fromkeys(found))
 
 

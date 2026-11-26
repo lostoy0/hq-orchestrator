@@ -229,7 +229,7 @@ async function walkForeign() {
   };
   const used = new Set();
   const shotName = (raw) => {
-    let n = raw.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "view";
+    let n = raw.replace(/[^\p{L}\p{N}_.-]+/gu, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "view";
     for (let i = 2; used.has(n); i++) n = n.replace(/~\d+$/, "") + "~" + i;
     used.add(n);
     return join(out, n + ".png");
