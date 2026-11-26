@@ -1,0 +1,7 @@
+# Gemini CLI 扩展命令：/hq-prd [参数]。只在 Gemini CLI 里生效（Claude Code 插件只读 commands/*.md，不读 .toml）。
+description = "HQ 需求阶段：按上线标准写出或补全需求文档（含商业化、埋点、上线必需项），评审后交付"
+prompt = """
+激活 hq-prd 技能（activate_skill，技能名 hq-prd），然后严格按它的流程处理下面的参数和补充说明。宿主是 Gemini CLI，按 hq 技能里的 references/hosts/gemini.md 使用。
+
+参数和补充说明：{{args}}
+"""
