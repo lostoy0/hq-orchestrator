@@ -16,7 +16,7 @@ for h in claude codex; do for s in user project; do
   [ $h = claude ] && sub=.claude/skills || sub=.agents/skills
   [ $s = user ] && base="$T/h/$sub" || base="$T/p/$sub"
   inst --host $h --scope $s --project-dir "$T/p"; rc=$?
-  if [ $rc = 0 ] && [ -f "$base/hq/SKILL.md" ] && [ -f "$base/hq-retro/SKILL.md" ] && [ -f "$base/hq-plan/SKILL.md" ]; then ok "$h/$s 装到正确目录"
+  if [ $rc = 0 ] && [ -f "$base/hq/SKILL.md" ] && [ -f "$base/hq-retro/SKILL.md" ] && [ -f "$base/hq-plan/SKILL.md" ] && [ -f "$base/hq-prd/template.md" ] && [ -f "$base/hq-research/template.md" ]; then ok "$h/$s 装到正确目录"
   else bad "$h/$s" "rc=$rc"; fi
 done; done
 
@@ -241,9 +241,9 @@ if not m.get("description"): errs.append("description")
 if "contextFileName" in m: errs.append("contextFileName 会把文件注入每个会话")
 if os.path.exists(os.path.join(r,"GEMINI.md")): errs.append("根目录不应有 GEMINI.md（会自动注入上下文）")
 if os.path.isdir(os.path.join(r,"agents")): errs.append("根目录不应有 agents/（Claude Code 插件会加载）")
-for s in ("hq","hq-retro","hq-plan"):
+for s in ("hq","hq-retro","hq-plan","hq-prd","hq-research"):
     if not os.path.isfile(os.path.join(r,"skills",s,"SKILL.md")): errs.append("skills/"+s)
-for c,skill in (("hq","hq"),("hq-retro","hq-retro"),("hq-plan","hq-plan")):
+for c,skill in (("hq","hq"),("hq-retro","hq-retro"),("hq-plan","hq-plan"),("hq-prd","hq-prd"),("hq-research","hq-research")):
     t=tomllib.load(open(os.path.join(r,"commands",c+".toml"),"rb"))
     if not t.get("description") or "{{args}}" not in t.get("prompt","") or ("技能名 "+skill) not in t["prompt"]: errs.append("commands/"+c)
 if [f for f in os.listdir(os.path.join(r,"commands")) if not f.endswith(".toml")]: errs.append("commands/ 只放 .toml")
