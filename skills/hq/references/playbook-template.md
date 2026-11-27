@@ -18,16 +18,13 @@ worker_clis: []           # 跨厂商 worker（W 通道）可用的 CLI，可选
 scale_out:                # 分片任务（references/scale-out.md）
   target_shard_min: 40    # 单片目标时长（分钟），建议 30–45
   overhead_min: 8         # 每个子会话的固定开销（克隆、装依赖、构建）；实测后改成本项目的值
+  reserve_slots: 0        # 算片数时预留的槽位，只给计划内的前置/修复会话；开启 auto_resplit 时再加 1–2
   max_overhead_ratio: 0.3 # 固定开销超过单片时长的这个比例就减少片数
-  auto_resplit: false     # true = 掉队片的再拆直接执行；false = 只作为建议汇报
+  auto_resplit: false     # true = 掉队再拆、重新规划直接执行；false = 只作为建议汇报
   merge_wait_max_min: 10  # 巡检时为攒批合入最多等几分钟
-  full_test_every_shards: 4    # 累计合入几片跑一次全量测试（另外：一批全部合入、推主干前、CI 要求时也跑）
-  full_test_every_lines: 1500  # 或累计改动行数达到这个值
-  full_test_every_files: 60    # 或累计改动文件数达到这个值
+  idle_min: 40            # 进度没变且事件流最新事件距今超过这么多分钟，发一次空转提醒
+  full_test_every_shards: 0    # 可选：累计合入几片跑一次全量测试；0 = 关闭（默认只在一批全部合入、推主干前、CI 要求时跑）
   shared_foundation: []   # 改了就要子会话跑全量的共享基础文件 glob，如 ["src/components/common/**", "src/store/**"]；构建配置、测试工具、依赖清单已内置
-monitor:                  # 主动监控（references/scale-out.md 第 7、9 节）
-  thresholds: {}          # 手动设定的阈值，优先于自动校准、不会被覆盖。如 {idle_min: 30}，或按任务类型分行写 patrol: {duration_ratio: 2.5}
-  limits: {cooldown_min: 120, per_batch: 1, per_day: 3, analysis_budget_usd: 0.5}   # 第二级分析的限频
 runs_persist: off         # off | branch | commit：运行记录是否保存进仓库。branch 写进专用分支 hq/runs（推荐，云端必开）；commit 随本批改动提交；本地默认 off，云端没写时 /hq 问一次
 share_hint: pending       # pending | shown：/hq-retro 是否已提示过“可导出脱敏数据帮助改进插件”。只提示一次
 assist:                   # 辅助执行者（calibration.md 规则 10），默认关闭。优先级：用户级 ~/.hq/config.yaml < 这里 < /hq --assist …
@@ -84,10 +81,3 @@ cost_weight:              # 按计费方的额度成本，影响 calibration.md 
 | 宿主 | T0 | T1 | T2 | T3 | T4 | 依据 / 日期 |
 |------|----|----|----|----|----|-------------|
 | `<codex>` | `<模型/深度>` | | | | | `<首次运行 run-id>` |
-
-## 监控阈值（自动校准）
-
-`scripts/scale.py calibrate --playbook .hq/PLAYBOOK.md --write` 在本文件末尾维护一个
-`<!-- hq:thresholds:begin -->` … `<!-- hq:thresholds:end -->` 区块：版本号、校准时间、按任务类型的阈值、
-每项调整前后的数值和依据、上一版。不要手改这个区块；要固定某个值，写进上面授权区的 `monitor.thresholds`。
-回退上一版：`scripts/scale.py thresholds --playbook .hq/PLAYBOOK.md --rollback`。

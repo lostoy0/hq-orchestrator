@@ -1,34 +1,33 @@
 #!/usr/bin/env python3
-"""hq scale-out rules: shard sizing, straggler re-split, delivery marker, layered verification,
-batched merges, active monitoring with rate-limited analysis, and threshold calibration.
+"""hq scale-out rules: shard sizing, straggler re-split and re-plan, delivery marker, test scope,
+batched merges and failure location.
 
 Every subcommand is a pure function of its input (JSON on stdin or flags) and prints JSON.
 The rules are documented in references/scale-out.md; this script is the executable version so
-the main session does not re-derive them by hand.
+the main session does not re-derive them by hand. Exit codes: 0 = ok / yes, 1 = a "no" answer
+(not delivered, no progress line), 2 = bad input.
 
-  scale.py shards     --units N --unit-min X [--overhead-min 8] [--target-min 40] [--limit 20]
-                      [--reserve-ratio 0.2] [--max-overhead-ratio 0.3] [--units-file F]
-  scale.py straggler  [--target-min 40] [--overhead-min 8] [--free-slots K] [--now ISO]  < shards.json
-  scale.py progress   [--file F]            < text   (last "HQ-PROGRESS done=.. total=.." line)
-  scale.py delivered  [--done-file F]       < commit body / final message
-  scale.py test-scope --changed F... [--foundation GLOB...] [--require-full]
-  scale.py full-gate  [--since-shards N] [--since-lines L] [--since-files F] [--batch-complete]
-                      [--before-push] [--ci-checkpoint] [--every-shards 4] [--every-lines 1500] [--every-files 60]
-  scale.py merge-group                      < {"delivered":[..],"pending":[..],"owners":{..}}
-  scale.py locate                           < {"group":[{"id","files"}],"failures":[paths]}
-  scale.py monitor    --state F [--config F] [--now ISO]   < snapshot.json
-  scale.py label                                           < {"records":[..],"outcomes":{..}}
-  scale.py calibrate  [--playbook F --write]               < {"current":..,"history":[..],"ratios":{..}}
-  scale.py thresholds --playbook F [--rollback]
+  scale.py shards      --units N --unit-min X --limit L [--reserve 0] [--overhead-min 8]
+                       [--target-min 40] [--max-overhead-ratio 0.3] [--units-file F]
+  scale.py straggler   [--target-min 40] [--overhead-min 8] [--free-slots K] [--now ISO] < shards.json
+  scale.py progress    [--file F]          < text   (last "HQ-PROGRESS done=.. total=.." line)
+  scale.py delivered   [--done-file F]     < commit body / final message
+  scale.py test-scope  --changed F... [--foundation GLOB...] [--require-full]
+  scale.py merge-group [--wait-max-min 10] < {"delivered":[..],"pending":[..],"owners":{..}}
+  scale.py locate                          < {"group":[{"id","files"}],"failures":[paths]}
+
+Monitoring, rate-limited analysis, labelling, threshold calibration and the full-suite gate were
+deferred (see scale-out.md "推迟的功能"); the old implementation is in commit b3ead43.
 """
 import argparse
 import json
 import math
-import os
 import re
 import statistics
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+
+EPS = 1e-9  # every "exactly at the threshold" comparison goes through this tolerance
 
 
 def out(obj, code=0):
@@ -42,13 +41,11 @@ def die(msg, code=2):
 
 
 def read_text(path):
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
-
-
-def write_text(path, text):
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(text)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        die("cannot read %s: %s" % (path, e))
 
 
 def read_json_stdin():
@@ -59,6 +56,7 @@ def read_json_stdin():
 
 
 def num(x):
+    """A finite real number, or None (bools and strings are not numbers)."""
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         return None
     return x if math.isfinite(x) else None
@@ -74,146 +72,200 @@ def parse_ts(s):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-def now_or(s):
-    d = parse_ts(s) if s else None
-    return d or datetime.now(timezone.utc)
-
-
-def minutes(a, b):
-    return (b - a).total_seconds() / 60.0
-
-
 def r1(x):
     return None if x is None else round(x, 1)
+
+
+def ceil9(x):
+    """ceil() that ignores float noise: 440.00000000000006 / 44 is 10, not 11."""
+    return int(math.ceil(round(x, 9)))
 
 
 # =====================================================================================
 # 1. shard count: by workload, not by module count
 # =====================================================================================
 
-def shard_plan(units, unit_min, overhead_min=8.0, target_min=40.0, limit=20,
-               reserve_ratio=0.2, max_overhead_ratio=0.3):
-    """n = min(usable slots, ceil(work / target), units), then fewer shards while fixed overhead
-    exceeds max_overhead_ratio of a shard's duration. usable = limit - floor(limit*reserve_ratio):
-    slots kept free for straggler re-splits, the shared-file fix session and prerequisite work."""
-    if units <= 0 or unit_min <= 0:
-        die("--units and --unit-min must be > 0")
-    limit = max(1, int(limit))
-    reserve = int(math.floor(limit * max(0.0, reserve_ratio)))
-    usable = max(1, limit - reserve)
+def _shard_fields(work, units, n, overhead_min, target_min):
+    per = work / n + overhead_min
+    return {"shards": n, "units_per_shard": r1(units / n), "shard_min": r1(per),
+            "overhead_ratio": round(overhead_min / per, 3), "batch_eta_min": r1(per),
+            "over_target": per > target_min * 1.25 + EPS}
+
+
+def shard_plan(units, unit_min, overhead_min=8.0, target_min=40.0, *, limit, reserve=0,
+               max_overhead_ratio=0.3):
+    """work = units * unit_min; by_target = ceil(work / target); usable = limit - reserve;
+    n = min(usable, by_target, units), then fewer shards while the fixed overhead exceeds
+    max_overhead_ratio of a shard. Same formula as metrics.py. Raises ValueError on bad input."""
+    if isinstance(units, bool) or not isinstance(units, int) or units <= 0:
+        raise ValueError("units must be an integer > 0")
+    for name, v, lo in (("unit_min", unit_min, 0), ("target_min", target_min, 0)):
+        if num(v) is None or v <= lo:
+            raise ValueError("%s must be a finite number > 0" % name)
+    if num(overhead_min) is None or overhead_min < 0:
+        raise ValueError("overhead_min must be a finite number >= 0")
+    if num(max_overhead_ratio) is None or max_overhead_ratio < 0:
+        raise ValueError("max_overhead_ratio must be a finite number >= 0")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be an integer >= 1")
+    if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve < 0:
+        raise ValueError("reserve must be an integer >= 0")
     work = units * unit_min
-    by_target = max(1, int(math.ceil(work / target_min)))
-    n = max(1, min(usable, by_target, int(units)))
+    by_target = max(1, ceil9(work / target_min))
+    usable = max(1, limit - reserve)
+    n = max(1, min(usable, by_target, units))
     why = []
     if by_target > usable:
-        why.append("concurrency: ceil(%.0f/%.0f)=%d > usable slots %d (limit %d, reserve %d)"
+        why.append("并发：⌈%g/%g⌉=%d 超过可用槽位 %d（上限 %d − 预留 %d）"
                    % (work, target_min, by_target, usable, limit, reserve))
     else:
-        why.append("workload: ceil(%.0f min / %.0f min target) = %d" % (work, target_min, by_target))
+        why.append("工作量：⌈%g 分钟 / 目标 %g 分钟⌉ = %d" % (work, target_min, by_target))
     if n == units and units < min(usable, by_target):
-        why.append("capped by unit count %d" % units)
-
-    def shard_len(k):
-        return work / k + overhead_min
-
+        why.append("受单元数 %d 限制" % units)
     reduced = False
-    while n > 1 and overhead_min / shard_len(n) > max_overhead_ratio:
+    while n > 1 and overhead_min / (work / n + overhead_min) > max_overhead_ratio + EPS:
         n -= 1
         reduced = True
     if reduced:
-        why.append("fewer shards: overhead %.0f min would exceed %.0f%% of a shard"
-                   % (overhead_min, max_overhead_ratio * 100))
-    per = shard_len(n)
-    return {
-        "shards": n, "total_work_min": r1(work), "units": units,
-        "units_per_shard": r1(units / n), "shard_min": r1(per),
-        "overhead_ratio": round(overhead_min / per, 3),
-        "batch_eta_min": r1(per), "serial_min": r1(work + overhead_min),
-        "usable_slots": usable, "reserved_slots": reserve,
-        "over_target": per > target_min * 1.25,
-        "why": "; ".join(why),
-    }
+        why.append("减少片数：固定开销 %g 分钟会超过单片时长的 %g%%" % (overhead_min, max_overhead_ratio * 100))
+    needed_limit = reserve + max(1, min(units, by_target))
+    plan = {"units": units, "total_work_min": r1(work), "serial_min": r1(work + overhead_min),
+            "limit": limit, "reserve": reserve, "usable_slots": usable, "needed_limit": needed_limit}
+    plan.update(_shard_fields(work, units, n, overhead_min, target_min))
+    if plan["over_target"]:
+        if needed_limit > limit:
+            why.append("并发上限 %d 不够：要在目标时长内完成需要上限 %d，可请用户提高 remote_concurrency / max_subtasks"
+                       % (limit, needed_limit))
+        else:
+            why.append("单片仍超过目标时长 1.25 倍：单元数或固定开销限制了片数，提高并发上限没有用")
+    plan["why"] = "；".join(why)
+    return plan
+
+
+def _weight(w):
+    v = num(w)
+    return v if v is not None and v > 0 else 1.0
 
 
 def split_units(items, n):
-    """Contiguous, weight-balanced split of an ordered unit list into n shards (keeps neighbours
-    together for locality, ignores module boundaries). items: [(name, weight)]."""
-    total = sum(w for _, w in items) or 1.0
-    shards = [[] for _ in range(n)]
+    """Contiguous, weight-balanced split of an ordered unit list into min(n, len(items)) non-empty
+    shards (keeps neighbours together, ignores module boundaries). items: [(name, weight)];
+    weights <= 0 or non-finite count as 1."""
+    items = [(name, _weight(w)) for name, w in items]
+    if not items:
+        return []
+    k = max(1, min(int(n), len(items)))
+    total = sum(w for _, w in items)
+    shards = [[]]
     acc = 0.0
-    for name, w in items:
-        mid = acc + w / 2.0
-        i = min(n - 1, int(mid / total * n))
-        shards[i].append(name)
+    for idx, (name, w) in enumerate(items):
+        unopened = k - len(shards)
+        if shards[-1] and unopened > 0 and (
+                len(items) - idx <= unopened or acc + w / 2.0 > total * len(shards) / k + EPS):
+            shards.append([])
+        shards[-1].append(name)
         acc += w
-    return [s for s in shards if s]
+    return shards
 
 
 def read_units_file(path):
     items = []
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            name, _, w = line.partition("\t")
-            try:
-                weight = float(w) if w.strip() else 1.0
-            except ValueError:
-                weight = 1.0
-            items.append((name, weight))
+    for line in read_text(path).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, w = line.partition("\t")
+        name = name.strip()
+        if not name:
+            continue
+        try:
+            weight = float(w) if w.strip() else 1.0
+        except ValueError:
+            weight = 1.0
+        items.append((name, _weight(weight)))
     return items
 
 
 def cmd_shards(a):
-    units = a.units
-    items = None
+    units, items = a.units, None
     if a.units_file:
         items = read_units_file(a.units_file)
-        units = units or len(items)
+        if not items:
+            die("--units-file %s has no units" % a.units_file)
+        if units and units != len(items):
+            die("--units %d does not match %d units in %s" % (units, len(items), a.units_file))
+        units = len(items)
     if not units:
         die("give --units or --units-file")
-    plan = shard_plan(units, a.unit_min, a.overhead_min, a.target_min, a.limit,
-                      a.reserve_ratio, a.max_overhead_ratio)
+    try:
+        plan = shard_plan(units, a.unit_min, a.overhead_min, a.target_min, limit=a.limit,
+                          reserve=a.reserve, max_overhead_ratio=a.max_overhead_ratio)
+    except ValueError as e:
+        die(str(e))
     if items:
         parts = split_units(items, plan["shards"])
-        plan["shards"] = len(parts)
+        if len(parts) != plan["shards"]:
+            plan.update(_shard_fields(units * a.unit_min, units, len(parts), a.overhead_min, a.target_min))
         plan["assignment"] = parts
     return out(plan)
 
 
 # =====================================================================================
-# 4. progress rate, ETA and straggler re-split
+# 4. progress rate, ETA, straggler re-split and batch re-plan
 # =====================================================================================
 
-PROGRESS_RE = re.compile(r"HQ-PROGRESS\b([^\n]*)")
-KV_RE = re.compile(r"(\w+)=([^\s]+)")
+# only a line that *is* a progress line: at line start, optionally after a log timestamp or [tag];
+# quoted (> HQ-PROGRESS), echoed (echo "HQ-PROGRESS ..") or inline-code mentions do not count
+PROGRESS_LINE = re.compile(
+    r"^\s*(?:\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:?\d\d)?\s+|\[[^\]\n]*\]\s*)*HQ-PROGRESS\b(.*)$")
+KV_RE = re.compile(r"(\w+)=(\S+)")
+PROGRESS_KEYS = ("done", "total", "rework", "failed")
+
+
+def _num_text(v):
+    v = v.rstrip(",;.。，；、")
+    try:
+        x = float(v)
+    except ValueError:
+        return None
+    if not math.isfinite(x):
+        return None
+    return int(x) if x.is_integer() else x
 
 
 def parse_progress(text):
-    """Last 'HQ-PROGRESS done=37 total=150 rework=1 failed=0' line, or a JSON progress file."""
+    """Last 'HQ-PROGRESS done=37 total=150 rework=1 failed=0' line, or a JSON progress file.
+    Only finite numbers are kept; a line with no usable value is skipped."""
     s = text.strip()
     if s.startswith("{"):
         try:
             d = json.loads(s)
-            return {k: d.get(k) for k in ("done", "total", "rework", "failed", "updated_at") if k in d} or None
         except ValueError:
-            pass
-    m = None
-    for m in PROGRESS_RE.finditer(text):
-        pass
-    if not m:
-        return None
-    o = {}
-    for k, v in KV_RE.findall(m.group(1)):
-        try:
-            o[k] = int(v)
-        except ValueError:
-            try:
-                o[k] = float(v)
-            except ValueError:
-                o[k] = v
-    return o
+            d = None
+        if isinstance(d, dict):
+            o = {k: d[k] for k in PROGRESS_KEYS if k in d and num(d[k]) is not None}
+            if o and isinstance(d.get("updated_at"), str):
+                o["updated_at"] = d["updated_at"]
+            return o or None
+    last = None
+    fence = False
+    for line in text.splitlines():
+        if line.strip().startswith(("```", "~~~")):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        m = PROGRESS_LINE.match(line)
+        if not m:
+            continue
+        o = {}
+        for k, v in KV_RE.findall(m.group(1)):
+            x = _num_text(v)
+            if x is not None:
+                o[k] = x
+        if o:
+            last = o
+    return last
 
 
 def cmd_progress(a):
@@ -222,26 +274,47 @@ def cmd_progress(a):
     return out({"progress": p}, 0 if p else 1)
 
 
+def _elapsed(s, now):
+    e = num(s.get("elapsed_min"))
+    if e is not None:
+        return e if e >= 0 else None
+    st = parse_ts(s.get("started_at") or s.get("created_at"))
+    if st and now:
+        e = (now - st).total_seconds() / 60.0
+        return e if e >= 0 else None
+    return None
+
+
+def _counts(s):
+    done, total = num(s.get("done")), num(s.get("total"))
+    if total is None or total <= 0 or (done is not None and done < 0):
+        return None, None
+    return done, total
+
+
 def straggler_check(s, target_min=40.0, overhead_min=8.0, free_slots=0, now=None):
     """Decide whether to split the rest of one shard into new sessions.
 
     Straggler: projected total > 2 x planned shard length. Re-split only if the remainder is still
     worth it (> 2 x target): a shard close to done is left alone because a new session's start-up
-    overhead would eat the gain."""
-    est = num(s.get("est_min")) or target_min
-    elapsed = num(s.get("elapsed_min"))
-    if elapsed is None:
-        st = parse_ts(s.get("started_at") or s.get("created_at"))
-        elapsed = minutes(st, now) if st and now else None
-    done, total = num(s.get("done")), num(s.get("total"))
+    overhead would eat the gain. Never more pieces than remaining units."""
+    if not isinstance(s, dict):
+        return {"id": None, "action": "none", "reason": "invalid_shard"}
+    est = num(s.get("est_min"))
+    est_ok = est is not None and est > 0
+    est = est if est_ok else target_min
+    elapsed = _elapsed(s, now)
+    done, total = _counts(s)
     res = {"id": s.get("id"), "elapsed_min": r1(elapsed), "est_min": est, "done": done, "total": total}
-    if elapsed is None or not total:
+    if not est_ok:
+        res["est_min_defaulted"] = True
+    if elapsed is None or total is None:
         return dict(res, action="none", reason="no_progress_data")
-    work_min = max(0.0, elapsed - overhead_min)
     remaining_units = max(0, total - (done or 0))
-    if remaining_units == 0:
+    if remaining_units <= EPS:
         return dict(res, action="none", reason="complete", remaining_min=0)
-    if not done or work_min <= 0:
+    work_min = elapsed - overhead_min
+    if not done or work_min <= EPS:
         return dict(res, action="none", reason="no_rate_yet")
     rate = done / work_min  # units per minute
     remaining_min = remaining_units / rate
@@ -249,78 +322,178 @@ def straggler_check(s, target_min=40.0, overhead_min=8.0, free_slots=0, now=None
     res.update(rate_per_min=round(rate, 3), remaining_units=remaining_units,
                remaining_min=r1(remaining_min), projected_total_min=r1(projected),
                projected_ratio=round(projected / est, 2))
-    if projected <= 2 * est:
+    if projected <= 2 * est + EPS:
         return dict(res, action="none", reason="on_track")
-    if remaining_min <= 2 * target_min:
+    if remaining_min <= 2 * target_min + EPS:
         return dict(res, action="none", reason="near_done")
+    rem_u = int(math.ceil(remaining_units - EPS))
+    if rem_u <= 1:
+        return dict(res, action="report", reason="straggler_unsplittable")
     if free_slots <= 0:
         return dict(res, action="report", reason="straggler_no_free_slot")
-    k = min(int(free_slots), max(1, int(math.ceil(remaining_min / target_min)) - 1))
+    k = min(int(free_slots), max(1, ceil9(remaining_min / target_min) - 1), rem_u - 1)
     # the original shard keeps one share; each new session pays the start-up overhead
     new_eta = overhead_min + remaining_min / (k + 1)
-    if new_eta >= remaining_min:
+    if new_eta >= remaining_min - EPS:
         return dict(res, action="none", reason="no_gain")
+    split = [int(math.floor(rem_u * i / (k + 1) + 0.5)) for i in range(k + 2)]
+    base = int(done)
     return dict(res, action="resplit", reason="straggler", new_sessions=k,
                 eta_after_min=r1(new_eta), saves_min=r1(remaining_min - new_eta),
-                extra_overhead_min=r1(k * overhead_min),
-                split=[int(round(remaining_units * i / (k + 1))) for i in range(k + 2)])
+                extra_overhead_min=r1(k * overhead_min), split=split,
+                keep_until=base + split[1],
+                ranges=[[base + split[i] + 1, base + split[i + 1]] for i in range(k + 1)])
+
+
+REPLAN_MIN_SHARDS = 3
+REPLAN_MIN_PROGRESS = 0.1   # a shard's measured unit time counts once it has done 10% of its units
+REPLAN_ERROR = 0.5          # |median(measured / estimated - 1)| above this re-plans the rest
+REPLAN_AGREEMENT = 0.75     # and at least this share of shards err the same way
+
+
+def replan(shards, target_min=40.0, overhead_min=8.0, free_slots=0, now=None):
+    """Batch-level: when most shards show the unit-time estimate was wrong the same way, re-plan the
+    remaining units with the measured unit time (same formula as `shards`). None otherwise."""
+    errs, meas, remaining, running = [], [], 0.0, 0
+    for s in shards:
+        if not isinstance(s, dict) or s.get("delivered"):
+            continue
+        done, total = _counts(s)
+        if total is None:
+            continue
+        left = max(0.0, total - (done or 0))
+        if left <= EPS:
+            continue
+        running += 1
+        remaining += left
+        elapsed = _elapsed(s, now)
+        est = num(s.get("unit_min_est"))
+        if (elapsed is None or not done or est is None or est <= 0
+                or elapsed - overhead_min <= EPS or done / total < REPLAN_MIN_PROGRESS - EPS):
+            continue
+        um = (elapsed - overhead_min) / done
+        meas.append(um)
+        errs.append(um / est - 1)
+    if len(errs) < REPLAN_MIN_SHARDS or running == 0:
+        return None
+    e = statistics.median(errs)
+    if abs(e) <= REPLAN_ERROR + EPS:
+        return None
+    agree = sum(1 for x in errs if (x > 0) == (e > 0) and abs(x) > EPS) / len(errs)
+    if agree < REPLAN_AGREEMENT - EPS:
+        return None
+    unit = statistics.median(meas)
+    rem_u = int(math.ceil(remaining - EPS))
+    free = max(0, int(free_slots))
+    plan = shard_plan(rem_u, unit, overhead_min, target_min, limit=running + free)
+    return {"measured_unit_min": round(unit, 3), "median_error": round(e, 2), "shards_measured": len(errs),
+            "remaining_units": rem_u, "shards_for_remaining": plan["shards"], "running": running,
+            "new_sessions": max(0, min(free, plan["shards"] - running)), "shard_min": plan["shard_min"],
+            "why": plan["why"]}
 
 
 def cmd_straggler(a):
     data = read_json_stdin()
-    shards = data.get("shards", data) if isinstance(data, dict) else data
-    now = now_or(a.now)
-    free = a.free_slots
+    shards = data.get("shards") if isinstance(data, dict) else data
+    if not isinstance(shards, list) or not all(isinstance(s, dict) for s in shards):
+        die("stdin must be a list of shard objects or {\"shards\": [...]}")
+    now = parse_now(a.now)
+    free = max(0, a.free_slots)
     res = []
     for s in shards:
         r = straggler_check(s, a.target_min, a.overhead_min, free, now)
         if r["action"] == "resplit":
             free -= r["new_sessions"]
         res.append(r)
-    return out({"shards": res, "free_slots_left": free})
+    return out({"shards": res, "free_slots_left": free,
+                "replan": replan(shards, a.target_min, a.overhead_min, max(0, a.free_slots), now)})
 
 
 # =====================================================================================
-# 9. delivery marker: a real "交付" section with a verification result, not the word anywhere
+# 8. delivery marker: a real "交付" section with a verification result, not the word anywhere
 # =====================================================================================
 
-HEAD_RE = re.compile(r"^(#{1,6})\s*(交付|delivery)\s*[:：]?\s*$", re.I)
+HEAD_RE = re.compile(r"^(#{1,6})\s*(?:\*\*|__)?\s*(交付|delivery)\s*(?:\*\*|__)?\s*[:：]?\s*$", re.I)
 ANY_HEAD_RE = re.compile(r"^(#{1,6})\s+\S")
-EMPTY_VERIFY = re.compile(r"^(none|n/?a|无|待补|待补记|tbd|todo|-|…|\.\.\.)?$", re.I)
+FIELD_RE = re.compile(r"^(?:[-*+]\s+)?(?:\*\*|__)?\s*(STATUS|VERIFY)\s*(?:\*\*|__)?\s*[:：]\s*(?:\*\*|__)?\s*(.*)$", re.I)
+PLACEHOLDER = re.compile(
+    r"^(none|n/?a|na|null|nil|无|暂无|没有|待补|待补记|待补充|待定|待验证|未验证|未运行|未跑|没跑|稍后|稍后补|"
+    r"tbd|todo|pending|not run|not yet run|not yet|not verified|unverified|-+|—+|…+|\.{2,}|\?+|？+)?$", re.I)
+
+
+def is_placeholder(v):
+    if not isinstance(v, str):
+        return True
+    s = re.sub(r"<!--.*?-->", "", v, flags=re.S).strip()
+    s = s.strip("*_` ").strip()
+    if re.fullmatch(r"<[^<>]*>", s):
+        return True  # template slot like <命令及结果>
+    s = re.sub(r"[（(][^）)]*[）)]", "", s).strip()  # 待补记（稍后）
+    s = s.rstrip("。.,，;；!！ ").strip()
+    return bool(PLACEHOLDER.match(s))
+
+
+def _outside_fences(lines):
+    fence = None
+    for line in lines:
+        t = line.strip()
+        m = re.match(r"^(`{3,}|~{3,})", t)
+        if m:
+            if fence is None:
+                fence = m.group(1)[0]
+            elif t.startswith(fence * 3):
+                fence = None
+            yield None
+            continue
+        yield None if fence else t
 
 
 def check_delivery(text):
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        m = HEAD_RE.match(line.strip())
+    """The last '## 交付' section (outside code blocks) must say STATUS: DONE and have a real VERIFY."""
+    lines = list(_outside_fences(text.splitlines()))
+    heads = [(i, len(m.group(1))) for i, l in enumerate(lines) if l is not None for m in [HEAD_RE.match(l)] if m]
+    if not heads:
+        return {"delivered": False, "reason": "no_delivery_section"}
+    i, level = heads[-1]
+    status = verify = None
+    for l in lines[i + 1:]:
+        if l is None:
+            continue
+        h = ANY_HEAD_RE.match(l)
+        if h and len(h.group(1)) <= level:
+            break
+        m = FIELD_RE.match(l)
         if not m:
             continue
-        level = len(m.group(1))
-        body = []
-        for l in lines[i + 1:]:
-            h = ANY_HEAD_RE.match(l.strip())
-            if h and len(h.group(1)) <= level:
-                break
-            body.append(l.strip())
-        status = next((l.split(":", 1)[1].strip() for l in body if l.upper().startswith("STATUS:")), None)
-        verify = next((l.split(":", 1)[1].strip() for l in body if l.upper().startswith("VERIFY:")), None)
-        if status is None or status.split()[0].upper() != "DONE":
-            return {"delivered": False, "reason": "section_status_not_done", "status": status}
-        if verify is None or EMPTY_VERIFY.match(verify):
-            return {"delivered": False, "reason": "section_without_verify", "status": status}
-        return {"delivered": True, "reason": "section", "status": status, "verify": verify}
-    return {"delivered": False, "reason": "no_delivery_section"}
+        key, val = m.group(1).upper(), m.group(2).strip().strip("*_ ").strip()
+        if key == "STATUS" and status is None:
+            status = val
+        elif key == "VERIFY" and verify is None:
+            verify = val
+    word = re.match(r"([A-Za-z_]+)", status or "")
+    if not word or word.group(1).upper() != "DONE" or "|" in status:
+        return {"delivered": False, "reason": "section_status_not_done", "status": status}
+    if verify is None or is_placeholder(verify):
+        return {"delivered": False, "reason": "section_without_verify", "status": status}
+    return {"delivered": True, "reason": "section", "status": status, "verify": verify}
 
 
 def check_done_file(path):
     try:
-        d = json.loads(read_text(path))
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
     except (OSError, ValueError):
         return {"delivered": False, "reason": "done_file_unreadable"}
-    if not isinstance(d, dict) or str(d.get("status", "")).upper() != "DONE":
+    if not isinstance(d, dict) or not isinstance(d.get("status"), str) or d["status"].strip().upper() != "DONE":
         return {"delivered": False, "reason": "done_file_status_not_done"}
     v = d.get("verify")
-    if not v or (isinstance(v, str) and EMPTY_VERIFY.match(v.strip())):
+    if isinstance(v, str):
+        ok = not is_placeholder(v)
+    elif isinstance(v, list):
+        ok = bool(v) and all(isinstance(x, str) and not is_placeholder(x) for x in v)
+    else:
+        ok = False  # true, numbers, objects: no verification result
+    if not ok:
         return {"delivered": False, "reason": "done_file_without_verify"}
     return {"delivered": True, "reason": "done_file", "status": "DONE", "verify": v}
 
@@ -331,22 +504,31 @@ def cmd_delivered(a):
 
 
 # =====================================================================================
-# 6. layered verification: related tests in workers, full suite at hq checkpoints only
+# 5. layered verification: related tests in workers, full suite only for shared foundation
 # =====================================================================================
 
 DEFAULT_FOUNDATION = [
-    "package.json", "**/package.json", "pnpm-lock.yaml", "yarn.lock", "package-lock.json",
-    "pnpm-workspace.yaml", "tsconfig*.json", "**/tsconfig*.json",
+    "**/package.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/package-lock.json",
+    "**/pnpm-workspace.yaml", "**/tsconfig*.json",
     "**/vite.config.*", "**/vitest.config.*", "**/vitest.workspace.*", "**/jest.config.*",
     "**/webpack.config.*", "**/babel.config.*", "**/.eslintrc*", "**/eslint.config.*",
     "**/setupTests.*", "**/test/setup*", "**/test-utils/**", "**/testing/**", "**/__mocks__/**",
-    "pyproject.toml", "setup.cfg", "conftest.py", "**/conftest.py", "go.mod", "Cargo.toml",
-    "Makefile", ".github/workflows/**",
+    "**/.storybook/**",
+    "**/pyproject.toml", "**/setup.cfg", "**/conftest.py", "**/go.mod", "**/go.sum", "**/Cargo.toml",
+    "**/Makefile", ".github/workflows/**",
 ]
+
+
+def norm_path(p):
+    """Repo-relative form: backslashes to '/', leading './' (only that prefix) removed."""
+    p = str(p).replace("\\", "/")
+    p = re.sub(r"/{2,}", "/", p)
+    return re.sub(r"^(\./)+", "", p)
 
 
 def glob_re(g):
     """Glob with ** (any depth), * (no slash), ? ; anchored at the path start."""
+    g = norm_path(g)
     i, rx = 0, ""
     while i < len(g):
         c = g[i]
@@ -364,13 +546,17 @@ def glob_re(g):
 
 
 def match_any(path, globs):
-    p = path.lstrip("./")
+    p = norm_path(path)
     return next((g for g in globs if glob_re(g).match(p)), None)
 
 
 def test_scope(changed, foundation=None, require_full=False):
     globs = list(foundation or []) + DEFAULT_FOUNDATION
-    hits = [{"file": f, "glob": match_any(f, globs)} for f in changed if match_any(f, globs)]
+    hits = []
+    for f in changed:
+        g = match_any(f, globs)
+        if g:
+            hits.append({"file": f, "glob": g})
     if require_full:
         return {"scope": "full", "reason": "project_rule", "foundation_hits": hits}
     if hits:
@@ -382,140 +568,264 @@ def cmd_test_scope(a):
     return out(test_scope(a.changed or [], a.foundation, a.require_full))
 
 
-def full_gate(since_shards=0, since_lines=0, since_files=0, batch_complete=False, before_push=False,
-              ci_checkpoint=False, every_shards=4, every_lines=1500, every_files=60):
-    reasons = []
-    if batch_complete:
-        reasons.append("batch_complete")
-    if before_push:
-        reasons.append("before_push")
-    if ci_checkpoint:
-        reasons.append("ci_checkpoint")
-    if every_shards and since_shards >= every_shards:
-        reasons.append("shards>=%d" % every_shards)
-    if every_lines and since_lines >= every_lines:
-        reasons.append("lines>=%d" % every_lines)
-    if every_files and since_files >= every_files:
-        reasons.append("files>=%d" % every_files)
-    return {"run_full": bool(reasons), "reasons": reasons}
-
-
-def cmd_full_gate(a):
-    return out(full_gate(a.since_shards, a.since_lines, a.since_files, a.batch_complete, a.before_push,
-                         a.ci_checkpoint, a.every_shards, a.every_lines, a.every_files))
-
-
 # =====================================================================================
-# 7. batched merge: everything delivered this check-in merges and verifies as one group
+# 6. batched merge: everything delivered this check-in merges and verifies as one group
 # =====================================================================================
+
+def _eta(v):
+    x = num(v)
+    if x is None and isinstance(v, str):
+        try:
+            x = float(v.strip())
+        except ValueError:
+            x = None
+        x = x if x is not None and math.isfinite(x) else None
+    return None if x is None else max(0.0, x)
+
+
+def _under(path, key):
+    """path equals key, or lies under directory key."""
+    k = key.rstrip("/")
+    return path == k or path.startswith(k + "/")
+
+
+def _overlaps(a, b):
+    return _under(a, b) or _under(b, a)
+
+
+def _owner_of(path, owners):
+    """Most specific owner entry (exact file or enclosing directory). Returns (key, set) or None."""
+    best = None
+    for key, v in owners.items():
+        if _under(path, key) and (best is None or len(key.rstrip("/")) > len(best[0].rstrip("/"))):
+            best = (key, v)
+    if best is None:
+        return None
+    v = best[1]
+    ids = {str(x) for x in v if x is not None} if isinstance(v, list) else ({str(v)} if v not in (None, "") else set())
+    return (best[0], ids) if ids else None
+
+
+def _list(v):
+    if v is None:
+        return []
+    return [v] if isinstance(v, str) else list(v) if isinstance(v, list) else []
+
 
 def merge_group(delivered, pending=(), owners=None, wait_max_min=10):
-    owners = owners or {}
-    pending_ids = {p.get("id") for p in pending}
-    ids = [d.get("id") for d in delivered]
-    by_id = {d.get("id"): d for d in delivered}
-    group, deferred, claimed = [], [], {}
-    # topological order among delivered shards; deps on undelivered work defer the shard
+    owners = {norm_path(k): v for k, v in (owners or {}).items()}
+    wait_max_min = max(0.0, wait_max_min)
+    deferred, by_id, ids = [], {}, []
+    dup = set()
+    for d in delivered:
+        i = d.get("id")
+        if i is None or i == "":
+            deferred.append({"id": None, "reason": "missing_id", "files": _list(d.get("files"))})
+            continue
+        i = str(i)
+        if i in by_id:
+            dup.add(i)
+            continue
+        by_id[i] = d
+        ids.append(i)
+    for i in dup:
+        deferred.append({"id": i, "reason": "duplicate_id"})
+    ids = [i for i in ids if i not in dup]
+    pending_ids, soon, ignored = set(), [], []
+    for p in pending:
+        pid = None if p.get("id") is None else str(p.get("id"))
+        if pid in by_id or pid in dup:
+            ignored.append(pid)  # delivered wins over a stale pending entry
+            continue
+        pending_ids.add(pid)
+        eta = _eta(p.get("eta_min"))
+        if eta is not None and eta <= wait_max_min + EPS:
+            soon.append((pid, eta))
+    deps = {i: [str(x) for x in _list(by_id[i].get("depends_on"))] for i in ids}
+
+    # cycles among delivered shards (self-dependency included)
+    state, cyclic = {}, set()
+
+    def visit(i, stack):
+        state[i] = 1
+        stack.append(i)
+        for x in deps[i]:
+            if x not in deps:
+                continue
+            if state.get(x) == 1:
+                cyclic.update(stack[stack.index(x):])
+            elif x not in state:
+                visit(x, stack)
+        stack.pop()
+        state[i] = 2
+
+    for i in ids:
+        if i not in state:
+            visit(i, [])
     order, seen = [], set()
 
-    def visit(i, stack=()):
-        if i in seen or i not in by_id or i in stack:
+    def topo(i):
+        if i in seen:
             return
-        for dep in by_id[i].get("depends_on") or []:
-            visit(dep, stack + (i,))
         seen.add(i)
+        for x in deps[i]:
+            if x in deps and x not in cyclic:
+                topo(x)
         order.append(i)
 
     for i in ids:
-        visit(i)
-    in_group = set()
+        topo(i)
+    group, claimed, in_group = [], {}, set()
     for i in order:
         d = by_id[i]
-        deps = d.get("depends_on") or []
-        bad_dep = next((x for x in deps if x in pending_ids or (x in by_id and x not in in_group)), None)
-        if bad_dep:
-            deferred.append({"id": i, "reason": "depends_on:%s" % bad_dep})
+        if i in cyclic:
+            deferred.append({"id": i, "reason": "dependency_cycle",
+                             "with": sorted(x for x in deps[i] if x in cyclic)})
             continue
-        files = d.get("files") or []
-        foreign = [f for f in files if f in owners and owners[f] != i]
+        bad = next((x for x in deps[i] if x in pending_ids or (x in by_id and x not in in_group) or x in dup), None)
+        if bad:
+            deferred.append({"id": i, "reason": "depends_on:%s" % bad})
+            continue
+        files = [norm_path(f) for f in _list(d.get("files"))]
+        foreign = {}
+        for f in files:
+            o = _owner_of(f, owners)
+            if o and i not in o[1]:
+                foreign[f] = sorted(o[1])
         if foreign:
-            deferred.append({"id": i, "reason": "touches_owned_file", "files": foreign,
-                             "owners": {f: owners[f] for f in foreign}})
+            deferred.append({"id": i, "reason": "touches_owned_file", "files": sorted(foreign),
+                             "owners": foreign})
             continue
-        clash = [f for f in files if f in claimed]
+        clash = {f: c for f in files for c in claimed if _overlaps(f, c)}
         if clash:
-            deferred.append({"id": i, "reason": "overlap", "files": clash,
-                             "with": sorted({claimed[f] for f in clash})})
+            deferred.append({"id": i, "reason": "overlap", "files": sorted(clash),
+                             "with": sorted({claimed[c] for c in clash.values()})})
             continue
         for f in files:
             claimed[f] = i
         group.append(i)
         in_group.add(i)
-    soon = [p for p in pending if num(p.get("eta_min")) is not None and p["eta_min"] <= wait_max_min]
-    wait = max((p["eta_min"] for p in soon), default=0)
-    return {
+    res = {
         "group": group, "deferred": deferred,
         "verify_files": sorted(claimed),
-        "wait_min": r1(wait) if group or soon else 0,
-        "wait_for": [p.get("id") for p in soon],
+        "wait_min": r1(max(e for _, e in soon)) if soon else 0,
+        "wait_for": [p for p, _ in soon],
         "note": "merge in this order, then verify once over the union of files",
     }
+    if ignored:
+        res["ignored_pending"] = ignored
+    return res
+
+
+def _objs(d, key):
+    v = d.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list) or not all(isinstance(x, dict) for x in v):
+        die("%s must be a list of objects" % key)
+    return v
 
 
 def cmd_merge_group(a):
     d = read_json_stdin()
-    return out(merge_group(d.get("delivered") or [], d.get("pending") or [], d.get("owners") or {},
-                           num(d.get("wait_max_min")) if num(d.get("wait_max_min")) is not None else a.wait_max_min))
+    if not isinstance(d, dict):
+        die("stdin must be an object {delivered, pending, owners}")
+    owners = d.get("owners") or {}
+    if not isinstance(owners, dict):
+        die("owners must be an object {path: shard id}")
+    w = num(d.get("wait_max_min"))
+    return out(merge_group(_objs(d, "delivered"), _objs(d, "pending"), owners,
+                           w if w is not None else a.wait_max_min))
+
+
+# ---- failure location -------------------------------------------------------------------
+
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "testing"}
+SRC_ROOTS = {"src", "lib", "app", "source"}
+
+
+def _parts(p):
+    p = norm_path(p).lstrip("/")
+    parts = [x for x in p.split("/") if x]
+    return parts[:-1], (parts[-1] if parts else "")
 
 
 def _dir_overlap(a, b):
-    pa, pb = a.split("/")[:-1], b.split("/")[:-1]
     n = 0
-    for x, y in zip(pa, pb):
+    for x, y in zip(a, b):
         if x != y:
             break
         n += 1
     return n
 
 
-def _stem(p):
-    base = p.rsplit("/", 1)[-1]
-    base = re.sub(r"\.(test|spec)(?=\.)", "", base)
-    return base.split(".", 1)[0]
+def _stem(base):
+    s = base.split(".", 1)[0]
+    s = re.sub(r"^test_", "", s)
+    s = re.sub(r"(_test|_spec|Test|Tests|Spec)$", "", s)
+    return s
+
+
+def _mirror(da, db):
+    """Same directory, or the same once test directories (tests/, __tests__/…) and one leading
+    src/lib root are ignored: src/pkg/mod.py <-> tests/pkg/test_mod.py."""
+    def key(d):
+        d = [x for x in d if x not in TEST_DIRS]
+        return d[1:] if d and d[0] in SRC_ROOTS else d
+    return da == db or key(da) == key(db)
+
+
+def _same_file(a, b):
+    a, b = norm_path(a), norm_path(b)
+    if a == b:
+        return True
+    if a.startswith("/") != b.startswith("/"):  # absolute vs repo-relative
+        rel, ab = (a, b) if b.startswith("/") else (b, a)
+        return ab.endswith("/" + rel)
+    return False
+
+
+def _score(changed, failure):
+    if _same_file(changed, failure):
+        return 1000
+    dc, bc = _parts(changed)
+    df, bf = _parts(failure)
+    ov = _dir_overlap(dc, df)
+    if _stem(bc) and _stem(bc) == _stem(bf):
+        if _mirror(dc, df):
+            return 800 + ov
+        return ov + 0.5  # same name in an unrelated directory: only a tie-breaker
+    return ov
 
 
 def locate(group, failures):
     """Map failing files/tests to the shard(s) whose changes most plausibly caused them:
-    exact file > same file stem (foo.ts <-> foo.test.ts) > deepest shared directory."""
+    exact file > test file of a changed file in the same or mirrored directory > deepest shared
+    directory. Ties below a test-pair match are unresolved and bisected among the tied shards."""
     blame, unresolved = {}, []
+    ids = [str(g.get("id")) for g in group]
     for fpath in failures:
         best, score = [], 0
-        for g in group:
-            s = 0
-            for c in g.get("files") or []:
-                if c == fpath:
-                    s = max(s, 1000)
-                elif _stem(c) == _stem(fpath) and _dir_overlap(c, fpath) >= 1:
-                    s = max(s, 500 + _dir_overlap(c, fpath))
-                else:
-                    s = max(s, _dir_overlap(c, fpath))
-            if s > score:
-                best, score = [g["id"]], s
-            elif s == score and s > 0:
-                best.append(g["id"])
-        if score == 0 or len(best) > 1 and score < 500:
+        for gid, g in zip(ids, group):
+            s = max([_score(c, fpath) for c in _list(g.get("files"))] or [0])
+            if s > score + EPS:
+                best, score = [gid], s
+            elif abs(s - score) <= EPS and s > 0:
+                best.append(gid)
+        if score <= EPS or (len(best) > 1 and score < 800):
             unresolved.append({"failure": fpath, "candidates": best})
         else:
             for b in best:
                 blame.setdefault(b, []).append(fpath)
     culprits = sorted(blame)
-    ids = [g["id"] for g in group]
     res = {"culprits": culprits, "evidence": blame,
            "clean": [i for i in ids if i not in culprits], "unresolved": unresolved}
     if unresolved:
-        rest = [i for i in ids if i not in culprits]
-        half = rest[: (len(rest) + 1) // 2]
-        res["next"] = {"action": "bisect", "revert_and_retest": half}
+        tied = []
+        for u in unresolved:
+            tied += [c for c in u["candidates"] if c not in culprits and c not in tied]
+        pool = tied or [i for i in ids if i not in culprits]
+        res["next"] = {"action": "bisect", "suspects": pool, "revert_and_retest": pool[: (len(pool) + 1) // 2]}
     else:
         res["next"] = {"action": "fix_or_revert_culprits", "merge_others": res["clean"]}
     return res
@@ -523,877 +833,65 @@ def locate(group, failures):
 
 def cmd_locate(a):
     d = read_json_stdin()
-    return out(locate(d.get("group") or [], d.get("failures") or []))
-
-
-# =====================================================================================
-# 8. active monitoring: thresholds, two-level response, rate-limited analysis
-# =====================================================================================
-
-DEFAULT_THRESHOLDS = {
-    "duration_ratio": 2.0,     # elapsed / estimate
-    "idle_min": 40.0,          # minutes since the last assistant event, progress unchanged
-    "cost_ratio": 1.0,         # cost / per-shard budget
-    "rework": 2,               # rework rounds
-    "failure_rate": 0.2,       # batch: failed / finished
-    "straggler_ratio": 2.0,    # batch: longest / median shard duration
-    # split health (batch level, computed here from progress; each fires at most once per batch)
-    "split_unit_error": 0.5,   # |measured unit time / planned - 1|, median over shards >= 10% done
-    "split_uneven": 2.0,       # latest projected finish / median projected finish
-    "split_underused": 0.5,    # running shards / shards the remaining work could use (lower is worse)
-    "split_boundary": 2,       # shards with boundary signals (overlap, files outside owns, shared fixes)
-}
-SEVERE = {"cost_ratio": 2.0, "failure_rate": 0.5, "duration_ratio": 4.0, "split_unit_error": 1.5}
-BOUNDS = {
-    "duration_ratio": (1.3, 4.0), "idle_min": (15.0, 120.0), "cost_ratio": (1.0, 3.0),
-    "rework": (1, 5), "failure_rate": (0.1, 0.5), "straggler_ratio": (1.5, 4.0),
-    "split_unit_error": (0.3, 1.0), "split_uneven": (1.5, 4.0), "split_underused": (0.25, 0.8),
-    "split_boundary": (1, 5),
-}
-INTEGER = {"rework", "split_boundary"}
-LOWER_IS_WORSE = {"split_underused"}
-SPLIT_METRICS = ("split_unit_error", "split_uneven", "split_underused", "split_boundary")
-LEVEL1 = {
-    "idle_min": "message_reminder", "duration_ratio": "straggler_check", "straggler_ratio": "straggler_check",
-    "failure_rate": "locate_failing_shard", "cost_ratio": "pause_and_ask_user", "rework": "message_review_brief",
-    "split_unit_error": "replan_remaining", "split_uneven": "replan_remaining",
-    "split_underused": "replan_remaining", "split_boundary": "review_boundaries",
-}
-DEFAULT_CAUSE = {
-    "idle_min": "no_progress", "duration_ratio": "underestimated", "straggler_ratio": "uneven_split",
-    "failure_rate": "verify_failures", "cost_ratio": "over_budget", "rework": "repeated_fixes",
-    "split_unit_error": "unit_time", "split_uneven": "uneven", "split_underused": "underused",
-    "split_boundary": "boundary",
-}
-EARLY_PROGRESS = 0.1  # a shard's rate counts once it has finished 10% of its units
-DEFAULT_LIMITS = {"cooldown_min": 120, "per_batch": 1, "per_day": 3, "analysis_budget_usd": 0.5,
-                  "consecutive": 2}
-
-
-def thresholds_for(cfg, task_type):
-    t = dict(DEFAULT_THRESHOLDS)
-    th = (cfg or {}).get("thresholds") or {}
-    for scope in ("*", task_type):
-        if isinstance(th.get(scope), dict):
-            t.update({k: v for k, v in th[scope].items() if num(v) is not None})
-    # flat {metric: value} at the top level counts as "*"
-    t.update({k: v for k, v in th.items() if k in DEFAULT_THRESHOLDS and num(v) is not None})
-    return t
-
-
-def shard_metrics(s, now, prev):
-    m = {}
-    est = num(s.get("est_min"))
-    elapsed = num(s.get("elapsed_min"))
-    if elapsed is None:
-        st = parse_ts(s.get("created_at") or s.get("started_at"))
-        elapsed = minutes(st, now) if st else None
-    if elapsed is not None and est:
-        m["duration_ratio"] = round(elapsed / est, 2)
-    # idle: from the event stream's latest event; the session list's updated_at can lag for hours
-    last = parse_ts(s.get("last_event_at"))
-    done = s.get("done")
-    unchanged = prev is None or prev.get("done") == done
-    if last is not None and unchanged:
-        m["idle_min"] = round(minutes(last, now), 1)
-    cost, budget = num(s.get("cost_usd")), num(s.get("budget_usd"))
-    if cost is not None and budget:
-        m["cost_ratio"] = round(cost / budget, 2)
-    if num(s.get("rework")) is not None:
-        m["rework"] = s["rework"]
-    return m
-
-
-def split_health(snap, now):
-    """Batch-level checks of whether the split itself was sound, from data already in the snapshot.
-    Returns ({metric: value}, {metric: detail}). Needs at least 2 shards (3 for the unit-time check)."""
-    shards = snap.get("shards") or []
-    target = num(snap.get("target_min")) or 40.0
-    overhead = num(snap.get("overhead_min"))
-    overhead = 8.0 if overhead is None else overhead
-    limit = num(snap.get("concurrency_limit"))
-    vals, detail = {}, {}
-    if len(shards) < 2:
-        return vals, detail
-    errs, unit_meas, projected, running, rem_units, rem_min = [], [], [], 0, 0, 0.0
-    for s in shards:
-        ov = num(s.get("overhead_min"))
-        ov = overhead if ov is None else ov
-        elapsed = num(s.get("elapsed_min"))
-        if elapsed is None:
-            t = parse_ts(s.get("created_at") or s.get("started_at"))
-            elapsed = minutes(t, now) if t else None
-        done, total = num(s.get("done")), num(s.get("total"))
-        if s.get("delivered"):
-            if elapsed is not None:
-                projected.append(elapsed)
-            continue
-        running += 1
-        if elapsed is None or not total or not done or elapsed <= ov:
-            continue
-        um = (elapsed - ov) / done  # measured minutes per unit
-        unit_meas.append(um)
-        left = max(0, total - done)
-        rem_units += left
-        rem_min += left * um
-        projected.append(elapsed + left * um)
-        est = num(s.get("unit_min_est"))
-        if est and done / total >= EARLY_PROGRESS:
-            errs.append(um / est - 1)
-    # 1. unit time estimate: the whole plan is off when most shards disagree with it the same way
-    if len(errs) >= 3:
-        e = statistics.median(errs)
-        same_sign = sum(1 for x in errs if (x > 0) == (e > 0)) / len(errs)
-        if same_sign >= 0.75:
-            vals["split_unit_error"] = round(abs(e), 2)
-            detail["split_unit_error"] = {"median_error": round(e, 2), "shards": len(errs),
-                                          "measured_unit_min": round(statistics.median(unit_meas), 3)}
-    # 2. uneven split: spread of projected finish times, before shards actually finish
-    if len(projected) >= 3:
-        m = statistics.median(projected)
-        if m > 0:
-            vals["split_uneven"] = round(max(projected) / m, 2)
-            detail["split_uneven"] = {"latest_min": r1(max(projected)), "median_min": r1(m)}
-    # 3. under-used slots: the remaining work could keep more sessions busy than are running
-    if limit and running and rem_min > 2 * target:
-        usable = max(1, int(limit) - int(math.floor(limit * 0.2)))
-        could = min(usable, int(math.ceil(rem_min / target)), int(rem_units) or 1)
-        if could > running:
-            vals["split_underused"] = round(running / could, 2)
-            detail["split_underused"] = {"running": running, "could_use": could, "remaining_min": r1(rem_min)}
-    # 4. boundary signals: overlap deferrals, files outside owns, SHARED_FIXES entries
-    hit = []
-    for s in shards:
-        b = s.get("boundary") or {}
-        if b.get("overlap") or b.get("out_of_owns") or cnt_(b.get("shared_fixes")):
-            hit.append(s.get("id"))
-    if hit:
-        vals["split_boundary"] = len(hit)
-        detail["split_boundary"] = {"shards": hit}
-    # a re-plan proposal for the remaining work (same rule as `shards`)
-    if rem_units and unit_meas:
-        plan = shard_plan(rem_units, statistics.median(unit_meas), overhead, target, int(limit or running or 1))
-        detail["replan"] = {"remaining_units": int(rem_units), "measured_unit_min": round(statistics.median(unit_meas), 3),
-                            "shards_for_remaining": plan["shards"], "running": running,
-                            "new_sessions": max(0, plan["shards"] - running), "shard_min": plan["shard_min"],
-                            "why": plan["why"]}
-    return vals, detail
-
-
-def cnt_(x):
-    v = num(x)
-    return v if v is not None else 0
-
-
-def breached(metric, value, th):
-    if metric in LOWER_IS_WORSE:
-        return value < th
-    return value >= th if metric in INTEGER else value > th
-
-
-def is_severe(metric, value):
-    return metric in SEVERE and value >= SEVERE[metric]
-
-
-def monitor_step(state, snap, cfg=None, now=None):
-    """One check-in. Returns (new_state, result). State is a plain JSON dict the caller persists."""
-    cfg = cfg or {}
-    now = now or datetime.now(timezone.utc)
-    lim = dict(DEFAULT_LIMITS, **(cfg.get("limits") or {}))
-    st = {"streak": {}, "last": {}, "seen": {}, "analyzed": {}, "pending": {}, "batch_analyses": {},
-          "day_analyses": {}, "split_fired": {}}
-    st.update(state or {})
-    batch = snap.get("batch_id") or "batch"
-    run_id = snap.get("run_id")
-    day = now.strftime("%Y-%m-%d")
-    ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    obs = []  # (subject, task_type, metric, value, threshold, cause)
-    for s in snap.get("shards") or []:
-        sid = s.get("id")
-        if s.get("delivered"):
-            st["last"].pop(sid, None)
-            continue
-        tt = s.get("task_type") or s.get("kind") or "*"
-        th = thresholds_for(cfg, tt)
-        m = shard_metrics(s, now, st["last"].get(sid))
-        st["last"][sid] = {"done": s.get("done")}
-        for k, v in m.items():
-            obs.append((sid, tt, k, v, th[k], (s.get("cause") or {}).get(k) if isinstance(s.get("cause"), dict) else None))
-    b = snap.get("batch") or {}
-    th_b = thresholds_for(cfg, snap.get("task_type") or "*")
-    for k in ("failure_rate", "straggler_ratio"):
-        if num(b.get(k)) is not None:
-            obs.append(("batch", snap.get("task_type") or "*", k, b[k], th_b[k], None))
-    split_vals, split_detail = split_health(snap, now)
-    fired = st["split_fired"].setdefault(batch, [])
-    for k, v in split_vals.items():
-        if k not in fired:  # each split check acts at most once per batch: no repeated re-planning
-            obs.append(("batch", snap.get("task_type") or "*", k, v, th_b[k], None))
-
-    actions, records, triggered = [], [], []
-    for subj, tt, metric, value, th, cause in obs:
-        key_s = "%s|%s" % (subj, metric)
-        if not breached(metric, value, th):
-            st["streak"].pop(key_s, None)
-            continue
-        sev = is_severe(metric, value)
-        streak = st["streak"].get(key_s, 0) + 1
-        if streak < lim["consecutive"] and not sev:
-            st["streak"][key_s] = streak
-            continue
-        st["streak"].pop(key_s, None)  # re-arm: needs another run of breaches to fire again
-        cause = cause or DEFAULT_CAUSE[metric]
-        key = ("split:%s" % cause) if metric in SPLIT_METRICS else "%s:%s" % (metric, cause)
-        if metric in SPLIT_METRICS:
-            fired.append(metric)
-        rec = {"type": "monitor", "event": "trigger", "run_id": run_id, "batch_id": batch, "ts": ts,
-               "task_id": subj, "task_type": tt, "metric": metric, "value": value, "threshold": th,
-               "severity": "severe" if sev else "normal", "level": 1, "action": LEVEL1[metric],
-               "key": key, "rate_limited": False, "analysis_cost_usd": None, "label": None}
-        act = {"level": 1, "task_id": subj, "metric": metric, "value": value, "threshold": th,
-               "action": LEVEL1[metric], "severity": rec["severity"]}
-        if metric in SPLIT_METRICS:
-            act["detail"] = split_detail.get(metric)
-            if LEVEL1[metric] == "replan_remaining":
-                act["replan"] = split_detail.get("replan")
-        actions.append(act)
-        seen = st["seen"].setdefault(key, {"subjects": [], "batches": []})
-        if subj not in seen["subjects"]:
-            seen["subjects"].append(subj)
-        if batch not in seen["batches"]:
-            seen["batches"].append(batch)
-        repeated = len(seen["subjects"]) >= 2 or len(seen["batches"]) >= 2
-        triggered.append((key, sev, repeated, rec))
-        records.append(rec)
-
-    analyses, skipped = [], []
-
-    def limits_ok():
-        return (st["batch_analyses"].get(batch, 0) < lim["per_batch"]
-                and st["day_analyses"].get(day, 0) < lim["per_day"])
-
-    def in_cooldown(key):
-        last = st["analyzed"].get(key)
-        if not last:
-            return False
-        if last.get("batch") == batch:
-            return True
-        t = parse_ts(last.get("ts"))
-        return t is not None and minutes(t, now) < lim["cooldown_min"]
-
-    def start(keys, severity, reason):
-        counts = {k: st["pending"].pop(k, {}).get("count", 0) + 1 for k in keys}
-        for k in keys:
-            st["analyzed"][k] = {"ts": ts, "batch": batch}
-        st["batch_analyses"][batch] = st["batch_analyses"].get(batch, 0) + 1
-        st["day_analyses"][day] = st["day_analyses"].get(day, 0) + 1
-        analyses.append({"level": 2, "keys": keys, "counts": counts, "severity": severity, "reason": reason,
-                         "budget_usd": lim["analysis_budget_usd"], "model_hint": "light (T1/T2, low effort)",
-                         "after": "this check-in's merge and verification"})
-
-    heavy = bool(snap.get("heavy_ops"))
-    for key, sev, repeated, rec in triggered:
-        if not (sev or repeated):
-            continue  # level 1 only
-        rec["level"] = 2
-        if in_cooldown(key):
-            p = st["pending"].setdefault(key, {"count": 0, "severe": False})
-            p["count"] += 1
-            rec["rate_limited"], rec["skip_reason"] = True, "cooldown"
-            skipped.append({"key": key, "reason": "cooldown"})
-            continue
-        if not sev:
-            p = st["pending"].setdefault(key, {"count": 0, "severe": False})
-            p["count"] += 1
-            rec["deferred"] = "batch_end"
-            continue
-        if heavy:
-            p = st["pending"].setdefault(key, {"count": 0, "severe": False})
-            p["count"] += 1
-            p["severe"] = True
-            rec["deferred"] = "next_checkin_heavy_ops"
-            continue
-        if not limits_ok():
-            st["pending"].setdefault(key, {"count": 0, "severe": True})["count"] += 1
-            rec["rate_limited"], rec["skip_reason"] = True, "global_limit"
-            skipped.append({"key": key, "reason": "global_limit"})
-            continue
-        start([key], "severe", "severe")
-    # severe triggers postponed by heavy work run on a later quiet check-in
-    if not heavy:
-        for key in [k for k, p in st["pending"].items() if p.get("severe")]:
-            if not limits_ok():
-                break
-            if key in st["pending"] and not in_cooldown(key):
-                start([key], "severe", "postponed_severe")
-    if snap.get("batch_done") and not heavy:
-        keys = [k for k in st["pending"] if not in_cooldown(k)]
-        if keys:
-            if limits_ok():
-                start(sorted(keys), "normal", "batch_end_merged")
-            else:
-                skipped.append({"key": ",".join(sorted(keys)), "reason": "global_limit_to_retro"})
-                for k in keys:
-                    st["pending"][k]["to_retro"] = True
-    return st, {"actions": actions, "analyses": analyses, "rate_limited": skipped, "records": records,
-                "pending": st["pending"]}
-
-
-def load_json_file(path, default):
-    if not path or not os.path.exists(path):
-        return default
-    try:
-        return json.loads(read_text(path))
-    except ValueError:
-        die("%s is not valid JSON" % path)
-
-
-def cmd_monitor(a):
-    snap = read_json_stdin()
-    cfg = load_json_file(a.config, {})
-    if a.playbook:
-        cfg = dict(cfg)
-        cfg.setdefault("thresholds", effective_thresholds(a.playbook)["thresholds"])
-    state = load_json_file(a.state, {})
-    st, res = monitor_step(state, snap, cfg, now_or(a.now))
-    if a.state:
-        d = os.path.dirname(os.path.abspath(a.state))
-        os.makedirs(d, exist_ok=True)
-        with open(a.state, "w", encoding="utf-8") as fh:
-            json.dump(st, fh, ensure_ascii=False, indent=1)
-    return out(res)
-
-
-# =====================================================================================
-# 8.5 threshold calibration
-# =====================================================================================
-
-MIN_SAMPLES = 5
-FP_MAX = 0.3      # false-positive rate above this -> loosen
-MISS_MAX = 0.2    # missed / (effective + missed) above this -> tighten
-STEP = 0.2        # at most 20% per calibration
-
-
-def p90(xs):
-    xs = sorted(xs)
-    if not xs:
-        return None
-    k = (len(xs) - 1) * 0.9
-    lo, hi = int(math.floor(k)), int(math.ceil(k))
-    return xs[lo] + (xs[hi] - xs[lo]) * (k - lo)
-
-
-def clamp(metric, v):
-    lo, hi = BOUNDS[metric]
-    v = min(hi, max(lo, v))
-    return int(round(v)) if metric in INTEGER else round(v, 2)
-
-
-def stepped(before, target):
-    lo, hi = before * (1 - STEP), before * (1 + STEP)
-    return min(hi, max(lo, target))
-
-
-def counts(history, tt, metric):
-    e = fp = miss = 0
-    for h in history:
-        if h.get("metric") != metric or (tt != "*" and (h.get("task_type") or "*") != tt):
-            continue
-        lab = h.get("label") or ("missed" if h.get("event") == "missed" else None)
-        if lab == "effective":
-            e += 1
-        elif lab == "false_positive":
-            fp += 1
-        elif lab == "missed":
-            miss += 1
-    return e, fp, miss
-
-
-def calibrate(current, history, ratios=None, user=None, task_types=None):
-    """current: {task_type: {metric: value}} (missing -> defaults); user: same shape, never changed.
-    history: monitor records with label effective|false_positive, or event "missed".
-    ratios: {task_type: [actual/estimate ...]} for the duration threshold (P90)."""
-    current = current or {}
-    user = user or {}
-    ratios = ratios or {}
-    types = set(task_types or []) | set(current) | {h.get("task_type") or "*" for h in history} | set(ratios) | {"*"}
-    new, changes = {}, []
-    for tt in sorted(types):
-        new[tt] = {}
-        for metric, dflt in DEFAULT_THRESHOLDS.items():
-            before = (current.get(tt) or {}).get(metric)
-            if num(before) is None:
-                before = (current.get("*") or {}).get(metric, dflt) if tt != "*" else dflt
-            uv = (user.get(tt) or {}).get(metric)
-            if num(uv) is None:
-                uv = (user.get("*") or {}).get(metric)
-            if num(uv) is not None:
-                new[tt][metric] = uv
-                continue
-            e, fp, miss = counts(history, tt, metric)
-            n = e + fp + miss
-            rs = [x for x in ratios.get(tt, []) if num(x) is not None]
-            source = tt
-            if n < MIN_SAMPLES and len(rs) < MIN_SAMPLES and tt != "*":
-                # too few samples for this task type: fall back to the global value (or default)
-                g = new.get("*", {}).get(metric)
-                v = g if g is not None else dflt
-                new[tt][metric] = v
-                if v != before:
-                    changes.append({"task_type": tt, "metric": metric, "before": before, "after": v,
-                                    "reason": "samples<%d: use global/default" % MIN_SAMPLES, "n": n})
-                continue
-            target, reason = before, []
-            if n >= MIN_SAMPLES:
-                fpr = fp / (e + fp) if e + fp else 0.0
-                mr = miss / (e + miss) if e + miss else 0.0
-                if fpr > FP_MAX and mr > MISS_MAX:
-                    reason.append("fp %.0f%% and misses %.0f%% both high: keep" % (fpr * 100, mr * 100))
-                elif fpr > FP_MAX:  # loosen = fire less often
-                    target = before * (1 - STEP if metric in LOWER_IS_WORSE else 1 + STEP)
-                    reason.append("false positives %.0f%% > %.0f%%: loosen" % (fpr * 100, FP_MAX * 100))
-                elif mr > MISS_MAX:
-                    target = before * (1 + STEP if metric in LOWER_IS_WORSE else 1 - STEP)
-                    reason.append("misses %.0f%% > %.0f%%: tighten" % (mr * 100, MISS_MAX * 100))
-            if metric == "duration_ratio" and len(rs) >= MIN_SAMPLES and not reason:
-                target = p90(rs)
-                reason.append("P90 of actual/estimate = %.2f (n=%d)" % (target, len(rs)))
-            after = clamp(metric, stepped(before, target))
-            if metric in INTEGER and after == before and target != before:
-                # 20% of a small integer rounds to no change: move by the minimum step of 1
-                after = clamp(metric, before + (1 if target > before else -1))
-            new[tt][metric] = after
-            if after != before:
-                changes.append({"task_type": tt, "metric": metric, "before": before, "after": after,
-                                "reason": "; ".join(reason) or "bounds", "n": n, "source": source,
-                                "fp": fp, "effective": e, "missed": miss})
-    # drop per-type entries identical to the global ones to keep the stored table small
-    g = new.get("*", {})
-    compact = {"*": g}
-    for tt, m in new.items():
-        if tt == "*":
-            continue
-        d = {k: v for k, v in m.items() if v != g.get(k)}
-        if d:
-            compact[tt] = d
-    return {"thresholds": compact, "changes": changes}
-
-
-# ---------- rule-based labels: effective / false_positive, and rule-detected misses ----------
-
-# Constants of the labelling rules (references/scale-out.md section 9).
-LABEL_SAVING_MIN_SHARE = 0.5   # a re-split / re-plan counts as effective when it saved >= 50% of the estimate
-LABEL_ON_TIME_RATIO = 1.2      # "finished normally" = actual <= 1.2 x estimate (or cost <= 1.2 x budget)
-LABEL_IDLE_WINDOW = 2          # progress must rise within this many check-ins after the reminder
-MISSED_DURATION_RATIO = 2.0    # actual > 2 x estimate without a duration_ratio trigger = a miss
-LABEL_EPS = 1e-9               # float tolerance for the boundary comparisons (1.2 * 3 = 3.5999999999999996)
-LABEL_ACTIONS = ("resplit", "replan")
-DURATION_LIKE = ("duration_ratio", "straggler_ratio", "split_unit_error", "split_uneven", "split_underused")
-
-
-def _outcome_for(outcomes, rec):
-    """Outcome of the record's subject, with an optional per-metric override in `by_metric`."""
-    base = outcomes.get(str(rec.get("task_id"))) or {}
-    if not isinstance(base, dict):
-        return {}
-    o = {k: v for k, v in base.items() if k != "by_metric"}
-    extra = (base.get("by_metric") or {}).get(rec.get("metric"))
-    if isinstance(extra, dict):
-        o.update(extra)
-    return o
-
-
-def _on_time(actual, planned):
-    # exactly 1.2 x counts as on time (<=): the rule says "<= 1.2 x", so the boundary is a false positive
-    # with a small tolerance so that e.g. est 3 / actual 3.6 is not lost to float rounding
-    return (actual is not None and planned is not None and planned > 0
-            and actual <= LABEL_ON_TIME_RATIO * planned + LABEL_EPS)
-
-
-def _action_taken(v):
-    """True / "resplit" / "replan" -> taken; False -> not taken; anything else -> unknown (None)."""
-    if v is True or v in LABEL_ACTIONS:
-        return True
-    if v is False:
-        return False
-    return None
-
-
-def _label_duration_like(o):
-    actual, est = num(o.get("actual_min")), num(o.get("est_min"))
-    raw = o.get("action_taken")
-    taken = _action_taken(raw)
-    if taken:
-        exp, got = num(o.get("expected_saving_min")), num(o.get("actual_saving_min"))
-        if exp is None or got is None or exp <= 0:
-            return None, "action taken but expected_saving_min / actual_saving_min missing"
-        # exactly 50% counts as effective (>=), as the rule says "saved >= 50% of the expected saving"
-        if got >= LABEL_SAVING_MIN_SHARE * exp - LABEL_EPS:
-            return "effective", "%s saved %.1f of expected %.1f min (>= %d%%)" % (
-                raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
-        return "false_positive", "%s saved %.1f of expected %.1f min (< %d%%)" % (
-            raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
-    if taken is False and _on_time(actual, est):
-        return "false_positive", "no action; actual %.1f <= %.1f x estimate %.1f min" % (
-            actual, LABEL_ON_TIME_RATIO, est)
-    if taken is None:
-        return None, "action_taken unknown (%r)" % (raw,)
-    return None, "no action and actual time over %.1f x estimate (or unknown)" % LABEL_ON_TIME_RATIO
-
-
-def _progress_series(o):
-    pts = []
-    for p in o.get("progress") or []:
-        if isinstance(p, dict) and parse_ts(p.get("ts")) is not None and num(p.get("done")) is not None:
-            pts.append((parse_ts(p["ts"]), p["done"]))
-    return sorted(pts, key=lambda x: x[0])
-
-
-def _label_idle(o, rec):
-    at = parse_ts(o.get("reminder_ts") or rec.get("ts"))
-    pts = _progress_series(o)
-    if at is None or not pts:
-        return None, "no progress series or reminder time"
-    before = [d for t, d in pts if t <= at]
-    after = [d for t, d in pts if t > at]
-    if not before:
-        return None, "no progress point at or before the reminder"
-    base = before[-1]
-    effective = any(d > base for d in after[:LABEL_IDLE_WINDOW])
-    rising = len(before) >= 2 and before[-1] > before[0] and bool(after) and after[-1] > base
-    fp = rising and _on_time(num(o.get("actual_min")), num(o.get("est_min")))
-    if effective and fp:
-        # progress was rising before the stall, rose again after the reminder, and the shard finished on
-        # time: either the reminder unblocked it or it was waiting on a long background step. No rule decides.
-        return None, "conflicting: progress rose after the reminder, but also rose before it and finished on time"
-    if effective:
-        return "effective", "done rose from %s within %d check-ins after the reminder" % (base, LABEL_IDLE_WINDOW)
-    if fp:
-        return "false_positive", "progress rising before and after the reminder and finished within %.1f x estimate" % LABEL_ON_TIME_RATIO
-    return None, "progress did not rise within %d check-ins and the waiting-on-background pattern does not hold" % LABEL_IDLE_WINDOW
-
-
-def _label_failure(o):
-    culprits = o.get("culprits")
-    located = o.get("located") is True or (isinstance(culprits, list) and len(culprits) > 0)
-    flaky = o.get("rerun_passed") is True
-    if located and flaky:
-        return None, "conflicting: located to a shard but the rerun also passed"
-    if located:
-        return "effective", "failure located to shard(s) %s" % (o.get("culprits") or "")
-    if flaky:
-        return "false_positive", "rerun passed without changes (flaky)"
-    return None, "not located and no passing rerun"
-
-
-def _label_rework(o):
-    n = num(o.get("rework_after_message"))
-    if n == 0:
-        return "effective", "no further rework after the review-brief message"
-    return None, "rework continued after the message" if n else "rework_after_message unknown"
-
-
-def _label_cost(o):
-    d = o.get("user_decision")
-    if d in ("stop", "adjust"):
-        return "effective", "user chose to %s" % d
-    if d == "continue":
-        cost, budget = num(o.get("final_cost_usd")), num(o.get("budget_usd"))
-        if _on_time(cost, budget):
-            return "false_positive", "user continued unchanged; final cost %.2f <= %.1f x budget %.2f" % (
-                cost, LABEL_ON_TIME_RATIO, budget)
-        return None, "user continued and final cost over %.1f x budget (or unknown)" % LABEL_ON_TIME_RATIO
-    return None, "no user decision"
-
-
-def _label_boundary(o):
-    c, v = num(o.get("merge_conflicts")), num(o.get("ownership_violations"))
-    if (c or 0) > 0 or (v or 0) > 0:
-        return "effective", "merge conflicts %s, ownership violations %s" % (c, v)
-    if c == 0 and v == 0:
-        return "false_positive", "all shards merged cleanly"
-    return None, "merge_conflicts / ownership_violations unknown"
-
-
-def label_one(rec, outcomes):
-    o = _outcome_for(outcomes, rec)
-    m = rec.get("metric")
-    if not o:
-        return None, "no outcome for %s" % rec.get("task_id")
-    if m in DURATION_LIKE:
-        return _label_duration_like(o)
-    if m == "idle_min":
-        return _label_idle(o, rec)
-    if m == "failure_rate":
-        return _label_failure(o)
-    if m == "rework":
-        return _label_rework(o)
-    if m == "cost_ratio":
-        return _label_cost(o)
-    if m == "split_boundary":
-        return _label_boundary(o)
-    return None, "no rule for metric %s" % m
-
-
-def label_records(records, outcomes):
-    """Label monitor triggers by fixed rules and add rule-detected misses.
-    Returns {"records", "unlabeled", "missed", "history"}; history = records + missed, the input
-    `scale.py calibrate` expects. Records that already carry a label are kept untouched."""
-    if outcomes is None:
-        outcomes = {}
-    if not isinstance(outcomes, dict):
-        raise ValueError("outcomes must be an object keyed by task_id or \"batch\"")
-    if records is None:
-        records = []
-    if not isinstance(records, list):
-        raise ValueError("records must be a list")
-    outcomes = {str(k): v for k, v in outcomes.items()}  # JSON keys are strings; task_id may be a number
-    labelled, unlabeled, missed = [], [], []
-    for rec in records or []:
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("label") or rec.get("event", "trigger") != "trigger":
-            labelled.append(rec)  # human / reviewer label, or a missed record: never overwritten
-            continue
-        lab, why = label_one(rec, outcomes)
-        if lab:
-            labelled.append(dict(rec, label=lab, label_source="rule", label_reason=why))
-        else:
-            unlabeled.append(dict(rec, label=None, label_reason=why))
-    allrecs = [r for r in records or [] if isinstance(r, dict)]
-
-    def has(metric, task_id=None):
-        return any(r.get("metric") == metric and (task_id is None or str(r.get("task_id")) == task_id)
-                   for r in allrecs)
-
-    batch_ids = sorted({r.get("batch_id") for r in allrecs if r.get("batch_id")})
-    run_ids = sorted({r.get("run_id") for r in allrecs if r.get("run_id")})
-
-    def miss(metric, task_id, task_type, reason):
-        m = {"type": "monitor", "event": "missed", "metric": metric, "task_id": task_id,
-             "task_type": task_type or "*", "label_source": "rule", "label_reason": reason}
-        if len(batch_ids) == 1:
-            m["batch_id"] = batch_ids[0]
-        if len(run_ids) == 1:
-            m["run_id"] = run_ids[0]
-        return m
-
-    def task_type_of(tid, o):
-        if o.get("task_type"):
-            return o["task_type"]
-        return next((r.get("task_type") for r in allrecs if str(r.get("task_id")) == tid and r.get("task_type")), None)
-
-    for tid, o in outcomes.items():
-        if not isinstance(o, dict):
-            continue
-        if tid != "batch":
-            actual, est = num(o.get("actual_min")), num(o.get("est_min"))
-            # exactly 2 x is not a miss: the trigger itself fires only above 2 x (strict >)
-            if actual is not None and est and actual > MISSED_DURATION_RATIO * est and not has("duration_ratio", tid):
-                missed.append(miss("duration_ratio", tid, task_type_of(tid, o),
-                                   "actual %.1f > %.1f x estimate %.1f min, no duration_ratio trigger"
-                                   % (actual, MISSED_DURATION_RATIO, est)))
-            continue
-        fails = num(o.get("verify_failed_groups")) or 0
-        rate = num(o.get("failure_rate"))
-        th = num(o.get("failure_rate_threshold"))
-        th = DEFAULT_THRESHOLDS["failure_rate"] if th is None else th
-        if fails > 0 and rate is not None and rate > th and not has("failure_rate"):
-            missed.append(miss("failure_rate", "batch", task_type_of("batch", o),
-                               "%d merge group(s) failed verification, failure rate %.2f > %.2f, no failure_rate trigger"
-                               % (fails, rate, th)))
-    return {"records": labelled, "unlabeled": unlabeled, "missed": missed, "history": labelled + missed}
-
-
-def cmd_label(a):
-    d = read_json_stdin()
     if not isinstance(d, dict):
-        die("stdin must be {\"records\": [...], \"outcomes\": {...}}")
-    try:
-        res = label_records(d.get("records"), d.get("outcomes"))
-    except ValueError as e:
-        die(str(e))
-    return out(res)
-
-
-# ---------- PLAYBOOK storage: user values in the 授权 yaml, calibrated values in a marked block ----------
-
-BEGIN, END = "<!-- hq:thresholds:begin -->", "<!-- hq:thresholds:end -->"
-
-
-def _scalar(v):
-    v = v.strip()
-    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
-        return v[1:-1]
-    if v in ("null", "~", ""):
-        return None
-    try:
-        return int(v)
-    except ValueError:
-        pass
-    try:
-        return float(v)
-    except ValueError:
-        return v
-
-
-def _flow(v):
-    v = v.strip()
-    if v.startswith("{") and v.endswith("}"):
-        o = {}
-        for part in v[1:-1].split(","):
-            if part.strip():
-                k, _, x = part.partition(":")
-                o[_scalar(k)] = _scalar(x)
-        return o
-    return _scalar(v)
-
-
-def yaml_block(text, top):
-    """Tiny YAML subset reader for one top-level key inside ```yaml fences (nested maps, flow maps)."""
-    root, stack, fence, inside = {}, [], False, False
-    for raw in text.splitlines():
-        if raw.strip().startswith("```"):
-            fence = not fence
-            inside = False
-            continue
-        if not fence:
-            continue
-        line = raw.split(" #", 1)[0].rstrip() if not raw.lstrip().startswith("#") else ""
-        if not line.strip():
-            continue
-        ind = len(line) - len(line.lstrip())
-        if ind == 0:
-            inside = line.startswith(top + ":")
-            stack = [(0, root)]
-            if inside:
-                root.setdefault(top, {})
-                stack = [(0, root[top])]
-            continue
-        if not inside:
-            continue
-        k, sep, v = line.strip().partition(":")
-        if not sep:
-            continue
-        k = _scalar(k)
-        while len(stack) > 1 and stack[-1][0] >= ind:
-            stack.pop()
-        parent = stack[-1][1]
-        if not v.strip():
-            parent[k] = {}
-            stack.append((ind, parent[k]))
-        else:
-            parent[k] = _flow(v)
-    return root.get(top) or {}
-
-
-def read_block(text):
-    i, j = text.find(BEGIN), text.find(END)
-    if i < 0 or j < i:
-        return None
-    body = text[i + len(BEGIN):j]
-    m = re.search(r"```json\s*(.*?)```", body, re.S)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(1))
-    except ValueError:
-        return None
-
-
-def write_block(text, data):
-    block = (BEGIN + "\n```json\n" + json.dumps(data, ensure_ascii=False, indent=1) + "\n```\n" + END)
-    i, j = text.find(BEGIN), text.find(END)
-    if i >= 0 and j > i:
-        return text[:i] + block + text[j + len(END):]
-    sep = "" if text.endswith("\n") else "\n"
-    return (text + sep + "\n## 监控阈值（自动校准，勿手改；手动设定写在授权区 monitor.thresholds）\n\n" + block + "\n")
-
-
-def effective_thresholds(playbook):
-    text = read_text(playbook) if os.path.exists(playbook) else ""
-    raw = yaml_block(text, "monitor").get("thresholds") or {}
-    user = {}
-    flat = {k: v for k, v in raw.items() if k in DEFAULT_THRESHOLDS and num(v) is not None}
-    if flat:  # `thresholds: {idle_min: 30}` without a task type means all types
-        user["*"] = flat
-    for k, v in raw.items():
-        if isinstance(v, dict):
-            user.setdefault(str(k), {}).update(
-                {m: x for m, x in v.items() if m in DEFAULT_THRESHOLDS and num(x) is not None})
-    blk = read_block(text) or {}
-    cal = blk.get("thresholds") or {}
-    eff = {}
-    for tt in set(cal) | set(user) | {"*"}:
-        m = dict(DEFAULT_THRESHOLDS)
-        m.update((cal.get("*") or {}))
-        m.update(cal.get(tt) or {})
-        m.update((user.get("*") or {}) if tt == "*" else {})
-        m.update(user.get(tt) or {})
-        eff[tt] = m
-    return {"thresholds": eff, "user": user, "calibrated": blk}
-
-
-def cmd_calibrate(a):
-    d = read_json_stdin()
-    user = d.get("user")
-    current = d.get("current")
-    if a.playbook:
-        e = effective_thresholds(a.playbook)
-        user = user if user is not None else e["user"]
-        current = current if current is not None else (e["calibrated"].get("thresholds") or {})
-    r = calibrate(current, d.get("history") or [], d.get("ratios"), user, d.get("task_types"))
-    r["previous"] = current or {}
-    if a.playbook and a.write:
-        text = read_text(a.playbook) if os.path.exists(a.playbook) else ""
-        old = read_block(text) or {}
-        data = {"version": int(old.get("version") or 0) + 1,
-                "calibrated_at": now_or(a.now).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "thresholds": r["thresholds"], "changes": r["changes"],
-                "previous": {"version": old.get("version"), "thresholds": old.get("thresholds") or {}}}
-        write_text(a.playbook, write_block(text, data))
-        r["written"] = a.playbook
-        r["version"] = data["version"]
-    return out(r)
-
-
-def cmd_thresholds(a):
-    if a.rollback:
-        text = read_text(a.playbook)
-        blk = read_block(text)
-        if not blk or not blk.get("previous") or blk["previous"].get("version") is None:
-            return out({"rolled_back": False, "reason": "no_previous_version"}, 1)
-        prev = blk["previous"]
-        data = {"version": prev["version"], "calibrated_at": now_or(a.now).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "thresholds": prev.get("thresholds") or {}, "changes": [],
-                "rolled_back_from": blk.get("version"), "previous": {"version": None, "thresholds": {}}}
-        write_text(a.playbook, write_block(text, data))
-        return out({"rolled_back": True, "from": blk.get("version"), "to": prev["version"],
-                    "thresholds": data["thresholds"]})
-    return out(effective_thresholds(a.playbook))
+        die("stdin must be an object {group, failures}")
+    group = _objs(d, "group")
+    if any(g.get("id") is None for g in group):
+        die("every group entry needs an id")
+    failures = d.get("failures") or []
+    if not isinstance(failures, list) or not all(isinstance(f, str) for f in failures):
+        die("failures must be a list of paths")
+    return out(locate(group, failures))
 
 
 # =====================================================================================
+
+def parse_now(s):
+    if not s:
+        return datetime.now(timezone.utc)
+    d = parse_ts(s)
+    if d is None:
+        die("--now is not an ISO time: %r" % s)
+    return d
+
+
+def _typed(kind, lo, strict):
+    def conv(v):
+        try:
+            x = kind(v)
+        except ValueError:
+            raise argparse.ArgumentTypeError("not a number: %r" % v)
+        if not math.isfinite(x) or (x <= lo if strict else x < lo):
+            raise argparse.ArgumentTypeError("must be %s %g" % (">" if strict else ">=", lo))
+        return x
+    return conv
+
+
+POS_F, NONNEG_F = _typed(float, 0, True), _typed(float, 0, False)
+POS_I, NONNEG_I = _typed(int, 0, True), _typed(int, 0, False)
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="hq scale-out rules (see references/scale-out.md)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("shards", help="how many shards for a workload")
-    p.add_argument("--units", type=int, default=0)
-    p.add_argument("--unit-min", type=float, required=True)
-    p.add_argument("--overhead-min", type=float, default=8.0)
-    p.add_argument("--target-min", type=float, default=40.0)
-    p.add_argument("--limit", type=int, default=4, help="concurrency limit (PLAYBOOK remote_concurrency)")
-    p.add_argument("--reserve-ratio", type=float, default=0.2)
-    p.add_argument("--max-overhead-ratio", type=float, default=0.3)
+    p.add_argument("--units", type=POS_I, default=0)
+    p.add_argument("--unit-min", type=POS_F, required=True)
+    p.add_argument("--limit", type=POS_I, required=True,
+                   help="concurrency limit (PLAYBOOK remote_concurrency / max_subtasks); no default on purpose")
+    p.add_argument("--reserve", type=NONNEG_I, default=0,
+                   help="slots kept for planned prerequisite/fix sessions (+1-2 with auto_resplit)")
+    p.add_argument("--overhead-min", type=NONNEG_F, default=8.0)
+    p.add_argument("--target-min", type=POS_F, default=40.0)
+    p.add_argument("--max-overhead-ratio", type=NONNEG_F, default=0.3)
     p.add_argument("--units-file", help="one unit per line, optional TAB weight; prints the assignment")
     p.set_defaults(fn=cmd_shards)
 
-    p = sub.add_parser("straggler", help="ETA per shard and re-split proposals")
-    p.add_argument("--target-min", type=float, default=40.0)
-    p.add_argument("--overhead-min", type=float, default=8.0)
-    p.add_argument("--free-slots", type=int, default=0)
+    p = sub.add_parser("straggler", help="ETA per shard, re-split proposals and batch re-plan")
+    p.add_argument("--target-min", type=POS_F, default=40.0)
+    p.add_argument("--overhead-min", type=NONNEG_F, default=8.0)
+    p.add_argument("--free-slots", type=NONNEG_I, default=0)
     p.add_argument("--now")
     p.set_defaults(fn=cmd_straggler)
 
@@ -1411,44 +909,12 @@ def main(argv=None):
     p.add_argument("--require-full", action="store_true")
     p.set_defaults(fn=cmd_test_scope)
 
-    p = sub.add_parser("full-gate", help="is this check-in a full-suite checkpoint")
-    for k in ("since-shards", "since-lines", "since-files"):
-        p.add_argument("--" + k, type=int, default=0)
-    for k in ("batch-complete", "before-push", "ci-checkpoint"):
-        p.add_argument("--" + k, action="store_true")
-    p.add_argument("--every-shards", type=int, default=4)
-    p.add_argument("--every-lines", type=int, default=1500)
-    p.add_argument("--every-files", type=int, default=60)
-    p.set_defaults(fn=cmd_full_gate)
-
     p = sub.add_parser("merge-group", help="which delivered shards merge together this check-in")
-    p.add_argument("--wait-max-min", type=float, default=10.0)
+    p.add_argument("--wait-max-min", type=NONNEG_F, default=10.0)
     p.set_defaults(fn=cmd_merge_group)
 
     p = sub.add_parser("locate", help="which shard broke the group verification")
     p.set_defaults(fn=cmd_locate)
-
-    p = sub.add_parser("monitor", help="evaluate one check-in against thresholds")
-    p.add_argument("--state", help="JSON state file, e.g. .hq/monitor-state.json")
-    p.add_argument("--config", help="JSON {thresholds, limits}")
-    p.add_argument("--playbook", help="take thresholds from PLAYBOOK (user > calibrated > default)")
-    p.add_argument("--now")
-    p.set_defaults(fn=cmd_monitor)
-
-    p = sub.add_parser("calibrate", help="adjust thresholds from labelled triggers")
-    p.add_argument("--playbook")
-    p.add_argument("--write", action="store_true")
-    p.add_argument("--now")
-    p.set_defaults(fn=cmd_calibrate)
-
-    p = sub.add_parser("label", help="label monitor triggers by rule and add rule-detected misses")
-    p.set_defaults(fn=cmd_label)
-
-    p = sub.add_parser("thresholds", help="show effective thresholds or roll back one version")
-    p.add_argument("--playbook", required=True)
-    p.add_argument("--rollback", action="store_true")
-    p.add_argument("--now")
-    p.set_defaults(fn=cmd_thresholds)
 
     a = ap.parse_args(argv)
     return a.fn(a)
