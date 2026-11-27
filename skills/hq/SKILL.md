@@ -124,7 +124,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 - **并行以缩短总用时为准**：总用时最短只能压到关键路径的长度，所以优先缩短关键路径，而不是增加并行数。
 - **打包优先**：几个小而相关的任务打包给一个子会话。只有任务够大（约 15 分钟以上）、改的文件不重叠，才拆开并行。单个任务约 15–120 分钟（与 `/hq-plan` 一致），超过的要拆开，否则子会话容易失控、审核的 diff 也太大。
-- **分片任务**（同一种工作单元做很多遍：页面巡检、路由回归、批量改文件、跑用例）：按工作量算片数，不按模块数（`scripts/scale.py shards --limit <本次并发上限>`，单元耗时拿不准先跑小样本）；输出 `over_target` 为真（上限不够在目标时长内完成）或片数超过 `max_subtasks` 时，按停止条件 2 请用户提高 `remote_concurrency`/`max_subtasks`，附两种上限下的预计用时，同时先按现有上限派发；切分按单元清单均匀切；各片共用的工具先派前置会话改好，跨片共享文件指定唯一归属，其他片只登记不改。规则见 `references/scale-out.md` 第 1–3 节。派发前一两句话告诉用户总工作量、片数、每片和整批预计用时、为什么是这个片数。
+- **分片任务**（同一种工作单元做很多遍：页面巡检、路由回归、批量改文件、跑用例）：按工作量算片数，不按模块数（`scripts/scale.py shards --limit <上限>`，上限取 `remote_concurrency`、`max_subtasks`、宿主 concurrency_limit 中最小的，本地通道再受第 5 步槽位限制；单元耗时拿不准先跑小样本）；输出 `needed_limit` 大于上限时，按停止条件 2 请用户提高 `remote_concurrency`/`max_subtasks`，附两种上限下的预计用时，同时先按现有上限派发；用户提高后，用 `straggler` 的 `replan` 或让各片交 PARTIAL 后把剩余区间按新上限再拆；切分按单元清单均匀切；各片共用的工具先派前置会话改好，跨片共享文件指定唯一归属，其他片只登记不改。规则见 `references/scale-out.md` 第 1–3 节。派发前一两句话告诉用户总工作量、片数、每片和整批预计用时、为什么是这个片数。
 - **难度单一**：每个任务内部难度要一致，不要把“机械改名”和“找根因”塞进同一个任务，否则档位要么浪费要么不够，后面还得调档。
 - **文件归属**：并行任务不能改同一个文件。共享接口、类型、配置先单独拆成前置任务。
 - 每个任务记录：id、标题、依赖、归属文件、验收标准、验证级别和命令、重任务还是轻任务、预计时长。
@@ -153,7 +153,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
    - 任务保持 `BLOCKED`，台账备注写清在等什么、材料在哪个分支；用户回报结果（截图、日志、“已通过”）后再按第 8 步审核，审核通过才改成 `DONE`。不要用模拟器、假账号或“看起来能过”代替这一步。
 1. **必须在本地执行**：需要用户电脑上才有的东西（仓库外的本地文件、本地数据库或服务、GUI、模拟器、USB、GPU、VPN 或内网、本机登录态、只能在 macOS/Windows 构建、未推送的本地改动）。主会话在本地用 A 或 W；在云端用 C，连不上就标 `BLOCKED`，其余照常推进。
 2. **适合远程（B）**：耗时长、能并行、仓库在 GitHub、只依赖已推送的代码。
-3. **适合进程内（A）**：小任务（约 10 分钟内）、需要和主会话紧密往返、需要当前工作区状态、没有 B。
+3. **适合进程内（A）**：小任务（约 10 分钟内）、需要和主会话紧密往返、需要当前工作区状态、没有 B。分片任务不派给 A（读不到进度，掉队发现不了，见 `references/scale-out.md` 4a）。
 4. **适合 W**：宿主没有合适的子代理能力、需要真正的进程隔离，或要用跨厂商模型（需 `worker_clis` 授权，或第 3 步按规则 10 派给了辅助执行者）。辅助任务一律走 W：`cli-worker.sh start … --cli <profile.cli> --model <模型> --label <profile> [--env-file <profile.env_file>]`。
 5. 其余：主会话在云端优先 B，在本地优先 A；都没有就 W，再没有就降级模式。
 
@@ -194,7 +194,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - **分诊**：
   - 范围内的小衍生任务：子会话直接做，不用汇报。
   - 超出范围或分量大的：子会话不做（防漂移）；主会话评估难度后另行派发，能并行就立即派。
-  - **卡住**（同一问题失败 ≥2 次，或用时超过预计 2 倍）：子会话先写交接说明（做到哪、试过什么、分支），主会话用高一档的模型新开子会话，从这个分支接着做。分片任务只是因为工作量大而慢的不算卡住：交 PARTIAL，剩余区间按上一条再拆，不升档。
+  - **卡住**（同一问题失败 ≥2 次，或用时超过预计 2 倍）：子会话先写交接说明（做到哪、试过什么、分支），主会话用高一档的模型新开子会话，从这个分支接着做。分片任务只是因为工作量大而慢的不算卡住：按 `references/scale-out.md` 第 4 节的 `straggler` 结果再拆（交 PARTIAL 后剩余区间拆给新会话），不升档。
   - **不做降档交接**：交接丢上下文，重新熟悉项目的开销大于降档省下的钱。
   - **建议用户手动调档**：只在换会话代价太高、子会话又确实卡住时用。一次给出明确建议（打开哪个会话，切到什么模型），并注明运行中的会话能不能改思考深度取决于界面是否提供这个选项。话术见宿主文档。
 - 每次升档、交接、衍生任务、检查点都记进台账，并计入第 9 步的 task 记录。
@@ -233,7 +233,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
   - 规则标记（`bias:+1(…)`、`downgrade:user_allowed(-N)`、`rate_limited`、`assist_unavailable:<原因>`、`billing:<计费方>`、`effort_env:<值>`、`tier:not-applied`）一律写进 task 的 `flags` 数组，不再只写在 notes 里，`metrics.py` 按标记分组对比。
   - 选档与审核：task 另记 `score`（5 维打分原始值 `{scope,ambiguity,context,risk,verify}`）、`independent_review`（触发独立审核时 `{ran,trigger,findings,major}`，trigger 取 `high|tier|lines|assist_lines|other`）、`review_wait_min`（交付到开始审核的分钟数，不计入 actual_min）；拿不到写 null。
-  - 分片任务：task 另记 `shard_group`、`task_type`、`units_planned`/`units_actual`、`unit_min_est`、`overhead_min`、`resplit`、`test_scope`、`test_min`、`rework_rounds`；每组合入记一条 `type:"merge"`；run 记录写 `concurrency_limit`、`target_shard_min`、`reserved_slots`。
+  - 分片任务：task 另记 `shard_group`、`task_type`、`units_planned`/`units_actual`、`unit_min_est`、`overhead_min`、`resplit`、`test_scope`、`test_min`、`rework_rounds`；每组合入记一条 `type:"merge"`；run 记录写 `concurrency_limit`、`target_shard_min`、`reserved_slots`、`max_overhead_ratio`。
   - 辅助执行者：task 记录写 `assist: <profile>`（主宿主自己做的写 null），model 写成 `<profile>:<模型名>`；辅助失败被主宿主接手时，这条 task 的 `handoffs` 加 1、`tier_changes` 记一次，`assist` 仍写原来的 profile。
 - 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积。
 - **保存进仓库**（PLAYBOOK `runs_persist`）：`branch` 时整批结束后运行同目录的 `scripts/runs-persist.sh save branch`（写进专用分支 `hq/runs` 并推送，不碰工作区）；退出码 3（推不上去）就改用 `save commit`，并把 PLAYBOOK 改成 `runs_persist: commit`。`commit` 时直接 `save commit`（提交到当前分支，随本批改动一起推）。云端运行且 PLAYBOOK 没写这项时，第一次汇报里问用户一次（推荐 `branch`），答案写进 PLAYBOOK，不再问；本地没写就是 `off`。

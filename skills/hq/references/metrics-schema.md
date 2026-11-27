@@ -122,7 +122,7 @@
 | shards | 字符串数组 | 这一组合入的 task_id（推迟的不算） |
 | verify_runs | 整数 | 这一组跑了几次校验（正常为 1；失败定位后复测会增加） |
 | full_test / full_test_min | 布尔 / 数字 | 这次是否跑了全量测试、耗时 |
-| reasons | 字符串数组 | 跑或没跑全量的原因（`scale.py full-gate` 的 `reasons`） |
+| reasons | 字符串数组 | 跑或没跑全量的原因（主会话按 `scale-out.md` 第 5 节的全量节点判断，自由文本，不导出） |
 | pass / culprits / conflicts | 布尔 / 数组 / 数组 | 校验结果、定位到的分片、冲突文件 |
 | wait_min | 数字 | 为攒批等待的分钟 |
 
