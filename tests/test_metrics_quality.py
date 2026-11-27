@@ -285,6 +285,21 @@ class ChangelogStatsTest(Base):
         self.assertIn("| 未发布 | 2 | 1 | 1 | 0 | 0 |", r.stdout)
         self.assertIn("| 合计 | 7 | 1 | 3 | 1 | 2 | 75.0% | 25.0% | 3 (42.9%) |", r.stdout)
 
+    def test_unparseable_version_heading_not_counted_as_unreleased(self):
+        text = ("## 格式说明\n\n- 说明\n\n## 未发布\n\n### a\n- **状态**：待验证\n\n"
+                "## v0.1.x（复盘后的小改进）\n\n### b\n- **状态**：已验证\n\n### c\n- **状态**：待验证\n"
+                "- **验收判定**：`quality.overall.rework_rate <= 0.5`\n\n## 杂项说明\n\n### d\n- **状态**：已撤回\n")
+        st = metrics.changelog_stats(text)
+        by = {v["version"]: v for v in st["versions"]}
+        self.assertEqual(list(by), ["未发布", "v0.1.x", "杂项说明"])
+        self.assertEqual(by["未发布"]["entries"], 1)
+        self.assertEqual((by["v0.1.x"]["entries"], by["v0.1.x"]["verified"], by["v0.1.x"]["pending"]), (2, 1, 1))
+        self.assertEqual(st["total"]["entries"], 4)
+        p = self.write("CHANGELOG.md", None, text=text)
+        r = run(FIX, "--check-changelog", p)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("c", r.stdout)
+
     def test_no_closed_entries(self):
         st = metrics.changelog_stats("## 未发布\n\n### a\n- **状态**：待验证\n")
         self.assertIsNone(st["total"]["verified_rate"])

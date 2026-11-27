@@ -180,7 +180,7 @@
 metrics.py --changelog-stats CHANGELOG.md [--format md|json]
 ```
 
-不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，没有版本号的归“未发布”）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；带 `- **验收判定**` 行的条目数。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；带验收判定的条目占全部条目的比例。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged}], total: {…, verified_rate, withdrawn_rate, judged_rate}}`。`--check-changelog` 的输出不受影响。
+不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，标题是“未发布”的归“未发布”；解析不出 X.Y.Z 的版本标题如 `## v0.1.x（…）` 单独成行，版本列显示标题里的版本串，没有版本串就显示标题原文，且 `--check-changelog` 不按版本切分；没有条目的标题如“格式说明”不出行）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；带 `- **验收判定**` 行的条目数。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；带验收判定的条目占全部条目的比例。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged}], total: {…, verified_rate, withdrawn_rate, judged_rate}}`。`--check-changelog` 的输出不受影响。
 
 ## CHANGELOG 验收判定（`metrics.py --check-changelog CHANGELOG.md`）
 

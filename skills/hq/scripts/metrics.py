@@ -770,14 +770,22 @@ def eval_expr(expr, rep):
 
 def parse_changelog(text):
     """Entries under `### ` headings with their version (`## vX.Y.Z` or 未发布), status and 验收判定 expressions."""
-    entries, ver, cur = [], None, None
+    entries, ver, label, cur = [], None, "未发布", None
     for line in text.splitlines():
         if line.startswith("## "):
-            m = VER_RE.match(line[3:].strip())
+            head = line[3:].strip()
+            m = VER_RE.match(head)
             ver = ".".join(m.groups()) if m else None
+            if m:
+                label = ver
+            elif head.startswith("未发布"):
+                label = "未发布"
+            else:  # unparseable version heading (e.g. `v0.1.x（…）`): keep its own label, never split by version
+                vm = re.match(r"^v?\d+(?:\.[0-9A-Za-z]+)*", head)
+                label = vm.group(0) if vm else head
             cur = None
         elif line.startswith("### "):
-            cur = {"title": line[4:].strip(), "version": ver, "status": None, "exprs": []}
+            cur = {"title": line[4:].strip(), "version": ver, "label": label, "status": None, "exprs": []}
             entries.append(cur)
         elif cur is not None:
             st = re.match(r"^- \*\*状态\*\*[:：]\s*(\S+?)(?:[（(\s]|$)", line)
@@ -909,7 +917,7 @@ def changelog_stats(text):
     entries = parse_changelog(text)
     order, g = [], {}
     for e in entries:
-        v = e["version"] or "未发布"
+        v = e["label"]
         if v not in g:
             g[v] = {"version": v, "entries": 0, "pending": 0, "verified": 0, "withdrawn": 0, "other": 0, "judged": 0}
             order.append(v)
