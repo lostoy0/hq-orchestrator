@@ -228,7 +228,18 @@ cli-worker.sh list
   /hq --assist kimi --assist-max T1 <目标>  # 只把 T0–T1 交出去
   /hq --assist off <目标>                   # 本次关闭
   ```
-  长期设置写在 `.hq/PLAYBOOK.md` 授权区的 `assist`（`use`、`max_tier`、每个 profile 的 CLI、各档模型、可选 `env_file`），模板见 `skills/hq/references/playbook-template.md`。命令参数优先。
+- **配一次，一直生效**：
+  ```
+  /hq --assist codex --save                # 只保存，不开始运行：写进用户级 ~/.hq/config.yaml，所有项目都生效
+  /hq --assist codex --assist-max T1 --save-project   # 只对本项目生效，写进 .hq/PLAYBOOK.md
+  ```
+  也可以不进会话，直接在终端跑（脚本在 hq 技能目录的 `scripts/` 下，安装后路径记在 `~/.hq/skill-path`）：
+  ```
+  python3 "$(cat ~/.hq/skill-path)/scripts/assist-config.py" set --scope user --use codex --auto-models
+  python3 "$(cat ~/.hq/skill-path)/scripts/assist-config.py" check     # 看生效的设置，校验模型和思考深度
+  ```
+  优先级（逐项覆盖）：用户级 `~/.hq/config.yaml` < 项目 `.hq/PLAYBOOK.md` 授权区的 `assist` < 本次命令参数。PLAYBOOK 里 `use: []` 表示沿用用户级，写 `use: off` 才是本项目关闭。字段（`use`、`max_tier`、每个 profile 的 CLI、各档模型、可选 `env_file`）见 `skills/hq/references/playbook-template.md`。
+- **Codex 模型自动读取**：本机装了 codex 时，`assist-config.py models` 读 `codex debug models`（失败时读 `~/.codex/models_cache.json`），列出账户可用的模型、各自支持的思考深度和下线时间；`suggest` 按模型说明（小而便宜 / 日常主力 / 最强）推荐 T0–T4；`set --auto-models` 把没填的档位按推荐填上，已经填了的不覆盖。profile 里不填模型时，`/hq` 每次运行也会按推荐自动选，并在汇报里提示保存。推荐只是按说明推断，看一眼不合适就用 `--profile codex --models T0=…,T1=…,T2=…` 改。`install.sh --host codex --with-agents --model-map auto` 用同样的推荐生成 Codex 子代理模板。
 - **Kimi**：推荐经 `claude` CLI 接 Kimi 的 Anthropic 兼容接口，接口地址和密钥放在权限 600 的 `env_file` 里，`cli-worker.sh --env-file` 只把它注入这个 worker 进程，值不写进日志。见 `skills/hq/references/hosts/kimi.md`（**只按公开资料整理，未实机运行**）。
 - **效果看数据**：task 记录多了 `assist` 字段，`metrics.py` 报告的“3d 辅助执行者 vs 主宿主”按档位对比一次通过率和回收率，`/hq-retro` 据此建议调低 `max_tier` 或停用某个辅助。
 - **注意**：辅助走 W 通道，在本机（或云端容器）里运行，占本地 CPU 和内存；云端会话里要装好 CLI、放行接口主机、配好密钥，否则自动全部留给主宿主。外部模型失败重来会吃掉省下的额度，所以拿不准难度的任务不会交出去。

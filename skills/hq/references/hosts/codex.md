@@ -26,7 +26,7 @@
 
 **额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 notes 记 `bias:+1(tier)`。
 
-具体型号以 `codex` 可用模型为准，首次运行时写进 PLAYBOOK；不要凭记忆填。
+具体型号以 `codex` 可用模型为准，不要凭记忆填：运行 hq 技能目录下的 `scripts/assist-config.py models` 看本机模型目录（读 `codex debug models`，失败时读 `~/.codex/models_cache.json`；含每个模型支持的思考深度、是否即将下线），`assist-config.py suggest` 按模型说明给出 T0–T4 推荐。首次运行时把实际映射写进 PLAYBOOK。
 
 | 档位 | 模型档次 | reasoning effort |
 |---|---|---|
@@ -34,14 +34,15 @@
 | T1 | 快速的中档模型 | low |
 | T2 | 中档模型 | medium |
 | T3 | 最强模型 | medium |
-| T4 | 最强模型 | high（必要时 xhigh，待核实是否支持） |
+| T4 | 最强模型 | high（必要时 xhigh；是否支持看模型目录的 `supported_reasoning_levels`） |
 
 跨厂商记录：task 的 `model` 写成 `codex:<模型名>`。
 
 ## 4. 安装与调用
 
 - 技能：复制 `skills/hq/` 到 `~/.agents/skills/hq`（个人）或仓库 `.agents/skills/hq`。
-- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），或用 `./install.sh --host codex --with-agents`（按 `--scope` 自动选目录；旧写法 `--with-codex-agents` 仍可用）；然后替换模型占位符，见 `adapters/codex/README.md`。也可以安装时直接填模型：`--with-agents --model-map 'T0=<模型>,…,T4=<模型>'`（思考深度按档位写入）。
+- agent 模板：复制 `adapters/codex/agents/hq-t*.toml` 到 `~/.codex/agents/`（个人）或 `<项目>/.codex/agents/`（项目），或用 `./install.sh --host codex --with-agents`（按 `--scope` 自动选目录；旧写法 `--with-codex-agents` 仍可用）；然后替换模型占位符，见 `adapters/codex/README.md`。也可以安装时直接填模型：`--with-agents --model-map 'T0=<模型>,…,T4=<模型>'`（思考深度按档位写入），本机装了 codex 时写 `--model-map auto` 按模型目录自动推荐。
+- 辅助执行者：在别的宿主（如 Claude Code）上用 Codex 当辅助，一条命令配好并对所有项目生效：`python3 <hq 技能目录>/scripts/assist-config.py set --scope user --use codex --auto-models`（或在会话里 `/hq --assist codex --save`）；`assist-config.py check` 校验模型和思考深度。
 - W 通道：`bash skills/hq/scripts/cli-worker.sh start --id t2 --cli codex --model <m> --brief <文件>`；简报经 stdin 传入。sandbox 默认 `workspace-write`；`danger-full-access` 必须另加 `--allow-dangerous`，否则拒绝（退出码 2）。
 
 ## 5. 已知限制与待核实项
@@ -51,7 +52,7 @@
 3. usage 字段已实机核实：`turn.completed.usage` 含 `input_tokens`、`cached_input_tokens`、`cache_write_input_tokens`、`output_tokens`、`reasoning_output_tokens`，`be_usage` 的口径（input − cached + output）不变；恢复会话（`exec resume`）时 usage 是累计值，cli-worker.sh 不处理 resume，用到时需自行做差。
 4. 原生子代理的监控、补充信息、中止、用量取法待核实。
 5. 是否有定时唤醒能力待核实，暂按没有处理。
-6. `codex cloud` 的 model/effort 可能不生效；`xhigh` 是否支持待核实。
+6. `codex cloud` 的 model/effort 可能不生效。思考深度按模型而定：codex-cli 0.172.0 的 `codex debug models` 每个模型带 `supported_reasoning_levels`（2026-11-26 实测多数为 low–ultra，个别只到 max 或 xhigh），`assist-config.py check` 会校验配置的深度是否被支持。
 7. W 通道 sandbox 默认 workspace-write。**实测沙箱不能写 `.git`**：worktree 的 git 目录在主仓库 `.git/worktrees/<id>`，`git add` 建不了 `index.lock`，worker 自己提交会失败；用 `--add-dir` 把主仓库 `.git` 加为可写目录也无效（Codex 把 `.git` 当受保护路径）。因此 `backends/codex.sh` 在 workspace-write 下让 cli-worker 在 Codex 正常退出（退出码 0）后、沙箱外把 worktree 里的改动提交到 `hq/<id>`（提交信息“<id>: worker 交付（cli-worker 代提交）”，失败只写进 `log`）。read-only 和失败的 worker 不代提交。简报里可以写“不必自己提交”，省掉一次失败的尝试。
 8. 旧名 `agents.max_threads` 与新名并存的行为待核实。
 9. **Codex 作主宿主、开启 `assist` 时**（2026-11-25 实测：codex-cli 0.172.0，`codex exec --approve-for-me`，即 workspace-write 加自动审核）：

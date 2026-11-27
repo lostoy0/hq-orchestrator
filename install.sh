@@ -22,6 +22,7 @@ usage() {
   ~/.claude/skills 可被 claude、opencode、cursor 读取；所以 dsh 也会读取 ~/.agents/skills，装过 codex 的不必再装 dsh。
   --with-agents      同时安装所选宿主的子代理档位模板 hq-t0…hq-t4（目前 codex、opencode、gemini；见 adapters/agent-dirs.tsv）
   --model-map <映射> 生成模板时填入模型（只能配合一个宿主的模板）：codex、gemini 写模型名；opencode 写 provider/model[#variant]
+                    codex 可写 auto：读本机 codex debug models，按模型说明推荐 T0–T4（skills/hq/scripts/assist-config.py suggest）
   --with-codex-agents 只装 Codex 模板（旧写法，不管 --host 是什么都装）
   不在仓库里运行时（如 curl | bash），先把 v\$HQ_VERSION（可用 HQ_REF 覆盖）下载到 ~/.hq-orchestrator/<ref> 再安装。
 退出码: 0 成功; 2 参数非法; 3 目标已存在(加 --force 覆盖); 4 没有可操作的对象; 5 下载失败
@@ -272,6 +273,12 @@ done
 if [ $codex_agents -eq 1 ] && [ ${#FMTS[@]} -eq 0 ]; then FMTS=(-1); fi   # 登记表缺失时按旧路径处理
 [ -n "$mmap" ] && [ ${#FMTS[@]} -ne 1 ] && die2 "--model-map 需要且只能对应一个宿主的模板（当前 ${#FMTS[@]} 个）；分多次安装"
 [ -n "$mmap" ] && [ "${FMTS[0]}" = -1 ] && die2 "缺少 adapters/agent-dirs.tsv，无法使用 --model-map"
+if [ "$mmap" = auto ]; then
+  [ "${A_FMT[${FMTS[0]}]}" = codex ] || die2 "--model-map auto 目前只支持 codex 模板"
+  mmap=$(python3 "$ROOT/skills/hq/scripts/assist-config.py" suggest --cli codex --model-map) && [ -n "$mmap" ] \
+    || { echo "错误: 读不到 codex 的模型目录（codex 没装或未登录），改用 --model-map 'T0=<模型>,…'" >&2; exit 2; }
+  echo "按本机 codex 模型目录推荐的映射: ${mmap}（不合适就用 --model-map 手填后加 --force 重装）"
+fi
 AG_SRC=(); AG_DST=(); AG_NOTE=()
 render_tmp=""
 for i in ${FMTS[@]+"${FMTS[@]}"}; do

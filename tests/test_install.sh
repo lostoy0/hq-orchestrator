@@ -273,6 +273,17 @@ fresh; mkdir -p "$T/h/.gemini/extensions/hq-orchestrator"; HOME="$T/h" bash "$IN
 fresh; HOME="$T/h" bash "$INST" --host gemini >"$T/out" 2>&1
 ! grep -q "已装 Gemini 扩展" "$T/out" && ok "未装扩展时不提示" || bad "gemini ext no notice" "-"
 
+# 32b. --model-map auto：读本机 codex 的模型目录推荐映射；读不到时退出码 2；只支持 codex 模板
+mkdir -p "$T/fc"; CAT="$(dirname "$INST")/tests/fixtures/codex-models/catalog.json"
+printf '#!/bin/sh\n[ "$1 $2" = "debug models" ] && cat "%s" && exit 0\nexit 1\n' "$CAT" >"$T/fc/codex"; chmod +x "$T/fc/codex"
+fresh; PATH="$T/fc:$PATH" HOME="$T/h" CODEX_HOME="$T/h/.codex" bash "$INST" --host codex --with-agents --model-map auto >"$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && grep -qx 'model = "m-small"' "$T/h/.codex/agents/hq-t0.toml" && grep -qx 'model = "m-big"' "$T/h/.codex/agents/hq-t4.toml" && grep -q "推荐的映射" "$T/out" && ok "codex --model-map auto 按模型目录填模型" || bad "codex map auto" "rc=$rc $(tail -2 "$T/out")"
+printf '#!/bin/sh\nexit 1\n' >"$T/fc/codex"
+fresh; PATH="$T/fc:$PATH" HOME="$T/h" CODEX_HOME="$T/h/.codex" bash "$INST" --host codex --with-agents --model-map auto >"$T/out" 2>&1; rc=$?
+[ $rc = 2 ] && [ ! -e "$T/h/.codex/agents" ] && ok "读不到 codex 模型目录时 --model-map auto 退出码 2" || bad "codex map auto missing" "rc=$rc"
+fresh; HOME="$T/h" bash "$INST" --host gemini --with-agents --model-map auto >"$T/out" 2>&1; rc=$?
+[ $rc = 2 ] && ok "--model-map auto 只支持 codex" || bad "map auto gemini" "rc=$rc"
+
 # 33. macOS 自带 bash 3.2 在 UTF-8 locale 下会把非 ASCII 字节当成变量名的一部分（如 $ 后跟 s 再跟全角括号，会被读成变量 s\xEF…，set -u 下报 unbound variable）；
 #     所以紧跟非 ASCII 字符的变量必须写成 ${var}
 ROOTD="$(dirname "$INST")"
