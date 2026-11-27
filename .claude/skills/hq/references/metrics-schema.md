@@ -6,11 +6,12 @@
 ## 通用规则
 
 - 编码 UTF-8，一行一个对象，行内不能换行。
-- `type` 取 `"task"`、`"run"`、`"merge"`（v0.11.0 起，合入组）或 `"monitor"`（v0.11.0 起，监控触发和漏报）。其他 type、未知字段，读取方一律忽略。
+- `type` 取 `"task"`、`"run"` 或 `"merge"`（v0.11.0 起，合入组）。其他 type（包括旧版本写过的 `"monitor"`）、未知字段，读取方一律忽略。
 - 所有字段都可能缺失或为 `null`，读取方必须容错；写入方拿不到值时写 `null`（不要编造）。
 - 损坏的行（不是合法 JSON，或不是对象）由读取方跳过并计数。
 - 一个 run 对应一个文件：多条 `task` 记录 + 一条 `run` 记录。`task` 通过 `run_id` 关联所属 run。
 - 一个任务只记一条 `task`（重试、升档都累加在同一条里）。同一 `run_id`+`task_id` 出现多次时（比如同一次运行既在 `.hq/runs/` 又在 `~/.claude/hq/runs/`），读取方只算一条，后读到的覆盖先读到的。
+- `merge` 记录同样去重：同一 `run_id`+`batch_id`+`group_seq`（`batch_id` 可省略）只算一条，后读到的覆盖先读到的；没有 `group_seq` 的 merge 记录，内容完全相同的只算一条。没有 `task_id` 的 task 记录不去重。
 - 格式版本：**v1**。run 记录里的 `plugin_version`/`plugin_version_at_start` 是插件版本，不是格式版本。不兼容改动必须升版本号；只新增可选字段、放宽取值的改动（如 v0.3.3 的 `found_issues`、`followups`、`verify_pass: "partial"`）仍是 v1。
 
 ## task 记录
@@ -55,7 +56,7 @@
 | review_outcome | `pass`/`pass_with_fixes`/`rework`/`failed` | 审核结论 | 审核时 |
 | user_corrections | 整数 | 用户纠正次数 | 发生时累加 |
 | assist | 字符串或 null | 可选（v0.5.0 起）。由辅助执行者完成时写 profile 名（如 `kimi`、`codex`），主宿主自己做的写 null 或省略。辅助失败被主宿主接手时仍写原 profile，靠 `handoffs` 区分 | 任务结束时 |
-| shard_group / task_type | 字符串（可选，v0.11.0 起） | 分片任务所属的分片组（同一批同一种工作单元，如 `patrol`）；任务类型（`patrol` 巡检、`dev` 开发、`docs`、`test`…），监控阈值按它分别校准，没写时按 `kind` | 规划完成时 |
+| shard_group / task_type | 字符串（可选，v0.11.0 起） | 分片任务所属的分片组（同一批同一种工作单元，如 `patrol`）；任务类型（`patrol` 巡检、`dev` 开发、`docs`、`test`…） | 规划完成时 |
 | units_planned / units_actual | 整数（可选） | 计划和实际完成的工作单元数 | 规划时 / 交付后 |
 | unit_min_est / overhead_min | 数字（可选） | 预估的单元耗时、子会话固定开销（分钟） | 规划时 |
 | resplit / resplit_from | 布尔 / 字符串（可选） | 本片是否被再拆；由哪片拆出来 | 再拆时 |
@@ -100,6 +101,7 @@
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
 | concurrency_limit / target_shard_min | 整数 / 数字（可选，v0.11.0 起） | 本次的并发上限、分片目标时长；用于并发利用率和片数建议 |
+| reserved_slots / max_overhead_ratio | 整数 / 数字（可选） | 片数建议用：为再拆、公共文件修复等预留的并发槽数（没有时 0），子会话固定开销占一片时长的上限（没有时 0.3；可以是 0）。与 `scale.py shards` 的同名参数一致 |
 | assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
 | stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 8 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
 
@@ -120,18 +122,9 @@
 | shards | 字符串数组 | 这一组合入的 task_id（推迟的不算） |
 | verify_runs | 整数 | 这一组跑了几次校验（正常为 1；失败定位后复测会增加） |
 | full_test / full_test_min | 布尔 / 数字 | 这次是否跑了全量测试、耗时 |
-| reasons | 字符串数组 | 跑或没跑全量的原因（`scale.py full-gate` 的 `reasons`） |
+| reasons | 字符串数组 | 跑或没跑全量的原因（主会话按 `scale-out.md` 第 5 节的全量节点判断，自由文本，不导出） |
 | pass / culprits / conflicts | 布尔 / 数组 / 数组 | 校验结果、定位到的分片、冲突文件 |
 | wait_min | 数字 | 为攒批等待的分钟 |
-
-## monitor 记录（v0.11.0 起）
-
-`scale.py monitor` 输出的 `records` 原样追加；`event` 为 `trigger`（触发）或 `missed`（事后补记的漏报）。
-字段：`ts`、`batch_id`、`task_id`、`task_type`、`metric`（duration_ratio/idle_min/cost_ratio/rework/failure_rate/straggler_ratio，以及拆分合理性 split_unit_error/split_uneven/split_underused/split_boundary）、
-`value`、`threshold`、`severity`（normal/severe）、`level`（1 当场处置 / 2 进入分析）、`action`、`key`（指标:根因类别）、
-`rate_limited`、`skip_reason`、`deferred`、`analysis_cost_usd`（分析结束后补）、`label`（事后标 `effective` / `false_positive`）、
-`label_source`（`rule`：`scale.py label` 按规则判定 | `reviewer`：独立审核 | `user`）、`label_reason`（判定依据；规则判不了时说明缺什么）。
-`event:"missed"` 记录也可带 `label_source`、`label_reason`、`batch_id`、`run_id`。主会话不自己打标签，见 `scale-out.md` 第 9 节。
 
 ## 用量口径
 
@@ -163,13 +156,21 @@
   - “加速比偏低”信号只在加速比 < 1.3、且加速比上限 ≥ 1.3（任务图本来允许并行）时给出；没记 critical_path_min 的 run 不判断。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 计划预估 vs 实际（有 `plan_tier` 的任务才出这一节）：`tier` 与 `plan_tier` 一致、偏低（实际档位更高）、偏高的比例，以及一次通过率；n ≥ 5 且偏低或偏高超过 30% 时给出信号，提示调整 `/hq-plan` 的打分说明。
-- 分片、分层校验与合入（4b，有 v0.11.0 字段的 run 才出）：并行效率 = 各片 actual_min 之和 ÷（片数 × 最长片）；掉队比 = 最长片 ÷ 中位片；并发利用率 = `max_concurrency` ÷ `concurrency_limit`；单元耗时估算误差 = |（actual_min − overhead_min）÷ 单元数 ÷ unit_min_est − 1| 的中位数；全量测试次数 = merge 的 `full_test` + 子会话 `test_scope: full`，每次全量覆盖片数 = 两次全量之间合入的片数均值；合入组数、每组片数、校验次数；按实测单元耗时用 `scale.py shards` 同一规则算出的建议片数。
-- 主动监控（4c）：触发数、一级/二级、限频跳过数、漏报数、分析花费、标注来源（触发记录按 `label_source` 计 rule/reviewer/user/other，没有 effective/false_positive 标签的计“未标”；JSON `label_sources`、`rule_label_share` = 规则标注 ÷ 已标注），以及各阈值的触发数、有效率、误报率、漏报数。
-- 信号：并发利用率 < 50%（附“下次切成 N 片”）、掉队比 > 2、全量测试 > 0.5 次每片（附“每 N 片合入后跑一次”）、单元耗时误差 > 50%、某阈值误报率 > 30% 或漏报偏多。
-- 按插件版本（3f）：按**运行时生效的版本**分组——有 `plugin_version_at_start` 时用它，没有时（旧记录）用 `plugin_version`。`--since-version`/`--before-version` 和 `--check-changelog` 的 since/before 切分都用同一口径。每个版本的 run 数、task 数、一次通过率、返工率、漂移率、验证到位率、漏网问题/任务（integration + user）、actual/est 中位数、平均 cost_usd。`--since-version V` 只看 ≥V 的 run，`--before-version V` 只看 <V 的；给了任一项时，没有版本号的 run 被排除。
-- 按验证级别（3g）：每级的验证到位率、漏到合并/漏到用户的问题数每任务、漏网 major 数、返工率。n ≥ 5 且漏网 > 0.3 个/任务，或出现漏网 major 时给出信号。
-- 按规则标记（3h）：每个 flag 的一次通过率、返工率、升档率、平均 cost_usd，另有“(无标记)”基线行。规则 9 上调的任务（n ≥ 5）一次通过率 100% 且返工 0、规则 11 授权降档的任务（n ≥ 3）一次通过率 < 60% 时给出信号。
-- 常驻模式推荐（6c）：同一项目、`standing_seq` 连续的两批算前后批；推荐过（前一批 `recommended_next` > 0）的批数、下一批 `from_recommendation` 为真的批数、采纳率、完工声明数（`recommended_next` = 0）。推荐过 ≥ 5 次且采纳率 < 30% 时给出信号。
+- 分片、分层校验与合入（4b，有分片任务或 merge 记录的 run 才出）：并行效率 = 各片 actual_min 之和 ÷（片数 × 最长片）；掉队比 = 最长片 ÷ 中位片；并发利用率 = `max_concurrency` ÷ `concurrency_limit`；单元耗时估算误差 = |（actual_min − overhead_min）÷ 单元数 ÷ unit_min_est − 1| 的中位数；全量测试次数 = merge 的 `full_test` + 子会话 `test_scope: full`，每次全量覆盖片数 = 两次全量之间合入的片数均值；合入组数、每组片数、校验次数；建议片数（JSON `suggest_shards`）。
+  - **建议片数**与 `scale.py shards`（`shard_plan`）用同一公式（`tests/test_metrics_scaleout.py` 对随机输入核对两者一致）：units = 各片 `units_actual`（没有用 `units_planned`）之和，unit_min = 实测单元耗时中位数，overhead_min = 各片 `overhead_min` 中位数（没有记录时 8；实测为 0 就用 0），target_min = run 的 `target_shard_min`（没有时 40），limit = `concurrency_limit`，reserve = `reserved_slots`（没有时 0），max_overhead_ratio 同名字段（没有时 0.3）：
+    ```
+    work = units * unit_min
+    by_target = max(1, ceil(round(work / target_min, 9)))
+    usable = max(1, limit - reserve)
+    n = max(1, min(usable, by_target, units))
+    while n > 1 and overhead_min / (work / n + overhead_min) > max_overhead_ratio + 1e-9: n -= 1
+    ```
+    实测单元耗时中位数 ≤ 0、没有 `concurrency_limit` 或没有单元数时为 null。
+- 信号（片数 ≥ 2 的 run）：并发利用率 < 50%（附“下次切成 N 片”）、掉队比 > 2、全量测试 > 0.5 次每片（附“每 N 片合入后跑一次”）、单元耗时误差 > 50%。比较都留 1e-9 容差：恰好等于阈值（如误差中位数算出 0.5000000000000002）不触发。
+- 按插件版本（3f）：按**运行时生效的版本**分组——`plugin_version_at_start` 能解析出 X.Y.Z 时用它，没有或解析不出（如 `dev`）时用 `plugin_version`。版本号按 X.Y.Z 规范化后分组（`v0.11.0`、`V0.11.0`、`0.11.0` 是同一行；都解析不出时按原字符串，没有为 `unknown`）；所有 run 都没有版本（只有 `unknown` 一行）时不出这一节。`--since-version`/`--before-version` 和 `--check-changelog` 的 since/before 切分都用同一口径。每个版本的 run 数、task 数、一次通过率、返工率、漂移率、验证到位率、漏网问题/任务（integration + user）、actual/est 中位数、平均 cost_usd。每行另有 `ratio_n`、`cost_n`（actual/est 中位数、平均 cost_usd 实际用到的任务数）；actual/est 排除数据矛盾 run 的任务，与 3a 相同。`--since-version V` 只看 ≥V 的 run，`--before-version V` 只看 <V 的；给了任一项时，没有版本号的 run 被排除。V 解析不出 X.Y.Z（如 `0.11`）时报错退出，不会静默忽略。
+- 按验证级别（3g）：每级的验证到位率、漏到合并/漏到用户的问题数每任务、漏网 major 数、返工率。所有任务都没有 `verify_level`（只有 `unknown` 一行）时不出这一节。n ≥ 5 且漏网 > 0.3 个/任务，或出现漏网 major 时给出信号。
+- 按规则标记（3h）：notes 里只识别前后不紧挨英文字母、数字、`_`（前面也不能是 `:`）的标记，`not rate_limited_at_all` 不算。每个 flag 的一次通过率、返工率、升档率、平均 cost_usd，另有“(无标记)”基线行。规则 9 上调的任务（n ≥ 5）一次通过率 100% 且返工 0、规则 11 授权降档的任务（n ≥ 3）一次通过率 < 60% 时给出信号。
+- 常驻模式推荐（6c）：按（项目，`started_at`，`standing_seq`）排序后，同一项目、`standing_seq` 连续的两批算前后批（`started_at` 相同或缺失时按序号，与文件顺序无关）；推荐过（前一批 `recommended_next` > 0）的批数、下一批 `from_recommendation` 为真的批数、采纳率、完工声明数（`recommended_next` 是数字 0；`false` 不算）。推荐过 ≥ 5 次且采纳率 < 30% 时给出信号。
 - 待修追踪（6e，v0.3.3；有 `followups` 时才出）：待修项总数、未修数（`fixed_in` 为 null、空串或缺失）、已修数（`fixed_in` 是非空字符串），并列出未修项（`[run_id/task_id] desc`）。JSON `followups`：`total`、`open`、`fixed`、`open_items`。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
 
@@ -177,7 +178,7 @@
 
 - **字段覆盖率（1b）**：est_min、actual_min、tokens、cost_usd、tier、verify_level、verify_pass、review_outcome、attempts、issues、score、independent_review、review_wait_min 各自“有有效值”的任务占全部任务的比例。有效值指类型和取值合法：数字字段是有限数字，`tier`/`verify_level`/`review_outcome` 在取值表内，`verify_pass` 是布尔或 `"partial"`，`issues` 至少有一个数字计数，`score` 至少有一维是 0/1/2，`independent_review` 是带布尔 `ran` 的对象，`review_wait_min` 是 ≥ 0 的数字。JSON 报告的 `coverage` 含 `fields`（每个字段的 `n`、`rate`、`sparse`）和 `joint`（`est_min+actual_min`、`attempts+review_outcome` 两个组合的覆盖率）。
 - **`data: "sparse"`**：信号依赖的字段覆盖率 < 50% 时，信号加 `data: "sparse"`、`data_field`、`data_coverage`，md 末尾标“（数据不足：<字段> 覆盖 x%）”。依赖关系：一次通过率类依赖 `attempts+review_outcome`；用时比类依赖 `est_min+actual_min`；加速比偏低依赖 `actual_min`；3i 信号依赖 `score`；规则 9/规则 11 的 flag 信号依赖该 flag 分组的 `attempts+review_outcome`；计划预估偏低/偏高依赖 `tier`（在有 `plan_tier` 的任务里算）；验证级别漏网信号依赖 `issues`；6d 信号依赖 `independent_review`；审核等待信号依赖 `review_wait_min`。按档位/模型的信号用该分组自己的覆盖率，其余用全部任务的。信号仍保留。
-- **`confidence`**：所有基于比例的信号（一次通过率 < 60%、risk=low 任务一次通过率 100% 的降档空间、计划预估偏低/偏高 > 30%、规则 9/规则 11 标记的通过率、推荐采纳率 < 30%、监控阈值误报率 > 30%、3i 升档率偏高、6d 有发现比例 < 10%）加 `confidence`、`ci`（Wilson 95% 区间 `[下限, 上限]`）、`threshold`。区间整体落在越界一侧（“低于”类的上限 < 阈值，“高于”类的下限 > 阈值）为 `"strong"`，跨过阈值为 `"weak"`，md 末尾标“（弱：95% 区间 a–b 跨过阈值）”。“一次通过率 100%”这类信号的阈值取 80%（下限 > 80% 才算 strong），样本少时（约 n<17）几乎总是 weak；3i 的阈值是“该维度其他取值的升档率 + 30 个百分点”。weak 的信号仍然保留在列表里，复盘时只有 `strong` 的当改进建议依据，weak 的只作线索。非比例信号（用时比、加速比、审核等待、掉队比等）没有 `confidence`。
+- **`confidence`**：所有基于比例的信号（一次通过率 < 60%、risk=low 任务一次通过率 100% 的降档空间、计划预估偏低/偏高 > 30%、规则 9/规则 11 标记的通过率、推荐采纳率 < 30%、3i 升档率偏高、6d 有发现比例 < 10%）加 `confidence`、`ci`（Wilson 95% 区间 `[下限, 上限]`）、`threshold`。区间整体落在越界一侧（“低于”类的上限 < 阈值，“高于”类的下限 > 阈值）为 `"strong"`，跨过阈值为 `"weak"`，md 末尾标“（弱：95% 区间 a–b 跨过阈值）”。“一次通过率 100%”这类信号的阈值取 80%（下限 > 80% 才算 strong），样本少时（约 n<17）几乎总是 weak；3i 的阈值是“该维度其他取值的升档率 + 30 个百分点”。weak 的信号仍然保留在列表里，复盘时只有 `strong` 的当改进建议依据，weak 的只作线索。非比例信号（用时比、加速比、审核等待、掉队比等）没有 `confidence`。
 - 按档位、按模型两张表在一次通过率旁边加了“95% 区间”列（JSON 里是各分组的 `first_pass_ci`、`first_pass_k`）。
 
 ### 打分维度、独立审核、审核等待（v0.12.0 起；旧数据没有这些字段时不出对应小节）
@@ -185,14 +186,6 @@
 - **3i 按打分维度**：每个维度（scope/ambiguity/context/risk/verify）的每个取值（0/1/2）的 n、一次通过率、升档率（各带 95% 区间）。信号：某维度某取值 n ≥ 5 且升档率比该维度其他取值（合并计算）高 30 个百分点以上 → “维度 X=v 的任务升档率偏高，打分可能低估了这一维”。该维度没有其他取值的记录时不判断。JSON：`by_score`（`{维度: [{value, n, first_pass_*, escalation_*}]}`，没数据是 `{}`）。
 - **6d 独立审核**：只统计 `ran` 为 true 的任务，按 `trigger` 分组（不在枚举内的算 `other`）：触发次数、有发现（`findings` > 0）的次数和比例、发现总数、其中 major 数；标题里另注 `ran` 为 false 的记录数。信号：某 trigger n ≥ 5 且有发现比例 < 10% → “这一触发条件几乎发现不了问题，可考虑放宽”。JSON：`independent_review`（`ran`、`not_run`、`by_trigger`，没数据是 `{}`）。
 - **审核等待**：每个 run 里有效 `review_wait_min` 的个数、中位数、最大值，写进效率表（4 节）的“审核等待中位数/最大”两列（有任一 run 有数据时才出这两列；JSON 在 `efficiency[*]` 的 `wait_n`/`wait_median`/`wait_max`）。信号：某 run n ≥ 3 且中位数 > 15 分钟 → “交付后平均 X 分钟才审核，巡检间隔偏长”。
-
-## CHANGELOG 状态统计（`metrics.py --changelog-stats CHANGELOG.md`）
-
-```
-metrics.py --changelog-stats CHANGELOG.md [--format md|json]
-```
-
-不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，标题是“未发布”的归“未发布”；解析不出 X.Y.Z 的版本标题如 `## v0.1.x（…）` 单独成行，版本列显示标题里的版本串，没有版本串就显示标题原文，且 `--check-changelog` 不按版本切分；没有条目的标题如“格式说明”不出行）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；验收判定分两种计数：**可机器判定**（`- **验收判定**` 行里有反引号表达式，`checkable`）和**写了不适用**（有这一行但没有表达式，`not_applicable`）；`judged` = 两者之和，保留做兼容。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；可机器判定的条目占全部条目的比例（`checkable_rate`）。md 表的列是“可机器判定”“判定写了不适用”。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged, checkable, not_applicable}], total: {…, verified_rate, withdrawn_rate, judged_rate, checkable_rate}}`。`--check-changelog` 的输出不受影响。
 
 ## CHANGELOG 验收判定（`metrics.py --check-changelog CHANGELOG.md`）
 
@@ -203,19 +196,22 @@ metrics.py --changelog-stats CHANGELOG.md [--format md|json]
 ```
 
 - **路径**是 `metrics.py --format json` 报告里的字段，用点连接：`quality.overall.rework_rate`。列表用 `[字段=值]` 选一项（`by_tier[key=T2].first_pass_rate`、`efficiency[run_id=r2].speedup`），或用 `[*]` 配合聚合函数 `median`/`mean`/`max`/`min`/`sum`（`median(scale_out[*].straggler_ratio)`）。
-- **比较**：`<=`、`>=`、`<`、`>`、`==`、`!=`。**样本**：选中项自带的 `n`（或 `ratio_n`、`tasks`、`shards`、`offered`），聚合时是有值的项数；默认至少 3。
-- **since**：只用这个插件版本及以后的 run 计算；条目在 `## vX.Y.Z` 下时默认就是这个版本，在“未发布”下要写明即将发布的版本号。
-- 只判定状态为“待验证”的条目。每条判定给出“达到 / 未达到 / 样本不足 / 无法解析”，整条：任一未达到 → 未达到；全部达到 → 达到；否则样本不足。
-- **质量护栏**：since 前后各有 ≥ 5 个任务、且改动后返工率比之前高出 5 个百分点以上时，整条判为“未达到”（不能拿质量换别的指标）。
+- **比较**：`<=`、`>=`、`<`、`>`、`==`、`!=`，都带 1e-9 容差（`sum(c[*].x) <= 0.3` 在 0.1 + 0.2 = 0.30000000000000004 时判达到；`<`、`>` 恰好等于时判未达到）。
+- **样本 n**：按读的字段取对应的有值数——`ratio_median` → `ratio_n`，`avg_cost_usd`/`cost_per_est_min` → `cost_n`，`avg_tokens` → `tokens_n`，`low_norm_ratio_median` → `low_norm_ratio_n`，`low_first_pass_rate` → `low_n`，`unit_est_*_median` → `unit_est_n`，`wait_median`/`wait_max` → `wait_n`，`acceptance_rate` → `offered`；其他字段取所在对象的 `n`，再依次 `tasks`、`shards`、`offered`；所在对象都没有（如 `adjust.escalated`）时用 `overview.tasks`。聚合时 n 是有值的项数。默认至少 3。
+- **since**：只用这个插件版本及以后的 run 计算；条目在 `## vX.Y.Z`（或 `## [X.Y.Z]`）下时默认就是这个版本，在“未发布”下（或在第一个 `## ` 之前、在解析不出版本的标题下）要写明即将发布的版本号，没写的判“无法解析”。since/before 解析不出 X.Y.Z 时也判“无法解析”，不会退回用全部数据。
+- **解析**：` ``` `/`~~~` 代码块里的内容（包括其中的 `##`、`###`）忽略。状态行取开头的“待验证 / 已验证 / 已撤回”（`**待验证**`、`待验证，自测通过`、`待验证（…）` 都算待验证）。验收判定可以写成多行，续行一直收到下一个 `- **`、标题或空行。判定文字以“不适用”开头时没有表达式；否则只把能解析或含比较符号的反引号片段当表达式（`` `scale.py shards` `` 这类提及忽略），一个都没有时全部当表达式（判“无法解析”）。
+- 只判定状态为“待验证”的条目。每条判定给出“达到 / 未达到 / 样本不足 / 无法解析”，整条：任一未达到（或质量护栏触发）→ 未达到；否则任一无法解析 → 无法解析；全部达到 → 达到；否则样本不足。
+- **质量护栏**：对条目里每组不同的 since/before 分别算：since 之前的 run 与 [since, before) 的 run 各有 ≥ 5 个任务、且改动后返工率比之前高出**超过** 5 个百分点时，整条判为“未达到”（不能拿质量换别的指标）。按整数比较，恰好高 5 个百分点（如 7/20 → 8/20）不触发。缺文件时报错退出。
 
 ## 保存进仓库与脱敏导出
 
-- **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id` 去重。
+- **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id`（merge 记录按上面“通用规则”的口径）去重。
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
-  - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`、`plugin_version_at_start`。`verify_pass` 为 `"partial"` 时原样保留。
-  - `flags` 只保留上表列出的已知规则标记，其他自由写法丢弃。
+  - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`（只保留已知厂商或模型族前缀的形状，如 `claude-`、`gpt-`、`gemini-`、`deepseek`、`kimi`、`haiku`/`sonnet`/`opus`、`codex`，可带 `<cli>:` 前缀；含 24 位以上连续字母数字的写 `other`；其他写 `other`）、`assist`（只保留 codex/kimi/claude/opencode/gemini/cursor，其他写 `other`），`effort`（只允许 minimal/low/medium/high/xhigh/max/none，否则写 `other`），`task_type`、`test_scope`、`shard_group`（只留有没有），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`、`plugin_version_at_start`（规范化成 X.Y.Z，后缀丢弃，解析不出写 `other`）；merge 的计数、数字和布尔字段。`verify_pass` 为 `"partial"` 时原样保留。枚举字段的值不是字符串（列表、对象）时一律写 `other`（或 null），不会让导出失败。
+  - `flags`（含从 notes 识别出的）只保留已知规则标记：`bias:+1(tier)`、`bias:+1(effort)`、`downgrade:user_allowed(-N)`（N 最多两位）、`rate_limited`、`assist_auto_models`、`tier:not-applied`；带后缀的三种只保留白名单后缀，其他后缀压成 `<前缀>:other`：`billing:` deepseek/kimi/moonshot/codex/openai/anthropic/claude/gemini/other，`effort_env:` minimal/low/medium/high/xhigh/max，`assist_unavailable:` rate_limited/cli_missing/cli_unavailable/no_key/missing_key/auth/quota/timeout/network/same_as_host/other。其他写法丢弃。
   - `found_issues` 每项只保留 `severity`（`minor`/`major`，其他写 `other`）和 `origin_task_id`（换成本 run 内的序号；不在本 run 或指向审核任务自己的写 null），即只剩严重程度和个数。
   - `followups` 只保留计数：每项变成 `{"fixed_in": "fixed"}` 或 `{"fixed_in": null}`，`desc` 和原 `fixed_in` 文本丢弃。
   - `score` 每一维只保留整数 0/1/2（其他写 null）；`independent_review` 只保留 `ran`（布尔）、`trigger`（枚举，不在内的写 `other`）、`findings`、`major`（数字）；`review_wait_min` 按数字字段保留。
   - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。
-  - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和所有未知字段。
+  - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason`、merge 的 `shards`（只留个数）/`reasons`/`culprits`/`conflicts`，和所有未知字段；旧数据里的 monitor 记录不导出。
+  - 与原始数据的差异：导出里没有 `project`，所以汇总里的常驻推荐（`recommendations`）可能把不同项目、序号相邻的批次配成前后批；按项目看推荐采纳率要用原始数据。

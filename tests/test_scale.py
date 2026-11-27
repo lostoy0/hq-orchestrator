@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "skills", "hq", "scripts", "scale.py")
-METRICS = os.path.join(ROOT, "skills", "hq", "scripts", "metrics.py")
 
 spec = importlib.util.spec_from_file_location("scale", SCRIPT)
 scale = importlib.util.module_from_spec(spec)
@@ -39,12 +38,29 @@ def at(minutes):
 
 class ShardCount(unittest.TestCase):
     def test_example_600_units(self):
-        # 600 pages x 1.5 min, target 40, limit 20 -> 16 shards (4 slots kept for re-splits), not 4 modules
-        p = scale.shard_plan(600, 1.5, overhead_min=8, target_min=40, limit=20)
-        self.assertEqual(p["shards"], 16)
-        self.assertEqual(p["reserved_slots"], 4)
-        self.assertAlmostEqual(p["shard_min"], 900 / 16 + 8, places=1)
+        # 600 pages x 1.5 min, target 40, limit 20, reserve 0: ceil(900/40)=23 > 20 -> 20 shards, not 4 modules
+        p = scale.shard_plan(600, 1.5, overhead_min=8, target_min=40, limit=20, reserve=0)
+        self.assertEqual(p["shards"], 20)
+        self.assertGreaterEqual(p["shards"], 16)
+        self.assertLessEqual(p["shards"], 20)
+        self.assertEqual((p["usable_slots"], p["reserve"]), (20, 0))
+        self.assertAlmostEqual(p["shard_min"], 900 / 20 + 8, places=1)
         self.assertLess(p["batch_eta_min"], 70)  # about an hour instead of 2.5-4 h
+        # 53 min > 1.25 x 40: still over target, and the limit needed is reserve + min(units, by_target)
+        self.assertTrue(p["over_target"])
+        self.assertEqual(p["needed_limit"], 23)
+
+    def test_low_limit_is_over_target_and_says_needed_limit(self):
+        p = scale.shard_plan(600, 1.5, overhead_min=8, target_min=40, limit=4)
+        self.assertEqual(p["shards"], 4)
+        self.assertTrue(p["over_target"])
+        self.assertEqual(p["needed_limit"], 23)
+        self.assertGreater(p["needed_limit"], 4)
+        self.assertIn("并发上限 4 不够", p["why"])
+        self.assertIn("23", p["why"])
+        self.assertIn("remote_concurrency", p["why"])
+        p = scale.shard_plan(600, 1.5, limit=4, reserve=2)
+        self.assertEqual((p["usable_slots"], p["shards"], p["needed_limit"]), (2, 2, 25))
 
     def test_by_workload_when_slots_suffice(self):
         p = scale.shard_plan(100, 2, overhead_min=8, target_min=40, limit=20)
@@ -73,7 +89,7 @@ class ShardCount(unittest.TestCase):
             rc, o, _ = cli("shards", "--units-file", f, "--unit-min", "1.5", "--limit", "20")
             self.assertEqual(rc, 0)
             sizes = [len(x) for x in o["assignment"]]
-            self.assertEqual(len(sizes), 16)
+            self.assertEqual(len(sizes), 20)
             self.assertLessEqual(max(sizes) - min(sizes), 1)
             self.assertEqual(o["assignment"][0][0], "page-000")
             self.assertEqual([u for s in o["assignment"] for u in s], ["page-%03d" % i for i in range(600)])
@@ -171,15 +187,6 @@ class LayeredVerify(unittest.TestCase):
         self.assertEqual(scale.test_scope(["src/store/global.ts"], ["src/store/**"])["scope"], "full")
         self.assertEqual(scale.test_scope(["src/a.ts"], require_full=True)["reason"], "project_rule")
 
-    def test_full_gate_only_at_checkpoints(self):
-        self.assertFalse(scale.full_gate(since_shards=2, since_lines=300, since_files=10)["run_full"])
-        self.assertTrue(scale.full_gate(since_shards=4)["run_full"])
-        self.assertTrue(scale.full_gate(since_lines=1600)["run_full"])
-        self.assertTrue(scale.full_gate(batch_complete=True)["run_full"])
-        self.assertTrue(scale.full_gate(before_push=True)["run_full"])
-        self.assertTrue(scale.full_gate(ci_checkpoint=True)["run_full"])
-        self.assertFalse(scale.full_gate(since_shards=9, every_shards=10, every_lines=0, every_files=0)["run_full"])
-
 
 class GroupMerge(unittest.TestCase):
     def test_one_group_per_checkin(self):
@@ -225,384 +232,586 @@ class GroupMerge(unittest.TestCase):
         self.assertEqual(r["next"]["action"], "bisect")
 
 
-def snap(shards, **kw):
-    d = {"run_id": "r1", "batch_id": "b1", "shards": shards}
-    d.update(kw)
-    return d
+# ---- regression tests for the independent review (fix-scale.md) ----------------------------
 
+class ShardFormulaEdges(unittest.TestCase):
+    def test_major1_exact_multiple_of_target_is_not_one_more_shard(self):
+        self.assertEqual(scale.shard_plan(400, 1.1, 0, 44, limit=100)["shards"], 10)
+        self.assertEqual(scale.shard_plan(7, 0.1, 0, 0.7, limit=100)["shards"], 1)
 
-class Monitor(unittest.TestCase):
-    def step(self, state, s, minute, cfg=None):
-        return scale.monitor_step(state, s, cfg, T0 + timedelta(minutes=minute))
+    def test_formula_matches_spec(self):
+        # n = max(1, min(usable, by_target, units)), then drop shards while overhead ratio > max (+tol)
+        for units, um, ov, t, lim, res, ratio in [(600, 1.5, 8, 40, 20, 0, 0.3), (40, 1, 8, 10, 20, 0, 0.3),
+                                                  (100, 2, 8, 40, 20, 3, 0.3), (3, 60, 1, 40, 20, 0, 0.3),
+                                                  (10, 1, 3, 1, 50, 0, 0.3)]:
+            work = units * um
+            by_t = max(1, scale.math.ceil(round(work / t, 9)))
+            n = max(1, min(max(1, lim - res), by_t, units))
+            while n > 1 and ov / (work / n + ov) > ratio + 1e-9:
+                n -= 1
+            p = scale.shard_plan(units, um, ov, t, limit=lim, reserve=res, max_overhead_ratio=ratio)
+            self.assertEqual(p["shards"], n, (units, um))
+            self.assertEqual(p["needed_limit"], res + max(1, min(units, by_t)))
 
-    def test_two_consecutive_breaches_trigger(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 40, "last_event_at": at(85), "done": 10}
-        st, r = self.step({}, snap([sh]), 90)          # 2.25x once -> not yet
-        self.assertEqual(r["actions"], [])
-        st, r = self.step(st, snap([dict(sh, last_event_at=at(100), done=12)]), 105)
-        self.assertEqual([a["metric"] for a in r["actions"]], ["duration_ratio"])
-        self.assertEqual(r["actions"][0]["action"], "straggler_check")
+    def test_overhead_ratio_exactly_at_limit_keeps_shard(self):
+        # 70 units x 1 min, target 7 -> 10 shards of 7 + 3 min: overhead exactly 30%, kept
+        p = scale.shard_plan(70, 1, 3, 7, limit=10, max_overhead_ratio=0.3)
+        self.assertEqual(p["shards"], 10)
+        self.assertAlmostEqual(p["overhead_ratio"], 0.3)
 
-    def test_one_breach_then_recovery_does_not_trigger(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 40, "last_event_at": at(85), "done": 10}
-        st, _ = self.step({}, snap([sh]), 90)
-        st, r = self.step(st, snap([dict(sh, est_min=100)]), 95)   # back under
-        st, r = self.step(st, snap([dict(sh, est_min=40)]), 100)   # first breach again
-        self.assertEqual(r["actions"], [])
+    def test_over_target_at_exactly_125_percent_is_false(self):
+        # one unit of 42 min + 8 overhead = 50 == 1.25 x 40 -> not over target
+        self.assertFalse(scale.shard_plan(1, 42, 8, 40, limit=5)["over_target"])
+        p = scale.shard_plan(1, 100, 8, 40, limit=5)
+        self.assertTrue(p["over_target"])
+        self.assertNotIn("不够", p["why"])  # more slots would not help a single long unit
 
-    def test_severe_triggers_immediately(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 60, "last_event_at": at(5), "cost_usd": 10, "budget_usd": 4}
-        st, r = self.step({}, snap([sh]), 10)
-        acts = {a["metric"]: a for a in r["actions"]}
-        self.assertEqual(acts["cost_ratio"]["action"], "pause_and_ask_user")
-        self.assertEqual(acts["cost_ratio"]["severity"], "severe")
-        self.assertEqual(len(r["analyses"]), 1)   # severe -> immediate analysis
+    def test_bad_input_raises(self):
+        for kw in ({"units": 0}, {"unit_min": float("nan")}, {"target_min": 0}, {"limit": 0}, {"reserve": -1}):
+            args = dict(units=10, unit_min=1.0, target_min=40.0, limit=4, reserve=0)
+            args.update(kw)
+            with self.assertRaises(ValueError, msg=str(kw)):
+                scale.shard_plan(args["units"], args["unit_min"], 8, args["target_min"],
+                                 limit=args["limit"], reserve=args["reserve"])
 
-    def test_idle_uses_event_stream_not_list_time(self):
-        # session list says updated 2 h ago, but the event stream had an event 5 min ago: not idle
-        sh = {"id": "s1", "created_at": at(0), "est_min": 300, "list_updated_at": at(-120),
-              "last_event_at": at(115), "done": 5}
-        st, _ = self.step({}, snap([sh]), 120)
-        st, r = self.step(st, snap([sh]), 125)
-        self.assertEqual(r["actions"], [])
-        # real idle: last event 50 min ago and progress unchanged twice
-        sh2 = dict(sh, last_event_at=at(70))
-        st, _ = self.step({}, snap([sh2]), 120)
-        st, r = self.step(st, snap([sh2]), 125)
-        self.assertEqual([a["action"] for a in r["actions"]], ["message_reminder"])
+    def test_cli_limit_required_and_bad_numbers_exit_2(self):
+        self.assertEqual(cli("shards", "--units", "10", "--unit-min", "1")[0], 2)
+        for bad in (["--target-min", "0"], ["--unit-min", "nan"], ["--unit-min", "inf"], ["--limit", "0"],
+                    ["--reserve", "-1"]):
+            args = ["shards", "--units", "10", "--unit-min", "1", "--limit", "4"] + bad
+            rc, _, err = cli(*args)
+            self.assertEqual(rc, 2, bad)
+            self.assertNotIn("Traceback", err)
+        rc, o, _ = cli("shards", "--units", "600", "--unit-min", "1.5", "--limit", "4")
+        self.assertEqual((rc, o["shards"], o["over_target"], o["needed_limit"]), (0, 4, True, 23))
 
-    def test_idle_with_progress_change_is_not_idle(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 300, "last_event_at": at(0), "done": 5}
-        st, _ = self.step({}, snap([sh]), 60)
-        st, r = self.step(st, snap([dict(sh, done=9)]), 70)   # long background task, but progress moved
-        self.assertEqual(r["actions"], [])
-
-    def test_batch_metrics(self):
-        st, r = self.step({}, snap([], batch={"failure_rate": 0.6}), 10)
-        self.assertEqual(r["actions"][0]["action"], "locate_failing_shard")
-        self.assertEqual(r["actions"][0]["severity"], "severe")
-
-    def test_records_for_runs_jsonl(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 60, "cost_usd": 10, "budget_usd": 4}
-        _, r = self.step({}, snap([sh]), 10)
-        rec = r["records"][0]
-        for k in ("type", "ts", "metric", "value", "threshold", "level", "rate_limited", "analysis_cost_usd", "key"):
-            self.assertIn(k, rec)
-        self.assertEqual(rec["type"], "monitor")
-
-
-class RateLimit(unittest.TestCase):
-    def severe(self, sid, cause="api_loop"):
-        return {"id": sid, "created_at": at(0), "est_min": 60, "cost_usd": 10, "budget_usd": 4,
-                "cause": {"cost_ratio": cause}}
-
-    def test_same_key_once_per_cooldown(self):
-        st, r = scale.monitor_step({}, snap([self.severe("s1")]), None, T0)
-        self.assertEqual(len(r["analyses"]), 1)
-        st, r = scale.monitor_step(st, snap([self.severe("s2")], batch_id="b2"), None, T0 + timedelta(minutes=30))
-        self.assertEqual(r["analyses"], [])
-        self.assertEqual(r["rate_limited"][0]["reason"], "cooldown")
-        self.assertTrue(r["records"][0]["rate_limited"])
-        self.assertEqual(st["pending"]["cost_ratio:api_loop"]["count"], 1)
-        # after the cooldown the next analysis carries the accumulated count
-        st, r = scale.monitor_step(st, snap([self.severe("s3")], batch_id="b3"), None, T0 + timedelta(minutes=200))
-        self.assertEqual(r["analyses"][0]["counts"]["cost_ratio:api_loop"], 2)
-
-    def test_per_batch_and_per_day_limits(self):
-        st, r = scale.monitor_step({}, snap([self.severe("s1", "a")]), None, T0)
-        self.assertEqual(len(r["analyses"]), 1)
-        st, r = scale.monitor_step(st, snap([self.severe("s2", "b")]), None, T0 + timedelta(minutes=5))
-        self.assertEqual(r["analyses"], [])                       # 1 per batch
-        self.assertEqual(r["rate_limited"][0]["reason"], "global_limit")
-        for i, b in enumerate(("b2", "b3")):
-            st, r = scale.monitor_step(st, snap([self.severe("x%d" % i, "c%d" % i)], batch_id=b), None,
-                                       T0 + timedelta(minutes=10 + i))
-            self.assertEqual(len(r["analyses"]), 1)
-        st, r = scale.monitor_step(st, snap([self.severe("y", "d")], batch_id="b4"), None, T0 + timedelta(minutes=20))
-        self.assertEqual(r["analyses"], [])                       # 3 per day
-        self.assertEqual(r["rate_limited"][0]["reason"], "global_limit")
-
-    def test_non_severe_merged_at_batch_end(self):
-        def dur(sid):  # non-severe repeated cause across shards
-            return {"id": sid, "created_at": at(0), "est_min": 40, "last_event_at": at(99), "done": 1,
-                    "cause": {"duration_ratio": "underestimated"}}
-        st = {}
-        for m in (90, 100):
-            st, r = scale.monitor_step(st, snap([dur("s1"), dur("s2")]), None, T0 + timedelta(minutes=m))
-        self.assertEqual(len(r["actions"]), 2)
-        self.assertEqual(r["analyses"], [])                       # deferred, not analysed yet
-        st, r = scale.monitor_step(st, snap([], batch_done=True), None, T0 + timedelta(minutes=120))
-        self.assertEqual(len(r["analyses"]), 1)
-        self.assertEqual(r["analyses"][0]["reason"], "batch_end_merged")
-        self.assertEqual(r["analyses"][0]["counts"]["duration_ratio:underestimated"], 2)
-
-    def test_single_non_severe_stays_level_one(self):
-        sh = {"id": "s1", "created_at": at(0), "est_min": 40, "last_event_at": at(99), "done": 1}
-        st = {}
-        for m in (90, 100):
-            st, r = scale.monitor_step(st, snap([sh]), None, T0 + timedelta(minutes=m))
-        st, r = scale.monitor_step(st, snap([], batch_done=True), None, T0 + timedelta(minutes=120))
-        self.assertEqual(r["analyses"], [])
-
-    def test_heavy_ops_postpone_severe(self):
-        st, r = scale.monitor_step({}, snap([self.severe("s1")], heavy_ops=True), None, T0)
-        self.assertEqual(r["analyses"], [])
-        st, r = scale.monitor_step(st, snap([]), None, T0 + timedelta(minutes=10))
-        self.assertEqual(r["analyses"][0]["reason"], "postponed_severe")
-
-    def test_cli_persists_state(self):
+    def test_units_file_weights_and_mismatch(self):
         with tempfile.TemporaryDirectory() as d:
-            f = os.path.join(d, "state.json")
-            sh = {"id": "s1", "created_at": at(0), "est_min": 40, "last_event_at": at(85), "done": 1}
-            cli("monitor", "--state", f, "--now", at(90), stdin=json.dumps(snap([sh])))
-            rc, o, _ = cli("monitor", "--state", f, "--now", at(100), stdin=json.dumps(snap([sh])))
+            f = os.path.join(d, "u.txt")
+            write(f, "a\t0\nb\t0\nc\t0\nd\t0\n")
+            parts = scale.split_units(scale.read_units_file(f), 2)
+            self.assertEqual(parts, [["a", "b"], ["c", "d"]])
+            write(f, "a\t-3\nb\tnan\nc\tinf\nd\n")
+            parts = scale.split_units(scale.read_units_file(f), 4)
+            self.assertEqual(parts, [["a"], ["b"], ["c"], ["d"]])
+            write(f, "x\n" * 5)
+            rc, _, err = cli("shards", "--units", "7", "--units-file", f, "--unit-min", "1", "--limit", "4")
+            self.assertEqual(rc, 2)
+            self.assertIn("does not match", err)
+            rc, _, err = cli("shards", "--units-file", os.path.join(d, "missing.txt"), "--unit-min", "1", "--limit", "4")
+            self.assertEqual(rc, 2)
+            self.assertNotIn("Traceback", err)
+
+    def test_split_never_leaves_empty_shards_and_fields_follow(self):
+        items = [("big", 100.0)] + [("s%d" % i, 1.0) for i in range(3)]
+        parts = scale.split_units(items, 4)
+        self.assertEqual(len(parts), 4)
+        self.assertTrue(all(parts))
+        self.assertEqual([u for p in parts for u in p], [n for n, _ in items])
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "u.txt")
+            write(f, "big\t100\ns0\ns1\ns2\n")
+            rc, o, _ = cli("shards", "--units-file", f, "--unit-min", "30", "--limit", "10", "--overhead-min", "0")
             self.assertEqual(rc, 0)
-            self.assertEqual(o["actions"][0]["metric"], "duration_ratio")
+            self.assertEqual(o["shards"], len(o["assignment"]))
+            self.assertAlmostEqual(o["units_per_shard"], 4 / o["shards"], places=1)
 
 
-def hist(tt, metric, eff, fp, miss=0):
-    return ([{"task_type": tt, "metric": metric, "label": "effective"}] * eff
-            + [{"task_type": tt, "metric": metric, "label": "false_positive"}] * fp
-            + [{"task_type": tt, "metric": metric, "event": "missed"}] * miss)
+class StragglerEdges(unittest.TestCase):
+    def test_major2_projection_exactly_twice_estimate_is_on_track(self):
+        r = scale.straggler_check({"id": "a", "est_min": 21, "elapsed_min": 11.4, "done": 1, "total": 10},
+                                  target_min=1, overhead_min=8, free_slots=2)
+        self.assertEqual((r["action"], r["reason"]), ("none", "on_track"))
+
+    def test_major2_remaining_exactly_twice_target_is_near_done(self):
+        # rate 1/3.4 units per min; 9 units left = 30.6 min; target 15.3 -> exactly 2 x target
+        r = scale.straggler_check({"id": "a", "est_min": 5, "elapsed_min": 11.4, "done": 1, "total": 10},
+                                  target_min=15.3, overhead_min=8, free_slots=2)
+        self.assertEqual(r["reason"], "near_done")
+
+    def test_major3_never_more_pieces_than_remaining_units(self):
+        r = scale.straggler_check({"id": "a", "est_min": 30, "elapsed_min": 400, "done": 1, "total": 2},
+                                  free_slots=3)
+        self.assertNotEqual(r["action"], "resplit")
+        self.assertEqual((r["action"], r["reason"]), ("report", "straggler_unsplittable"))
+        r = scale.straggler_check({"id": "a", "est_min": 30, "elapsed_min": 400, "done": 1, "total": 4},
+                                  free_slots=3)
+        self.assertEqual(r["action"], "resplit")
+        self.assertLessEqual(r["new_sessions"] + 1, r["remaining_units"])
+        diffs = [b - a for a, b in zip(r["split"], r["split"][1:])]
+        self.assertTrue(all(d >= 1 for d in diffs), r["split"])
+        self.assertEqual(r["split"][-1], 3)
+        self.assertEqual(r["ranges"][0][0], 2)
+        self.assertEqual(r["ranges"][-1][1], 4)
+
+    def test_split_is_strictly_increasing_for_many_shapes(self):
+        for total in range(3, 40):
+            for free in range(1, 8):
+                r = scale.straggler_check({"id": "x", "est_min": 1, "elapsed_min": 1000, "done": 1, "total": total},
+                                          target_min=1, overhead_min=0, free_slots=free)
+                if r["action"] == "resplit":
+                    sp = r["split"]
+                    self.assertTrue(all(b > a for a, b in zip(sp, sp[1:])), (total, free, sp))
+
+    def test_bad_shard_values(self):
+        base = {"id": "a", "elapsed_min": 90, "est_min": 40}
+        for bad in ({"done": "20", "total": 150}, {"done": 20, "total": "150"}, {"done": True, "total": 150},
+                    {"done": 20, "total": True}, {"done": 20, "total": 0}, {"done": -1, "total": 150}):
+            r = scale.straggler_check(dict(base, **bad), free_slots=3)
+            self.assertEqual(r["action"], "none", bad)
+        r = scale.straggler_check({"id": "a", "elapsed_min": -5, "est_min": 40, "done": 2, "total": 10})
+        self.assertEqual(r["reason"], "no_progress_data")
+        for est in (0, -10, "40"):
+            r = scale.straggler_check({"id": "a", "elapsed_min": 90, "est_min": est, "done": 20, "total": 150},
+                                      free_slots=1)
+            self.assertEqual(r["est_min"], 40.0)
+            self.assertTrue(r["est_min_defaulted"])
+
+    def test_cli_bad_shapes_and_now(self):
+        for bad in ("[1, 2]", '"str"', '{"shards": [1]}', '{"x": 1}'):
+            rc, _, err = cli("straggler", stdin=bad)
+            self.assertEqual(rc, 2, bad)
+            self.assertNotIn("Traceback", err)
+        rc, _, err = cli("straggler", "--now", "yesterday", stdin="[]")
+        self.assertEqual(rc, 2)
+        self.assertIn("--now", err)
+        rc, o, _ = cli("straggler", "--now", at(90), stdin=json.dumps(
+            [{"id": "a", "started_at": at(0), "est_min": 40, "done": 20, "total": 150}]))
+        self.assertEqual((rc, o["shards"][0]["elapsed_min"]), (0, 90.0))
 
 
-class Calibrate(unittest.TestCase):
-    def val(self, r, tt, metric):
-        return r["thresholds"].get(tt, {}).get(metric, r["thresholds"]["*"][metric])
-
-    def test_loosen_on_false_positives_with_step_limit(self):
-        r = scale.calibrate({"*": {"idle_min": 40}}, hist("dev", "idle_min", 2, 6))
-        self.assertEqual(self.val(r, "*", "idle_min"), 48)   # +20% max
-        self.assertEqual(self.val(r, "dev", "idle_min"), 48)
-
-    def test_tighten_on_misses(self):
-        r = scale.calibrate({"*": {"rework": 3}}, hist("dev", "rework", 3, 0, 3))
-        self.assertEqual(self.val(r, "*", "rework"), 2)
-
-    def test_bounds(self):
-        r = scale.calibrate({"*": {"duration_ratio": 3.9}}, hist("dev", "duration_ratio", 1, 9))
-        self.assertEqual(self.val(r, "*", "duration_ratio"), 4.0)
-        r = scale.calibrate({"*": {"idle_min": 16}}, hist("dev", "idle_min", 5, 0, 5))
-        self.assertEqual(self.val(r, "*", "idle_min"), 15)
-
-    def test_few_samples_keep_default(self):
-        r = scale.calibrate({}, hist("docs", "idle_min", 1, 3))
-        self.assertEqual(self.val(r, "docs", "idle_min"), 40)
-        self.assertEqual(r["changes"], [])
-
-    def test_per_type_differs_from_global(self):
-        h = hist("patrol", "idle_min", 1, 6) + hist("dev", "idle_min", 6, 0)
-        r = scale.calibrate({}, h, task_types=["patrol", "dev"])
-        self.assertEqual(self.val(r, "patrol", "idle_min"), 48)
-        self.assertEqual(self.val(r, "dev", "idle_min"), 40)
-
-    def test_user_value_never_overwritten(self):
-        r = scale.calibrate({"*": {"idle_min": 40}}, hist("dev", "idle_min", 0, 10), user={"*": {"idle_min": 25}})
-        self.assertEqual(self.val(r, "dev", "idle_min"), 25)
-        self.assertEqual(self.val(r, "*", "idle_min"), 25)
-
-    def test_duration_from_p90(self):
-        r = scale.calibrate({}, [], ratios={"patrol": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 3.0]},
-                            task_types=["patrol"])
-        v = self.val(r, "patrol", "duration_ratio")
-        self.assertGreater(v, 1.6)       # moved toward P90 = 1.92 but at most 20% from 2.0
-        self.assertLessEqual(v, 2.0)
-
-    def test_playbook_write_user_precedence_and_rollback(self):
-        with tempfile.TemporaryDirectory() as d:
-            pb = os.path.join(d, "PLAYBOOK.md")
-            write(pb, "# PB\n\n## 授权\n\n```yaml\nopen_pr: ask\nmonitor:\n  thresholds:\n"
-                                "    rework: 3              # 手动\n    \"patrol\": {idle_min: 60}\n```\n")
-            data = {"history": hist("dev", "idle_min", 1, 9)}
-            rc, o, _ = cli("calibrate", "--playbook", pb, "--write", stdin=json.dumps(data))
-            self.assertEqual((rc, o["version"]), (0, 1))
-            rc, e, _ = cli("thresholds", "--playbook", pb)
-            self.assertEqual(e["thresholds"]["*"]["idle_min"], 48)
-            self.assertEqual(e["thresholds"]["*"]["rework"], 3)          # user
-            self.assertEqual(e["thresholds"]["patrol"]["idle_min"], 60)  # user, per type
-            cli("calibrate", "--playbook", pb, "--write", stdin=json.dumps(data))
-            rc, e, _ = cli("thresholds", "--playbook", pb)
-            self.assertAlmostEqual(e["thresholds"]["*"]["idle_min"], 57.6)
-            rc, rb, _ = cli("thresholds", "--playbook", pb, "--rollback")
-            self.assertEqual((rc, rb["to"]), (0, 1))
-            rc, e, _ = cli("thresholds", "--playbook", pb)
-            self.assertEqual(e["thresholds"]["*"]["idle_min"], 48)
-            self.assertIn("open_pr: ask", read(pb))
-
-
-def split_snap(shards, **kw):
-    d = {"run_id": "r1", "batch_id": "b1", "target_min": 40, "overhead_min": 8, "concurrency_limit": 20,
-         "shards": shards}
-    d.update(kw)
-    return d
-
-
-def sh(sid, elapsed, done, total, unit_est=None, **kw):
-    d = {"id": sid, "elapsed_min": elapsed, "est_min": 60, "done": done, "total": total,
-         "last_event_at": at(elapsed - 1)}
-    if unit_est is not None:
-        d["unit_min_est"] = unit_est
-    d.update(kw)
-    return d
-
-
-class SplitHealth(unittest.TestCase):
-    def run2(self, snaps, state=None):
-        st, r = state or {}, None
-        for i, s in enumerate(snaps):
-            st, r = scale.monitor_step(st, s, None, T0 + timedelta(minutes=10 * i))
-        return st, r
-
-    def by_metric(self, r):
-        return {a["metric"]: a for a in r["actions"]}
+class Replan(unittest.TestCase):
+    def shard(self, i, done, elapsed=58, total=100, unit_est=1.0, **kw):
+        d = {"id": "s%d" % i, "elapsed_min": elapsed, "est_min": 108, "done": done, "total": total,
+             "unit_min_est": unit_est}
+        d.update(kw)
+        return d
 
     def test_unit_time_underestimated_across_shards_replans(self):
-        # planned 0.5 min/unit, measured 1.5 min/unit on all 4 shards at ~20%
-        s = split_snap([sh("s%d" % i, 38, 20, 100, unit_est=0.5) for i in range(4)])
-        vals, det = scale.split_health(s, T0)
-        self.assertAlmostEqual(vals["split_unit_error"], 2.0)
-        _, r = self.run2([s])   # >= 1.5 is severe: fires at once
-        a = self.by_metric(r)["split_unit_error"]
-        self.assertEqual(a["action"], "replan_remaining")
-        self.assertEqual(a["replan"]["remaining_units"], 320)
-        self.assertEqual(a["replan"]["measured_unit_min"], 1.5)
-        self.assertGreater(a["replan"]["new_sessions"], 0)
-        self.assertEqual(r["records"][0]["key"], "split:unit_time")
+        # measured (58-8)/20 = 2.5 min per unit vs 1.0 planned: +150% on all 4 shards
+        shards = [self.shard(i, 20) for i in range(4)]
+        rp = scale.replan(shards, target_min=40, overhead_min=8, free_slots=6)
+        self.assertIsNotNone(rp)
+        self.assertAlmostEqual(rp["measured_unit_min"], 2.5)
+        self.assertEqual(rp["remaining_units"], 320)
+        self.assertEqual(rp["running"], 4)
+        p = scale.shard_plan(320, 2.5, 8, 40, limit=4 + 6)
+        self.assertEqual(rp["shards_for_remaining"], p["shards"])
+        self.assertEqual(rp["new_sessions"], min(6, p["shards"] - 4))
+        self.assertLessEqual(rp["new_sessions"], 6)
 
-    def test_unit_time_needs_early_progress_and_agreement(self):
-        early = split_snap([sh("s%d" % i, 9.5, 1, 100, unit_est=0.5) for i in range(4)])  # 1% done
-        self.assertNotIn("split_unit_error", scale.split_health(early, T0)[0])
-        mixed = split_snap([sh("a", 38, 20, 100, unit_est=0.5), sh("b", 38, 20, 100, unit_est=3.0),
-                            sh("c", 38, 20, 100, unit_est=0.5), sh("d", 38, 20, 100, unit_est=3.0)])
-        self.assertNotIn("split_unit_error", scale.split_health(mixed, T0)[0])
-        two = split_snap([sh("a", 38, 20, 100, unit_est=0.5), sh("b", 38, 20, 100, unit_est=0.5)])
-        self.assertNotIn("split_unit_error", scale.split_health(two, T0)[0])
+    def test_new_sessions_limited_by_free_slots(self):
+        shards = [self.shard(i, 20) for i in range(4)]
+        self.assertEqual(scale.replan(shards, free_slots=1)["new_sessions"], 1)
+        self.assertEqual(scale.replan(shards, free_slots=0)["new_sessions"], 0)
 
-    def test_moderate_unit_error_needs_two_checkins(self):
-        s = split_snap([sh("s%d" % i, 38, 20, 100, unit_est=0.9) for i in range(4)])  # 1.5/0.9-1 = 0.67
-        st, r = self.run2([s])
-        self.assertNotIn("split_unit_error", self.by_metric(r))
-        st, r = self.run2([s], st)
-        self.assertIn("split_unit_error", self.by_metric(r))
+    def test_needs_three_shards_ten_percent_done_and_agreement(self):
+        self.assertIsNone(scale.replan([self.shard(i, 20) for i in range(2)], free_slots=4))
+        # under 10% done does not count
+        self.assertIsNone(scale.replan([self.shard(i, 5, elapsed=20.5) for i in range(4)], free_slots=4))
+        # exactly 10% counts: (33-8)/10 = 2.5
+        self.assertIsNotNone(scale.replan([self.shard(i, 10, elapsed=33) for i in range(3)], free_slots=4))
+        # two fast, two slow: no agreement
+        mixed = [self.shard(0, 20), self.shard(1, 20), self.shard(2, 20, elapsed=13), self.shard(3, 20, elapsed=13)]
+        self.assertIsNone(scale.replan(mixed, free_slots=4))
+        # missing unit_min_est: not measured
+        self.assertIsNone(scale.replan([self.shard(i, 20, unit_est=None) for i in range(4)], free_slots=4))
 
-    def test_uneven_projection_before_shards_finish(self):
-        shards = [sh("a", 38, 30, 100), sh("b", 38, 30, 100), sh("c", 38, 30, 100), sh("d", 38, 6, 100)]
-        vals, det = scale.split_health(split_snap(shards), T0)
-        self.assertGreater(vals["split_uneven"], 2)
-        _, r = self.run2([split_snap(shards)] * 2)
-        self.assertEqual(self.by_metric(r)["split_uneven"]["action"], "replan_remaining")
+    def test_error_exactly_fifty_percent_is_not_a_replan(self):
+        # (38-8)/20 = 1.5 vs 1.0: +50% exactly
+        self.assertIsNone(scale.replan([self.shard(i, 20, elapsed=38) for i in range(3)], free_slots=4))
+        self.assertIsNotNone(scale.replan([self.shard(i, 20, elapsed=38.2) for i in range(3)], free_slots=4))
 
-    def test_underused_slots(self):
-        # 2 shards running, 600 units left at 1 min/unit with limit 20: could use 15
-        shards = [sh("a", 108, 100, 400), sh("b", 108, 100, 400)]
-        vals, det = scale.split_health(split_snap(shards), T0)
-        self.assertLess(vals["split_underused"], 0.5)
-        self.assertEqual(det["split_underused"]["could_use"], 15)
-        # nearly done work does not count as under-used
-        near = [sh("a", 108, 390, 400), sh("b", 108, 390, 400)]
-        self.assertNotIn("split_underused", scale.split_health(split_snap(near), T0)[0])
+    def test_overestimate_also_replans(self):
+        # (18-8)/20 = 0.5 vs 2.0: -75%
+        rp = scale.replan([self.shard(i, 20, elapsed=18, unit_est=2.0) for i in range(3)], free_slots=2)
+        self.assertIsNotNone(rp)
+        self.assertLess(rp["median_error"], 0)
 
-    def test_boundary_signals(self):
-        shards = [sh("a", 30, 5, 50, boundary={"overlap": True}), sh("b", 30, 5, 50, boundary={"shared_fixes": 2}),
-                  sh("c", 30, 5, 50, boundary={"out_of_owns": ["tools/overlay-walk.mjs"]}), sh("d", 30, 5, 50)]
-        _, r = self.run2([split_snap(shards)] * 2)
-        a = self.by_metric(r)["split_boundary"]
-        self.assertEqual((a["value"], a["action"]), (3, "review_boundaries"))
-        self.assertEqual(a["detail"]["shards"], ["a", "b", "c"])
-        one = [sh("a", 30, 5, 50, boundary={"overlap": True}), sh("b", 30, 5, 50)]
-        _, r = self.run2([split_snap(one)] * 2)
-        self.assertNotIn("split_boundary", self.by_metric(r))
+    def test_delivered_shards_not_running(self):
+        shards = [self.shard(i, 20) for i in range(3)] + [self.shard(9, 100, delivered=True)]
+        rp = scale.replan(shards, free_slots=2)
+        self.assertEqual((rp["running"], rp["remaining_units"]), (3, 240))
 
-    def test_each_split_check_once_per_batch(self):
-        s = split_snap([sh("s%d" % i, 38, 20, 100, unit_est=0.5) for i in range(4)])
-        st, r = self.run2([s])
-        self.assertIn("split_unit_error", self.by_metric(r))
-        st, r = self.run2([s, s, s], st)
-        self.assertNotIn("split_unit_error", self.by_metric(r))
-        st, r = self.run2([dict(s, batch_id="b2")], st)   # next batch: armed again
-        self.assertIn("split_unit_error", self.by_metric(r))
-
-    def test_single_shard_has_no_split_checks(self):
-        self.assertEqual(scale.split_health(split_snap([sh("a", 38, 20, 100, unit_est=0.5)]), T0), ({}, {}))
-
-    def test_calibration_direction_for_lower_is_worse(self):
-        r = scale.calibrate({"*": {"split_underused": 0.5}}, hist("patrol", "split_underused", 2, 6))
-        self.assertEqual(r["thresholds"]["*"]["split_underused"], 0.4)     # loosen = lower
-        r = scale.calibrate({"*": {"split_underused": 0.5}}, hist("patrol", "split_underused", 3, 0, 3))
-        self.assertEqual(r["thresholds"]["*"]["split_underused"], 0.6)     # tighten = higher
-
-    def test_integer_threshold_moves_by_one(self):
-        r = scale.calibrate({"*": {"rework": 2}}, hist("dev", "rework", 2, 6))
-        self.assertEqual(r["thresholds"]["*"]["rework"], 3)
-        r = scale.calibrate({"*": {"split_boundary": 2}}, hist("dev", "split_boundary", 3, 0, 3))
-        self.assertEqual(r["thresholds"]["*"]["split_boundary"], 1)
+    def test_cli_has_top_level_replan(self):
+        rc, o, _ = cli("straggler", "--free-slots", "2", stdin=json.dumps([self.shard(i, 20) for i in range(3)]))
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(o["replan"])
+        rc, o, _ = cli("straggler", stdin=json.dumps(
+            [{"id": "a", "elapsed_min": 30, "est_min": 40, "done": 20, "total": 30}]))
+        self.assertIn("replan", o)
+        self.assertIsNone(o["replan"])
 
 
-class RetroMetrics(unittest.TestCase):
-    def report(self, lines):
+class ProgressEdges(unittest.TestCase):
+    def test_non_numeric_values_are_dropped(self):
+        self.assertEqual(scale.parse_progress("HQ-PROGRESS done=37 total=150,"), {"done": 37, "total": 150})
+        self.assertEqual(scale.parse_progress("HQ-PROGRESS done=37/150 total=150"), {"total": 150})
+        self.assertEqual(scale.parse_progress("HQ-PROGRESS done=3 total=nan rework=true"), {"done": 3})
+        self.assertEqual(scale.parse_progress('{"done": "37", "total": 150}'), {"total": 150})
+        self.assertEqual(scale.parse_progress('{"done": true, "total": 150}'), {"total": 150})
+        self.assertIsNone(scale.parse_progress('{"done": "x"}'))
+        self.assertIsNone(scale.parse_progress('[1, 2]'))
+
+    def test_quoted_or_echoed_lines_do_not_count(self):
+        text = ("HQ-PROGRESS done=10 total=40\n"
+                "> HQ-PROGRESS done=99 total=99\n"
+                'echo "HQ-PROGRESS done=98 total=99"\n'
+                "brief says: print `HQ-PROGRESS done=<n> total=<N>`\n"
+                "```\nHQ-PROGRESS done=97 total=99\n```\n")
+        self.assertEqual(scale.parse_progress(text), {"done": 10, "total": 40})
+
+    def test_log_prefixes_are_allowed(self):
+        self.assertEqual(scale.parse_progress("2026-11-27T10:00:00Z HQ-PROGRESS done=5 total=40\n"),
+                         {"done": 5, "total": 40})
+        self.assertEqual(scale.parse_progress("[worker s3] HQ-PROGRESS done=6 total=40\n"), {"done": 6, "total": 40})
+
+    def test_cli_missing_file(self):
+        rc, _, err = cli("progress", "--file", "/nonexistent/progress.json")
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(cli("progress", stdin="nothing")[0], 1)
+
+
+class DeliveryEdges(unittest.TestCase):
+    def test_major4_empty_status_is_not_delivered_not_a_crash(self):
+        r = scale.check_delivery("## 交付\nSTATUS:\nVERIFY: ok\n")
+        self.assertEqual((r["delivered"], r["reason"]), (False, "section_status_not_done"))
+        rc, _, err = cli("delivered", stdin="## 交付\nSTATUS:\nVERIFY: ok\n")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", err)
+
+    def test_last_section_wins(self):
+        body = ("## 交付\nSTATUS: PARTIAL\nVERIFY: 待补记\n\n后续修复\n\n"
+                "## 交付\nSTATUS: DONE\nVERIFY: vitest related 41 passed\n")
+        self.assertTrue(scale.check_delivery(body)["delivered"])
+        body = "## 交付\nSTATUS: DONE\nVERIFY: 12 passed\n\n## 交付\nSTATUS: PARTIAL\nVERIFY: 3 passed\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+    def test_field_formats(self):
+        for st in ("STATUS：DONE", "**STATUS:** DONE", "**STATUS**: DONE", "- STATUS: DONE", "status: done",
+                   "STATUS: **DONE**"):
+            body = "## 交付\n%s\nVERIFY: 12 passed\n" % st
+            self.assertTrue(scale.check_delivery(body)["delivered"], st)
+        self.assertTrue(scale.check_delivery("## 交付\nSTATUS: DONE\n- **VERIFY：** 12 passed\n")["delivered"])
+        self.assertTrue(scale.check_delivery("### **交付**\nSTATUS: DONE\nVERIFY: 12 passed\n")["delivered"])
+        # the template line copied verbatim is not a status
+        self.assertFalse(scale.check_delivery(
+            "## 交付\nSTATUS: DONE | PARTIAL | NEEDS_INPUT | FAILED\nVERIFY: 12 passed\n")["delivered"])
+
+    def test_code_blocks_are_ignored(self):
+        body = "说明\n```\n## 交付\nSTATUS: DONE\nVERIFY: 12 passed\n```\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+        body = "## 交付\nSTATUS: DONE\n```bash\n# run the tests\nnpm test\n```\nVERIFY: 12 passed\n"
+        self.assertTrue(scale.check_delivery(body)["delivered"])
+        body = "## 交付\nSTATUS: DONE\n```\nVERIFY: 12 passed\n```\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+    def test_placeholder_verify(self):
+        for v in ("待补记（稍后）", "pending", "Pending.", "未验证", "not run", "暂无", "待定", "<命令及结果>",
+                  "<!-- fill -->", "TBD", "n/a", "…", "N/A", "todo"):
+            body = "## 交付\nSTATUS: DONE\nVERIFY: %s\n" % v
+            self.assertFalse(scale.check_delivery(body)["delivered"], v)
+        for v in ("pytest 12 passed", "未运行 e2e；单元测试 12 passed", "npm test: 0 failed"):
+            self.assertTrue(scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY: %s\n" % v)["delivered"], v)
+
+    def test_done_file_shapes(self):
+        cases = [({"status": " DONE ", "verify": "12 passed"}, True),
+                 ({"status": "done", "verify": ["pytest 12 passed", "tsc ok"]}, True),
+                 ({"status": "DONE", "verify": True}, False),
+                 ({"status": "DONE", "verify": ["待补记"]}, False),
+                 ({"status": "DONE", "verify": []}, False),
+                 ({"status": "DONE", "verify": "pending"}, False),
+                 ({"status": True, "verify": "12 passed"}, False),
+                 ([1, 2], False)]
         with tempfile.TemporaryDirectory() as d:
-            f = os.path.join(d, "r.jsonl")
-            write(f, "\n".join(json.dumps(x) for x in lines) + "\n")
-            p = subprocess.run([sys.executable, METRICS, d, "--format", "json"], capture_output=True, text=True)
-            self.assertEqual(p.returncode, 0, p.stderr)
-            md = subprocess.run([sys.executable, METRICS, d], capture_output=True, text=True)
-            self.assertEqual(md.returncode, 0, md.stderr)
-            anon = subprocess.run([sys.executable, METRICS, d, "--export-anon", "--raw"], capture_output=True, text=True)
-            self.assertEqual(anon.returncode, 0, anon.stderr)
-            return json.loads(p.stdout), md.stdout, json.loads(anon.stdout)
+            f = os.path.join(d, "done.json")
+            for data, want in cases:
+                write(f, json.dumps(data))
+                self.assertEqual(scale.check_done_file(f)["delivered"], want, data)
+            self.assertEqual(scale.check_done_file(os.path.join(d, "missing.json"))["reason"], "done_file_unreadable")
 
-    def test_scale_out_metrics(self):
-        acts = [150, 160, 240, 150]
-        recs = [{"type": "run", "run_id": "r1", "wall_min": 245, "tasks": 4, "max_concurrency": 4,
-                 "concurrency_limit": 20, "target_shard_min": 40}]
-        for i, a in enumerate(acts):
-            recs.append({"type": "task", "run_id": "r1", "task_id": "s%d" % i, "shard_group": "patrol",
-                         "units_planned": 150, "units_actual": 150, "unit_min_est": 1.0, "overhead_min": 8,
-                         "actual_min": a, "test_scope": "full", "test_min": 12, "resplit": False})
-        recs += [{"type": "merge", "run_id": "r1", "group_seq": 1, "shards": ["s0", "s1"], "verify_runs": 1,
-                  "full_test": True, "full_test_min": 12},
-                 {"type": "merge", "run_id": "r1", "group_seq": 2, "shards": ["s2", "s3"], "verify_runs": 1,
-                  "full_test": True, "full_test_min": 11},
-                 {"type": "monitor", "run_id": "r1", "metric": "duration_ratio", "level": 1, "label": "effective",
-                  "rate_limited": False, "analysis_cost_usd": None},
-                 {"type": "monitor", "run_id": "r1", "metric": "idle_min", "level": 2, "label": "false_positive",
-                  "rate_limited": True, "analysis_cost_usd": 0.2},
-                 {"type": "monitor", "run_id": "r1", "event": "missed", "metric": "idle_min"}]
-        rep, md, anon = self.report(recs)
-        x = rep["scale_out"][0]
-        self.assertAlmostEqual(x["parallel_efficiency"], sum(acts) / (4 * 240))
-        self.assertAlmostEqual(x["straggler_ratio"], 240 / 155)
-        self.assertAlmostEqual(x["concurrency_utilization"], 0.2)
-        self.assertEqual(x["full_tests"], 6)
-        self.assertEqual(x["full_test_min"], 12 * 4 + 23)
-        self.assertEqual(x["shards_per_full_test"], 2)
-        self.assertEqual((x["merge_groups"], x["shards_per_group"], x["verify_runs"]), (2, 2, 2))
-        self.assertEqual((x["monitor_triggers"], x["monitor_level1"], x["monitor_level2"]), (2, 1, 1))
-        self.assertEqual((x["monitor_rate_limited"], x["monitor_missed"]), (1, 1))
-        self.assertAlmostEqual(x["analysis_cost_usd"], 0.2)
-        self.assertEqual(x["monitor_by_metric"]["idle_min"]["missed"], 1)
-        self.assertEqual(x["suggest_shards"], 15)  # measured ~0.98 min/unit -> ceil(588/40)
-        msgs = " ".join(s["message"] for s in rep["signals"])
-        self.assertIn("同类任务下次切成 15 片", msgs)
-        self.assertIn("全量测试改成每 4 片合入后跑一次", msgs)
-        self.assertIn("4b. 分片", md)
-        self.assertEqual(anon["summary"]["scale_out"][0]["merge_groups"], 2)
-        kinds = {r["type"] for r in anon["records"]}
-        self.assertEqual(kinds, {"run", "task", "merge", "monitor"})
-        self.assertNotIn("s0", json.dumps(anon["records"]))
 
-    def test_old_records_without_new_fields(self):
-        rep, md, _ = self.report([{"type": "run", "run_id": "old", "wall_min": 30},
-                                  {"type": "task", "run_id": "old", "task_id": "t1", "actual_min": 10}])
-        self.assertEqual(rep["scale_out"], [])
-        self.assertNotIn("4b. 分片", md)
+class TestScopeEdges(unittest.TestCase):
+    def test_major5_dot_paths_match_foundation(self):
+        r = scale.test_scope([".github/workflows/ci.yml", ".eslintrc.json"], [])
+        self.assertEqual(r["scope"], "full")
+        self.assertEqual(len(r["foundation_hits"]), 2)
+        self.assertEqual(scale.test_scope([".storybook/main.ts"])["scope"], "full")
+        self.assertEqual(scale.test_scope(["./.github/workflows/ci.yml"])["scope"], "full")
+        self.assertEqual(scale.test_scope([".config/app.ts"], [".config/**"])["scope"], "full")
 
-    def test_partial_new_fields_do_not_crash(self):
-        rep, _, _ = self.report([{"type": "task", "run_id": "p", "task_id": "s1", "shard_group": "g"},
-                                 {"type": "merge", "run_id": "p"}, {"type": "monitor", "run_id": "p"}])
-        x = rep["scale_out"][0]
-        self.assertIsNone(x["parallel_efficiency"])
-        self.assertIsNone(x["suggest_shards"])
+    def test_prefix_only_and_backslashes(self):
+        self.assertEqual(scale.norm_path("./././a/b.ts"), "a/b.ts")
+        self.assertEqual(scale.norm_path(".hidden/x"), ".hidden/x")
+        self.assertEqual(scale.norm_path("src\\store\\a.ts"), "src/store/a.ts")
+        self.assertEqual(scale.test_scope(["src\\store\\a.ts"], ["src/store/**"])["scope"], "full")
+        self.assertEqual(scale.test_scope(["src/a.ts"], ["./src/a.ts"])["scope"], "full")
+
+    def test_monorepo_manifests(self):
+        for f in ("services/api/go.mod", "crates/core/Cargo.toml", "packages/py/pyproject.toml",
+                  "apps/web/Makefile", "apps/web/pnpm-lock.yaml", "apps/web/yarn.lock", "go.mod", "Makefile"):
+            self.assertEqual(scale.test_scope([f])["scope"], "full", f)
+        self.assertEqual(scale.test_scope(["src/makefile_utils.ts"])["scope"], "related")
+
+
+class MergeGroupEdges(unittest.TestCase):
+    def test_duplicate_ids_are_deferred_not_dropped(self):
+        r = scale.merge_group([{"id": "s1", "files": ["a"]}, {"id": "s1", "files": ["b"]}, {"id": "s2", "files": ["c"]}])
+        self.assertEqual(r["group"], ["s2"])
+        self.assertIn({"id": "s1", "reason": "duplicate_id"}, r["deferred"])
+
+    def test_cycles_and_self_dependency(self):
+        r = scale.merge_group([{"id": "a", "files": ["a"], "depends_on": ["b"]},
+                               {"id": "b", "files": ["b"], "depends_on": ["a"]},
+                               {"id": "c", "files": ["c"], "depends_on": ["c"]},
+                               {"id": "d", "files": ["d"], "depends_on": ["a"]},
+                               {"id": "e", "files": ["e"]}])
+        reasons = {d["id"]: d["reason"] for d in r["deferred"]}
+        self.assertEqual(reasons["a"], "dependency_cycle")
+        self.assertEqual(reasons["b"], "dependency_cycle")
+        self.assertEqual(reasons["c"], "dependency_cycle")
+        self.assertEqual(reasons["d"], "depends_on:a")
+        self.assertEqual(r["group"], ["e"])
+
+    def test_missing_id_never_in_group(self):
+        r = scale.merge_group([{"files": ["a"]}, {"id": "s2", "files": ["b"]}])
+        self.assertEqual(r["group"], ["s2"])
+        self.assertEqual(r["deferred"][0]["reason"], "missing_id")
+
+    def test_wait_never_negative_and_string_eta(self):
+        r = scale.merge_group([{"id": "s1", "files": ["a"]}], pending=[{"id": "s2", "eta_min": -5}])
+        self.assertEqual(r["wait_min"], 0)
+        r = scale.merge_group([{"id": "s1", "files": ["a"]}], pending=[{"id": "s2", "eta_min": "4"}])
+        self.assertEqual((r["wait_min"], r["wait_for"]), (4, ["s2"]))
+        r = scale.merge_group([{"id": "s1", "files": ["a"]}], pending=[{"id": "s2", "eta_min": 10}], wait_max_min=10)
+        self.assertEqual(r["wait_for"], ["s2"])  # exactly at the limit still waits
+
+    def test_delivered_and_pending_does_not_wait_for_itself(self):
+        r = scale.merge_group([{"id": "s1", "files": ["a"]}, {"id": "s2", "files": ["b"], "depends_on": ["s1"]}],
+                              pending=[{"id": "s1", "eta_min": 3}])
+        self.assertEqual(r["group"], ["s1", "s2"])
+        self.assertEqual(r["wait_for"], [])
+        self.assertEqual(r["ignored_pending"], ["s1"])
+
+    def test_directory_owners_lists_and_none(self):
+        owners = {"shared/": "fix", "./lib/util.ts": ["s1", "s3"], "free.ts": None}
+        r = scale.merge_group([{"id": "s1", "files": ["lib/util.ts"]},
+                               {"id": "s2", "files": ["shared/sort/index.ts"]},
+                               {"id": "s3", "files": ["free.ts"]},
+                               {"id": "fix", "files": ["shared/x.ts"]}], owners=owners)
+        reasons = {d["id"]: d["reason"] for d in r["deferred"]}
+        self.assertEqual(reasons, {"s2": "touches_owned_file"})
+        self.assertEqual(r["group"], ["s1", "s3", "fix"])
+
+    def test_dir_file_and_dot_slash_overlap(self):
+        r = scale.merge_group([{"id": "s1", "files": ["./src/a.ts"]}, {"id": "s2", "files": ["src/a.ts"]},
+                               {"id": "s3", "files": ["pages/"]}, {"id": "s4", "files": ["pages/x.ts"]}])
+        reasons = {d["id"]: d["reason"] for d in r["deferred"]}
+        self.assertEqual(reasons, {"s2": "overlap", "s4": "overlap"})
+        self.assertEqual(r["verify_files"], ["pages/", "src/a.ts"])
+
+    def test_cli_bad_shapes_exit_2(self):
+        for bad in ("[1, 2]", '"str"', '{"delivered": [1]}', '{"delivered": [], "owners": [1]}'):
+            rc, _, err = cli("merge-group", stdin=bad)
+            self.assertEqual(rc, 2, bad)
+            self.assertNotIn("Traceback", err)
+        rc, o, _ = cli("merge-group", stdin=json.dumps({"delivered": [{"id": "a", "files": ["a"]}]}))
+        self.assertEqual((rc, o["group"]), (0, ["a"]))
+
+
+class LocateEdges(unittest.TestCase):
+    def test_major6_generic_name_in_unrelated_dir_does_not_win(self):
+        r = scale.locate([{"id": "a", "files": ["src/deep/a/b/c/y.ts"]}, {"id": "b", "files": ["src/other/x.ts"]}],
+                         ["src/deep/a/b/c/x.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+        r = scale.locate([{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["src/ui/index.ts"]}],
+                         ["src/api/index.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+
+    def test_test_name_conventions_and_mirrors(self):
+        cases = [("pkg/foo.py", "pkg/test_foo.py"), ("svc/foo.go", "svc/foo_test.go"),
+                 ("src/pkg/mod.py", "tests/pkg/test_mod.py"), ("foo.ts", "foo.test.ts"),
+                 ("src/ui/Button.tsx", "src/ui/__tests__/Button.test.tsx"),
+                 ("src/main/java/a/Foo.java", "src/test/java/a/FooTest.java")]
+        for src, test in cases:
+            group = [{"id": "hit", "files": [src]}, {"id": "other", "files": ["zzz/unrelated.ts"]}]
+            r = scale.locate(group, [test])
+            self.assertEqual(r["culprits"], ["hit"], (src, test))
+
+    def test_path_forms(self):
+        group = [{"id": "a", "files": ["./web\\users\\Form.tsx"]}, {"id": "b", "files": ["web/orders/List.tsx"]}]
+        self.assertEqual(scale.locate(group, ["web/users/Form.tsx"])["culprits"], ["a"])
+        self.assertEqual(scale.locate(group, ["/ci/work/repo/web/users/Form.tsx"])["culprits"], ["a"])
+
+    def test_bisect_starts_with_tied_candidates(self):
+        group = [{"id": "s1", "files": ["web/a/x.ts"]}, {"id": "s2", "files": ["web/b/y.ts"]},
+                 {"id": "s3", "files": ["api/c.ts"]}, {"id": "s4", "files": ["api/d.ts"]}]
+        # p5 item 3: sharing only the top-level directory (web/) is no evidence, so s1/s2 are not
+        # narrowed down any more; with no candidates at all every shard is a suspect
+        r = scale.locate(group, ["web/flow.spec.ts"])
+        self.assertEqual(r["next"]["action"], "bisect")
+        self.assertEqual(r["next"]["suspects"], ["s1", "s2", "s3", "s4"])
+        self.assertEqual(r["next"]["revert_and_retest"], ["s1", "s2"])
+
+    def test_bisect_tied_deeper_candidates_still_narrow(self):
+        group = [{"id": "s1", "files": ["web/ui/a/x.ts"]}, {"id": "s2", "files": ["web/ui/b/y.ts"]},
+                 {"id": "s3", "files": ["api/c.ts"]}]
+        r = scale.locate(group, ["web/ui/flow.spec.ts"])
+        self.assertEqual(r["next"]["suspects"], ["s1", "s2"])
+
+    def test_cli_bad_shapes_exit_2(self):
+        for bad in ("[1]", '{"group": [{"files": ["a"]}], "failures": []}', '{"group": [], "failures": "a"}'):
+            rc, _, err = cli("locate", stdin=bad)
+            self.assertEqual(rc, 2, bad)
+            self.assertNotIn("Traceback", err)
+
+
+class RemovedCommands(unittest.TestCase):
+    def test_deferred_subcommands_are_gone(self):
+        for c in ("monitor", "calibrate", "thresholds", "label", "full-gate"):
+            rc, _, err = cli(c)
+            self.assertEqual(rc, 2, c)
+            self.assertIn("invalid choice", err)
+
+    def test_kept_subcommands_exist(self):
+        for c in ("shards", "straggler", "progress", "delivered", "test-scope", "merge-group", "locate"):
+            p = subprocess.run([sys.executable, SCRIPT, c, "--help"], capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, c)
+
+
+class DeliveryMultilineVerify(unittest.TestCase):
+    """Real workers write VERIFY as a list on the following lines."""
+
+    def test_verify_on_following_lines_counts(self):
+        body = "## 交付\nSTATUS: DONE\nBRANCH: hq/p1 @ abc\nCHANGES: x\nVERIFY:\n- python3 -m unittest -> Ran 79 tests OK\n- wc -l 1458 -> 924\nCHECKPOINTS: none\n"
+        self.assertTrue(scale.check_delivery(body)["delivered"])
+
+    def test_empty_verify_followed_by_other_field_is_not_delivered(self):
+        body = "## 交付\nSTATUS: DONE\nVERIFY:\nCHECKPOINTS: none\nDERIVED: none\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+    def test_placeholder_lines_after_verify_do_not_count(self):
+        body = "## 交付\nSTATUS: DONE\nVERIFY:\n- 待补记\n- <命令及结果>\nRISKS: none\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+
+class DeliveryReview(unittest.TestCase):
+    """p5 items 1 and 2: only an empty same-line VERIFY collects list/command lines."""
+
+    def delivered(self, verify_block, extra=""):
+        return scale.check_delivery("## 交付\nSTATUS: DONE\n" + verify_block + extra)["delivered"]
+
+    def test_placeholder_then_prose_is_not_delivered(self):
+        self.assertFalse(self.delivered("VERIFY: 待补记\n稍后补上测试结果\n"))
+
+    def test_placeholder_then_prose_cli_exits_1(self):
+        rc, out, _ = cli("delivered", stdin="## 交付\nSTATUS: DONE\nVERIFY: 待补记\n稍后补上测试结果\n")
+        self.assertEqual(rc, 1)
+        self.assertFalse(out["delivered"])
+
+    def test_same_line_value_ignores_following_list(self):
+        self.assertFalse(self.delivered("VERIFY: 待补记\n- pytest 12 passed\n"))
+
+    def test_empty_verify_then_prose_is_not_delivered(self):
+        self.assertFalse(self.delivered("VERIFY:\n测试已经通过了\n"))
+
+    def test_blank_line_ends_collection(self):
+        self.assertFalse(self.delivered("VERIFY:\n\n- pytest 12 passed\n"))
+
+    def test_heading_ends_collection(self):
+        self.assertFalse(self.delivered("VERIFY:\n### 细节\n- pytest 12 passed\n"))
+
+    def test_continuation_forms_count(self):
+        for line in ("- ok", "* ok", "+ ok", "• ok", "$ python3 -m unittest", "`pytest` 12 passed", "1. pytest 12 passed"):
+            self.assertTrue(self.delivered("VERIFY:\n" + line + "\n"), line)
+
+    def test_prose_after_list_stops_collecting(self):
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- 待补记\n说明文字\n- pytest 12 passed\n")
+        self.assertFalse(r["delivered"])
+
+    def test_whole_bracket_result_is_a_value(self):
+        self.assertTrue(self.delivered("VERIFY: (pytest 12 passed)\n"))
+        self.assertTrue(self.delivered("VERIFY: （pytest 12 passed）\n"))
+
+    def test_bracketed_placeholder_still_placeholder(self):
+        for v in ("（待补记）", "(TBD)", "待补记（稍后）", "(无)"):
+            self.assertFalse(self.delivered("VERIFY: " + v + "\n"), v)
+
+    def test_result_lines_are_not_fields(self):
+        for line in ("- PASS: 12 tests", "- OK: all green", "- ERROR: 0", "PASS: 12 tests"):
+            body = "VERIFY:\n- python3 -m unittest\n" + line + "\n"
+            r = scale.check_delivery("## 交付\nSTATUS: DONE\n" + body)
+            self.assertTrue(r["delivered"], line)
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- cmd\n- PASS: 12 tests\nRISKS: none\n")
+        self.assertIn("PASS: 12 tests", r["verify"])
+
+    def test_real_fields_still_end_verify(self):
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- cmd ok\nRISKS: - 一条风险\n- 另一行\n")
+        self.assertEqual(r["verify"], "- cmd ok")
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_locate_weak_top_dir_overlap_is_unlocated(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/ui/foo.test.ts"])
+        self.assertEqual(r["culprits"], [])
+        self.assertEqual(r["unresolved"], [{"failure": "src/ui/foo.test.ts", "candidates": []}])
+        self.assertEqual(r["next"]["suspects"], ["a", "b"])
+        self.assertTrue(r["next"]["revert_and_retest"])
+
+    def test_locate_two_segment_overlap_still_counts(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/api/other.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+
+    def test_locate_maven_mirror(self):
+        group = [{"id": "a", "files": ["src/main/java/com/x/Foo.java"]}, {"id": "b", "files": ["src/main/java/com/x/Bar.java"]}]
+        r = scale.locate(group, ["src/test/java/com/x/FooTest.java"])
+        self.assertEqual(r["culprits"], ["a"])
+
+    def test_locate_unlocated_suspects_include_clean_ones_when_culprit_found(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/api/handler.ts", "docs/zzz.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+        self.assertEqual(r["next"]["suspects"], ["a", "b"])
+
+    def _stragglers(self):
+        now = T0 + timedelta(minutes=60)
+        shards = [{"id": "s%d" % i, "elapsed_min": 58, "est_min": 108, "done": 20, "total": 100, "unit_min_est": 1.0}
+                  for i in range(4)]
+        return shards, now
+
+    def test_straggler_replan_owns_free_slots(self):
+        shards, now = self._stragglers()
+        rc, o, _ = cli("straggler", "--free-slots", "6", "--now", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       stdin=json.dumps(shards))
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(o["replan"])
+        self.assertEqual(o["free_slots_left"], 6 - o["replan"]["new_sessions"])
+        self.assertIn("replan", o["note"])
+
+    def test_straggler_without_replan_keeps_per_shard_accounting(self):
+        s = {"id": "a", "elapsed_min": 80, "est_min": 40, "done": 5, "total": 400}
+        rc, o, _ = cli("straggler", "--free-slots", "5", stdin=json.dumps([s]))
+        self.assertIsNone(o["replan"])
+        self.assertNotIn("note", o)
+
+    def test_non_numeric_done_is_no_progress_data(self):
+        for bad in ("12", True, [], {}):
+            r = scale.straggler_check({"id": "a", "elapsed_min": 30, "done": bad, "total": 100})
+            self.assertEqual((r["action"], r["reason"]), ("none", "no_progress_data"), bad)
+
+    def test_missing_done_is_still_no_rate_yet(self):
+        r = scale.straggler_check({"id": "a", "elapsed_min": 30, "total": 100})
+        self.assertEqual(r["reason"], "no_rate_yet")
+
+    def test_shards_overflow_exits_2(self):
+        rc, _, err = cli("shards", "--units", "10", "--unit-min", "1e308", "--limit", "4")
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Traceback", err)
+        with self.assertRaises(ValueError):
+            scale.shard_plan(10, 1e308, limit=4)
 
 
 if __name__ == "__main__":
