@@ -37,7 +37,7 @@
 
 **Codex、OpenCode、Gemini CLI、Cursor、dsh**（一行脚本，自动检测本机装了哪些工具）：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.11.0/install.sh | bash -s -- --host auto
 ```
 
 装好后重开会话，给它一个目标：
@@ -281,9 +281,9 @@ cli-worker.sh list
 ### 一行脚本（推荐，所有宿主通用）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.11.0/install.sh | bash -s -- --host auto
 ```
-不在仓库里运行时，脚本先用 git 把 `v0.10.6` 标签下载到 `~/.hq-orchestrator/v0.10.6`，再执行安装。已 clone 本仓库的直接运行 `./install.sh`。完整说明用 `./install.sh --help` 查看。
+不在仓库里运行时，脚本先用 git 把 `v0.11.0` 标签下载到 `~/.hq-orchestrator/v0.11.0`，再执行安装。已 clone 本仓库的直接运行 `./install.sh`。完整说明用 `./install.sh --help` 查看。
 
 **常用命令**
 
@@ -318,7 +318,7 @@ curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/ins
 
 | 变量 | 作用 | 例子 |
 |---|---|---|
-| `HQ_REF` | 一行安装时下载哪个标签或分支，默认 `v0.10.6` | `HQ_REF=main` |
+| `HQ_REF` | 一行安装时下载哪个标签或分支，默认 `v0.11.0` | `HQ_REF=main` |
 | `HQ_CACHE_DIR` | 下载缓存目录，默认 `~/.hq-orchestrator` | `HQ_CACHE_DIR=/tmp/hq` |
 | `HQ_REPO_URL` | 从哪个 git 仓库下载，默认本仓库 | `HQ_REPO_URL=https://example.com/fork.git` |
 | `DSH_HOME` | dsh 的主目录，默认 `~/.dsh` | `DSH_HOME=~/tools/dsh` |
@@ -356,7 +356,7 @@ OpenCode 同时读前两个目录，Claude Code 和 Codex 都装时它会看到�
 
 只用 Gemini CLI 时最简单，带 `/hq`、`/hq-retro` 和各阶段命令：
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.10.6
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.11.0
 ```
 扩展只含技能和命令，不含子代理模板（同一个仓库也是 Claude Code 插件，根目录放 `agents/` 会被 Claude Code 当成自己的子代理）。要让档位生效，再运行 `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'` 安装模板；与扩展同时装了技能时，Gemini CLI 优先用用户目录的副本，安装脚本会提示。
 
@@ -409,7 +409,7 @@ mkdir -p ~/.claude/skills && cp -r skills/hq skills/hq-retro skills/hq-plan skil
 
 | 安装方式 | 升级方法 |
 |---|---|
-| 一行脚本 | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh \| bash -s -- --update` |
+| 一行脚本 | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.11.0/install.sh \| bash -s -- --update` |
 | 一行脚本（已 clone 仓库） | `git pull` 后运行 `./install.sh --update`；项目范围加 `--scope project --project-dir <路径>` |
 | Claude Code 插件 | `/plugin marketplace update hq-orchestrator-marketplace`，再在 `/plugin` 里更新 `hq-orchestrator`；本地路径添加的 marketplace 先在那个目录 `git pull` |
 | Gemini 扩展 | `gemini extensions update hq-orchestrator` |
@@ -498,7 +498,7 @@ PLAYBOOK 的 `runs_persist`：
 
 ```
 插件与扩展清单
-  .claude-plugin/plugin.json             Claude Code 插件清单（v0.10.6）
+  .claude-plugin/plugin.json             Claude Code 插件清单（v0.11.0）
   .claude-plugin/marketplace.json        方便用 /plugin marketplace add 安装
   gemini-extension.json                  Gemini CLI 扩展清单：整个仓库可用 gemini extensions install 安装
   commands/*.toml                        Gemini 扩展的 /hq、/hq-retro 和各阶段命令（Claude Code 不读 .toml）
