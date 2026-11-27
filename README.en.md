@@ -491,7 +491,7 @@ Entirely voluntary, never uploaded automatically:
 - **Quality control**: three quality gates; verification is graded by risk into doc/code/high/e2e, the main session re-runs acceptance commands itself only for high, and the full suite runs only at checkpoints; high-risk or large changes get a separate independent reviewer.
 - **Large batches sharded by workload** (`references/scale-out.md`, `scripts/scale.py`): for tasks that repeat one kind of work unit many times (page walkthroughs, bulk file edits), the shard count comes from "units × minutes per unit + start-up overhead" and a target shard length (40 minutes by default), not from the number of modules (e.g. 600 pages × 1.5 min with a concurrency limit of 20 → 16 shards and about an hour for the batch, instead of 4 shards of 4 hours each). Shared tools are fixed first by a prerequisite session, and each shared file gets a single owner. At each check-in an `HQ-PROGRESS` line gives the remaining time; a straggler with enough work left is split onto new sessions, one that is nearly done is left alone.
 - **Layered verification, group merges**: sub-sessions run only type checks and related tests (the full suite only when they change shared foundation files); each check-in merges all delivered shards together and verifies once, and a failure is traced to the shard that caused it so only that one is handled; the full suite waits for checkpoints such as a finished batch, every N merged shards or before pushing to main. Completion requires a `## 交付` (Delivery) section with a verification result, not just the word appearing somewhere.
-- **Active monitoring**: each check-in also looks at duration, idle time (from the event stream), cost, rework, failure rate and straggler ratio; a threshold fires after 2 consecutive breaches, severe levels fire at once. Level 1 acts on the spot (remind, re-split, locate, pause and ask you); level 2 analyses whether hq itself could avoid the problem, deduplicated by "metric + root cause", at most once per batch and 3 times a day, with non-severe triggers merged at batch end. Thresholds are calibrated from false positives and misses (≤20% per step, with bounds, per task type, never overriding values you set, one-step rollback).
+- **Monitoring starts minimal**: shard check-ins read only the progress line and the latest event, propose a re-split or re-plan when a shard lags or unit times were broadly misestimated, and send one reminder when a shard is idle; if a batch ends with severe or repeated problems, the report suggests running `/hq-retro`. Heavier machinery (threshold monitoring, rate-limited analysis, automatic calibration) waits for real run data (triggers in the "Deferred" section of `references/scale-out.md`).
 - **Recoverable**: all state is written to the ledger, so work can continue after context compression or a session restart.
 
 ## Repository layout
@@ -519,7 +519,7 @@ Stage skills
 
 Reference docs (skills/hq/references/)
   runtimes.md                            abstract capabilities, general rules for dispatch channels (A/B/C/D/W) and host index
-  scale-out.md                           large batches: shard by workload, shared tools and ownership, straggler re-split, layered verification, group merges, active monitoring, threshold calibration
+  scale-out.md                           large batches: shard by workload, shared tools and ownership, straggler re-split, layered verification, group merges; deferred features and their triggers
   hosts/*.md                             per-host capability table, tier mapping, install/invocation, open items; kimi.md is an assist worker
   brief-template.md                      task brief template for sub-sessions (with verification level and checkpoints) and delivery format
   metrics-schema.md                      run-data format (JSONL, v1) and usage definitions
@@ -533,7 +533,7 @@ Scripts (skills/hq/scripts/)
   cli-worker.sh, backends/*.sh           W channel: runs each CLI in the background in a separate git worktree; one backend file per CLI
   assist-config.py                       assist worker settings: reads the codex model catalog, suggests tiers, writes user or project settings, validates
   metrics.py                             summarizes run data into a metrics report (read-only); --export-anon exports a whitelisted anonymized copy
-  scale.py                               the sharding rules as code: shard count, stragglers, delivery check, test scope, full-suite gate, merge groups, failure location, monitoring, calibration
+  scale.py                               the sharding rules as code: shard count, stragglers and re-planning, delivery check, test scope, merge groups, failure location
   runs-persist.sh                        saves run records into the repository (dedicated hq/runs branch or the current branch) and fetches them back
   backlog-check.py                       backlog checker (read-only): ids, dependencies, tier vs score, requirement coverage, tasks on hold, critical path
   doc-check.py                           requirements doc, research report, architecture and launch checklist checker (read-only)
