@@ -115,7 +115,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
   - **W CLI 子进程 worker**：`scripts/cli-worker.sh` 在独立 git worktree 里后台运行 codex、claude、opencode、gemini 或 cursor 的命令行，任何有 shell 的宿主都能用（各 CLI 的沙箱映射见 `references/runtimes.md` W 节）。**何时用**：宿主没有合适的子代理能力；需要真正的进程隔离；PLAYBOOK 授权区开启了跨厂商 worker（`worker_clis`）。
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
-- **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
+- **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .codex/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
 - **辅助执行者**（开启时）：先运行 `python3 <scripts>/assist-config.py check --project . --json`，拿到合并后生效的设置（`effective`，再叠加本次 `--assist` 参数）、错误和提醒：模型不在 codex 模型目录里、思考深度不被该模型支持的 profile 按“不可用”处理（`unavailable:bad_model`），即将下线的模型只在汇报里提醒。然后去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥；辅助都走 W 通道，还要确认本会话能建 worktree（`git worktree add` 要写 `.git`，Codex 等宿主的沙箱可能禁止），不能建就整个名单按“不可用”停用。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
 - **预算**：远程并发上限取 PLAYBOOK 的 `remote_concurrency`（默认 4；宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、单批子任务数上限取 `max_subtasks`（默认 12）、金额上限取 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。并发上限只决定同时开几个，不影响每个任务的档位（铁律 8）。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
@@ -123,7 +123,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 ## 第 2 步：规划成任务图（DAG）
 
 - **并行以缩短总用时为准**：总用时最短只能压到关键路径的长度，所以优先缩短关键路径，而不是增加并行数。
-- **打包优先**：几个小而相关的任务打包给一个子会话。只有任务够大（约 15 分钟以上）、改的文件不重叠，才拆开并行。
+- **打包优先**：几个小而相关的任务打包给一个子会话。只有任务够大（约 15 分钟以上）、改的文件不重叠，才拆开并行。单个任务约 15–120 分钟（与 `/hq-plan` 一致），超过的要拆开，否则子会话容易失控、审核的 diff 也太大。
 - **分片任务**（同一种工作单元做很多遍：页面巡检、路由回归、批量改文件、跑用例）：按工作量算片数，不按模块数（`scripts/scale.py shards`，单元耗时拿不准先跑小样本）；切分按单元清单均匀切；各片共用的工具先派前置会话改好，跨片共享文件指定唯一归属，其他片只登记不改。规则见 `references/scale-out.md` 第 1–3 节。派发前一两句话告诉用户总工作量、片数、每片和整批预计用时、为什么是这个片数。
 - **难度单一**：每个任务内部难度要一致，不要把“机械改名”和“找根因”塞进同一个任务，否则档位要么浪费要么不够，后面还得调档。
 - **文件归属**：并行任务不能改同一个文件。共享接口、类型、配置先单独拆成前置任务。
@@ -218,7 +218,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 步骤：
 1. **看报告**：必须按模板交付，缺验证证据的视为没完成。完成判定看 `## 交付` 小节标题、其中的 `STATUS: DONE` 和有结果的 `VERIFY:`（或约定的完成文件），用 `scale.py delivered`；正文里出现“交付”两个字（如“交付段待补记”）不算。
 2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才由主会话逐个复跑验收命令。
-3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行；辅助执行者的产出超过约 150 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
+3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行；辅助执行者的产出超过约 150 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。审核发现的每个问题记进审核任务的 `found_issues`（标严重度和引入它的来源任务），汇总时计到来源任务头上（来源任务的 `issues.integration` 不再重复记）；只做了部分验证（如只核对文档、没实机运行）的，`verify_pass` 记 `"partial"`，不记 `true`。
 4. **归并**：每次巡检把这一轮所有已交付的任务作为一组（`scale.py merge-group`：推迟文件重叠、依赖未完成、改了别人归属文件的），按 DAG 拓扑顺序合进 `hq/integration`，然后一次校验（类型检查 + 各片改动并集的关联测试）。全量测试只在检查点跑（一批全部合入、累计合入达到阈值、推主干前、CI 要求的节点，`scale.py full-gate`），有 e2e 的也在这时跑；一起校验失败时用 `scale.py locate` 定位到具体任务，只回退或修复那一个。汇报写清这组合入了哪些、跑了哪些校验、为什么跑或没跑全量。小冲突自己解决，大冲突派子任务。规则见 `references/scale-out.md` 第 5、6 节。
 5. **收尾**：通过的标 `DONE`，按宿主文档归档或停止 worker（B 归档会话，W 用 `cli-worker.sh stop`），worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
    - **远程 `hq/*` 分支**：确认已完全合入（`git merge-base --is-ancestor origin/hq/<id> <目标分支>`）后再删。有的宿主可能不允许删除远程分支（如云端会话报 `unexpected disconnect` 或 `remote end hung up`），试一次就停，不要反复重试或绕路，把没删掉的分支列进汇报，交给用户删除。
@@ -228,7 +228,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 - **每个任务结束时**往 `.hq/runs/<run_id>.jsonl` 追加一行 `type:"task"`，**整批结束时**追加一行 `type:"run"`。只用手头已有的信息，**不为记录数据额外派子会话**。字段定义以 `references/metrics-schema.md` 为准，主会话直接追加；`scripts/metrics.py` 只读取汇总，写完可运行一次确认能读、损坏行数为 0。要点：
   - task：run_id、task_id、host、kind、risk、tier_score、tier、plan_tier（按计划执行时）、model、effort、channel、est_min、actual_min、tokens、cost_usd、attempts、tier_changes、handoffs、derived_tasks、checkpoints、user_manual_adjust、scope_violation、drift、verify_level、verify_evidence、verify_pass、issues{review, integration, user, severity_max}、review_outcome、user_corrections。
-  - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
+  - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version_at_start（开始时生效的版本，开始时填）、plugin_version（运行产出的版本，收尾时填；没改插件就与前者相同）。审核任务另记可选 `found_issues[{severity, origin_task_id}]`；有待修项时记 `followups[{desc, fixed_in}]`，修好后回填 `fixed_in`。
   - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
   - 规则标记（`bias:+1(…)`、`downgrade:user_allowed(-N)`、`rate_limited`、`assist_unavailable:<原因>`、`billing:<计费方>`、`effort_env:<值>`、`tier:not-applied`）一律写进 task 的 `flags` 数组，不再只写在 notes 里，`metrics.py` 按标记分组对比。
@@ -242,7 +242,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ## 第 10 步：汇报
 
-阶段性和最终汇报都要简短：完成了什么（附分支名）、怎么验证的、做了哪些关键决策和假设、哪些还卡着或需要用户决定（按停止条件一次性列出，附推荐选项）、档位分布和按模型统计的消耗、没删掉的远程分支、是否该跑 `/hq-retro`。
+阶段性和最终汇报都要简短：完成了什么（附分支名）、怎么验证的、做了哪些关键决策和假设、哪些还卡着或需要用户决定（按停止条件一次性列出，附推荐选项）、档位分布和按模型统计的消耗、因资源不足停掉或排队的任务（`throttle_events` > 0 时）、没删掉的远程分支、是否该跑 `/hq-retro`。
 
 ## 自主决策与停止条件
 
@@ -258,6 +258,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 3. 需求有歧义，调研后仍判断不了，且猜错的返工代价超过约 1 小时。否则选最可能的解释继续做，把假设记进“决策”区。
 
 停下时：把问题攒在一起一次性问，每个问题附推荐选项；同时继续推进不受影响的工作。
+
+**被权限检查拒绝的操作**：主会话和子会话都不得重试，也不得换一种方式绕过（换命令、换工具、换通道都算），一律记进“待问用户”交给用户决定。说明里要把这条写给子会话。
 
 **授权配置**（写在 `.hq/PLAYBOOK.md` 的“授权”区）：
 - `merge_default: auto-if-gates-pass | ask`（默认 `ask`）：质量门槛通过后是否自动合入默认分支。

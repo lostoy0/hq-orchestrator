@@ -12,7 +12,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ## 先读
 
-1. 找 hq 技能目录 `<hq>`：本文件同级的 `../hq/`（里面有 `SKILL.md`）；没有就读 `~/.hq/skill-path`；再没有就用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/SKILL.md' 2>/dev/null | head -1`，取其目录。
+1. 找 hq 技能目录 `<hq>`：本文件同级的 `../hq/`（里面有 `SKILL.md`）；没有就读 `~/.hq/skill-path`；再没有就用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .codex/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/SKILL.md' 2>/dev/null | head -1`，取其目录。
 2. 读 `<hq>/SKILL.md`（主流程：本次运行按它执行）、`<hq>/references/stages/common.md`（阶段通用规则：产物目录、编号、模式、评审、决策）、`<hq>/references/backlog-schema.md`（清单格式）、`<hq>/calibration.md`（打分和档位）。
 3. 台账头部写 `stage: plan`。
 

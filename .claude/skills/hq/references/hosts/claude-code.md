@@ -46,7 +46,7 @@
 
 - **A**：子代理和主会话同机，派发前必须过 `resources.sh`。worktree 需要 git 仓库，否则写操作只能串行。派 worktree 任务前确认 `.claude/worktrees/` 已被忽略（`git check-ignore -q .claude/worktrees/x`），没有就写进 `.git/info/exclude`。检查点：子代理没有回信通道，提前返回。**合入按交付报告里 BRANCH 写的分支**：子代理可能在 worktree 里自建分支（如 `hq/<id>`），宿主返回的 `worktree-agent-*` 分支可能还停在基线；删 worktree 前先确认要合的提交已合入（`git merge-base --is-ancestor <sha> HEAD`）。
 - **B**：子会话只能看到已推送的代码；基线没推送就推到 `hq/base` 等 `hq/*` 分支。说明里写上主会话 session_id。
-- **C**：资源检测也要在那台电脑上跑：`Bash(_host=..., command="bash <路径>/resources.sh 1500 1")`，脚本需先拷过去或内联。子代理用不了 `_host` 时由主会话亲自执行这些本地步骤。
+- **C**：资源检测也要在那台电脑上跑：`Bash(_host=..., command="bash <路径>/resources.sh 1500 1")`，脚本需先拷过去或内联。子代理用不了 `_host` 时由主会话亲自执行这些本地步骤；能用的，派给 A 子代理的说明里要写明“本地步骤的工具调用带 `_host=<电脑>`”，否则子代理会在云端容器里执行。
 - **D**：主会话难以自动监控；需要强监控时建议把整个编排放到云端会话做（B + C）。
 - **W**：见 `../runtimes.md` 的 W 节；Claude Code 里通过 Bash 工具调用 `cli-worker.sh`。
 

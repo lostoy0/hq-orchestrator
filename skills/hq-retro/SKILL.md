@@ -17,7 +17,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 ## 路径约定
 
 - 运行数据：目标项目的 `.hq/runs/*.jsonl`；本地运行时还有 `~/.claude/hq/runs/*.jsonl`；开了 `runs_persist: branch` 的项目，历史记录在专用分支 `hq/runs` 上（用同目录的 `scripts/runs-persist.sh fetch` 取到 `.hq/runs-archive/`）。
-- 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后先看 `~/.hq/skill-path` 下的 `scripts/metrics.py`，没有再用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
+- 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后先看 `~/.hq/skill-path` 下的 `scripts/metrics.py`，没有再用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.codex/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .codex/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
 - 项目经验：`.hq/PLAYBOOK.md`（模板 `skills/hq/references/playbook-template.md`）。
 - 改动历史：插件仓库的 `CHANGELOG.md`。找不到就在报告里写明，当作“没有上次改动”。
 - 这些文件都只读，复盘本身不修改它们（PLAYBOOK 除外，见第 7、8 步）。
