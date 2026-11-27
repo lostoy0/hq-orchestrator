@@ -37,7 +37,7 @@ Handing a big goal to a single session tends to drift, run serially and fill the
 
 **Codex, OpenCode, Gemini CLI, Cursor, dsh** (one-line script that detects which tools you have):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.5/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh | bash -s -- --host auto
 ```
 
 Start a new session and give it a goal:
@@ -281,9 +281,9 @@ cli-worker.sh list
 ### One-line script (recommended, works for every host)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.5/install.sh | bash -s -- --host auto
+curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh | bash -s -- --host auto
 ```
-When not run from inside the repository, the script first uses git to download the `v0.10.5` tag to `~/.hq-orchestrator/v0.10.5`, then installs. With a clone of this repository, run `./install.sh` directly. Full help: `./install.sh --help`.
+When not run from inside the repository, the script first uses git to download the `v0.10.6` tag to `~/.hq-orchestrator/v0.10.6`, then installs. With a clone of this repository, run `./install.sh` directly. Full help: `./install.sh --help`.
 
 **Common commands**
 
@@ -318,7 +318,7 @@ When not run from inside the repository, the script first uses git to download t
 
 | Variable | What it does | Example |
 |---|---|---|
-| `HQ_REF` | Which tag or branch the one-line install downloads; defaults to `v0.10.5` | `HQ_REF=main` |
+| `HQ_REF` | Which tag or branch the one-line install downloads; defaults to `v0.10.6` | `HQ_REF=main` |
 | `HQ_CACHE_DIR` | Download cache directory; defaults to `~/.hq-orchestrator` | `HQ_CACHE_DIR=/tmp/hq` |
 | `HQ_REPO_URL` | Which git repository to download from; defaults to this one | `HQ_REPO_URL=https://example.com/fork.git` |
 | `DSH_HOME` | dsh's home directory; defaults to `~/.dsh` | `DSH_HOME=~/tools/dsh` |
@@ -356,7 +356,7 @@ Then invoke them with `/hq-orchestrator:hq <goal>` and `/hq-orchestrator:hq-retr
 
 Simplest if you only use Gemini CLI; includes `/hq`, `/hq-retro` and the stage commands:
 ```bash
-gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.10.5
+gemini extensions install https://github.com/lostoy0/hq-orchestrator --ref v0.10.6
 ```
 The extension holds only the skills and commands, not the sub-agent templates (the same repository is also a Claude Code plugin, and Claude Code would load a root `agents/` as its own sub-agents). For tiers to apply, also run `./install.sh --host gemini --with-agents --model-map 'T0=…,…,T4=…'`; if that also installs the skills, Gemini CLI prefers the user-directory copy over the extension's, and the script says so.
 
@@ -409,7 +409,7 @@ First check what you have: `./install.sh --list` shows each installed copy with 
 
 | Install method | How to upgrade |
 |---|---|
-| One-line script | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.5/install.sh \| bash -s -- --update` |
+| One-line script | `curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v0.10.6/install.sh \| bash -s -- --update` |
 | One-line script (cloned repository) | `git pull`, then `./install.sh --update`; for project scope add `--scope project --project-dir <path>` |
 | Claude Code plugin | `/plugin marketplace update hq-orchestrator-marketplace`, then update `hq-orchestrator` from `/plugin`; for a marketplace added from a local path, `git pull` in that directory first |
 | Gemini extension | `gemini extensions update hq-orchestrator` |
@@ -495,7 +495,7 @@ Entirely voluntary, never uploaded automatically:
 
 ```
 Plugin and extension manifests
-  .claude-plugin/plugin.json             Claude Code plugin manifest (v0.10.5)
+  .claude-plugin/plugin.json             Claude Code plugin manifest (v0.10.6)
   .claude-plugin/marketplace.json        for installing with /plugin marketplace add
   gemini-extension.json                  Gemini CLI extension manifest: the whole repository installs with gemini extensions install
   commands/*.toml                        the Gemini extension's /hq, /hq-retro and stage commands (Claude Code does not read .toml)

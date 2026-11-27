@@ -1,5 +1,5 @@
 {
   "name": "hq-orchestrator",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "司令部模式（HQ）：主会话统筹、子会话执行的多任务编排技能，附带运行数据记录和 /hq-retro 复盘。提供 /hq、/hq-retro 命令和 hq、hq-retro 两个技能。"
 }
