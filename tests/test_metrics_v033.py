@@ -229,8 +229,81 @@ class ValueCounts(Base):
         self.assertEqual(cols[cols.index("一次通过率") + 1], "一次通过率 95% 区间")
 
 
+class DowngradeSignal(Base):
+    """v0.3.3 downgrade hint: risk=low only, actual/est normalized by the run median, < 0.7 with 1e-9 tolerance."""
+
+    def build(self, n_low=5, low_risk="low", low=(5, 10), ctrl=(10, 10), n_ctrl=None, extra=()):
+        rows = [task("x", "l%d" % i, tier="T1", risk=low_risk, attempts=1, review_outcome="pass",
+                     est_min=low[1], actual_min=low[0]) for i in range(n_low)]
+        rows += [task("x", "c%d" % i, tier="T3", risk="med", attempts=1, review_outcome="pass",
+                      est_min=ctrl[1], actual_min=ctrl[0]) for i in range(n_low + 1 if n_ctrl is None else n_ctrl)]
+        rows += list(extra)
+        self.write("x.jsonl", rows)
+        return [s for s in self.rep()["signals"] if "降档" in s["message"]]
+
+    def scopes(self, sigs):
+        return [s["scope"] for s in sigs]
+
+    def test_fires_for_low_risk_fast_group(self):
+        s = self.build()
+        t1 = [x for x in s if x["scope"] == "tier T1"]
+        self.assertEqual(len(t1), 1)
+        self.assertIn("归一化", t1[0]["message"])
+        self.assertIn("0.50", t1[0]["message"])  # 0.5 / run median 1.0
+        self.assertEqual(t1[0]["n"], 5)
+        self.assertNotIn("tier T3", self.scopes(s))
+
+    def test_whole_run_fast_does_not_fire(self):
+        self.assertEqual(self.build(n_ctrl=0), [])  # old rule would fire on raw 0.5
+
+    def test_high_risk_tasks_not_counted(self):
+        self.assertEqual(self.build(low_risk="high"), [])
+        self.assertEqual(self.build(low_risk="med"), [])
+        # failing high-risk tasks in the same tier do not block the low-risk group
+        bad = [task("x", "h%d" % i, tier="T1", risk="high", attempts=3, review_outcome="rework",
+                    est_min=10, actual_min=5) for i in range(3)]
+        s = self.build(extra=bad, n_ctrl=12)
+        t1 = [x for x in s if x["scope"] == "tier T1"]
+        self.assertEqual(len(t1), 1)
+        self.assertEqual(t1[0]["n"], 5)
+
+    def test_low_risk_not_all_first_pass_does_not_fire(self):
+        miss = [task("x", "lx", tier="T1", risk="low", attempts=2, review_outcome="pass", est_min=10, actual_min=5)]
+        self.assertNotIn("tier T1", self.scopes(self.build(extra=miss, n_ctrl=8)))
+
+    def test_fewer_than_five_does_not_fire(self):
+        self.assertEqual(self.build(n_low=4), [])
+
+    def test_exactly_threshold_non_integer_does_not_fire(self):
+        # 35/17 ÷ 50/17 is exactly 0.7, but in floating point it is 0.6999999999999998
+        self.assertLess((35 / 17) / (50 / 17), 0.7)
+        s = self.build(low=(35, 17), ctrl=(50, 17))
+        self.assertEqual(s, [])
+        g = next(x for x in self.rep()["by_tier"] if x["key"] == "T1")
+        self.assertAlmostEqual(g["low_norm_ratio_median"], 0.7, places=9)
+        # just below the threshold still fires
+        self.assertIn("tier T1", self.scopes(self.build(low=(34, 17), ctrl=(50, 17))))
+
+    def test_confidence_from_low_counts(self):
+        s = [x for x in self.build() if x["scope"] == "tier T1"][0]
+        self.assertEqual(s["confidence"], "weak")
+        self.assertEqual(s["threshold"], metrics.FULL_PASS_FLOOR)
+        lo, hi = metrics.wilson(5, 5)
+        self.assertAlmostEqual(s["ci"][0], lo)
+        self.assertAlmostEqual(s["ci"][1], hi)
+        # extra non-low tasks in the group do not change the interval (k/n are low_first_pass_k/low_n)
+        med_ = [task("x", "m%d" % i, tier="T1", risk="med", attempts=2, review_outcome="rework", est_min=10, actual_min=10)
+                for i in range(20)]
+        s2 = [x for x in self.build(extra=med_, n_ctrl=0) if x["scope"] == "tier T1"]
+        self.assertEqual(len(s2), 1)
+        self.assertAlmostEqual(s2[0]["ci"][0], lo)
+        strong = [x for x in self.build(n_low=30) if x["scope"] == "tier T1"][0]
+        self.assertEqual(strong["confidence"], "strong")
+        self.assertGreater(strong["ci"][0], metrics.FULL_PASS_FLOOR)
+
+
 class NormalizedLowRisk(Base):
-    """Item 5 is data only for now (signal rule unchanged, see CHECKPOINTS)."""
+    """Fields behind the downgrade signal."""
 
     def test_fixture_t1_normalizes_to_one(self):
         r = json.loads(run(FIX, "--format", "json").stdout)

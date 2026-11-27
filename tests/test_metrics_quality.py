@@ -108,7 +108,11 @@ class ConfidenceTest(Base):
 
     def test_full_pass_signal(self):
         def ts(n):
-            return [passing(i, est_min=10, actual_min=4) for i in range(n)]
+            # v0.3.3 规则只看 risk=low、按 run 中位数归一化：加 n+1 个偏慢的对照任务，使 run 中位数为 1.0，
+            # T2 归一化后仍是 0.4
+            return ([passing(i, est_min=10, actual_min=4, risk="low") for i in range(n)]
+                    + [task(1000 + i, tier="T3", risk="med", attempts=1, review_outcome="pass", est_min=10, actual_min=10)
+                       for i in range(n + 1)])
         w = self.sig(self.rep(ts(5)), "tier T2", "降档空间")
         self.assertEqual(w[0]["confidence"], "weak")
         s = self.sig(self.rep(ts(30)), "tier T2", "降档空间")

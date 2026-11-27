@@ -129,11 +129,12 @@ class MetricsTest(unittest.TestCase):
     def test_signals(self):
         s = [(x["scope"], x["message"], x["n"]) for x in rep(FIX)["signals"]]
         has = lambda scope, frag: any(a == scope and frag in m for a, m, _ in s)
-        self.assertTrue(has("tier T1", "降档"))
+        # v0.3.3 规则：r1 只有 T1 任务，按本 run 中位数归一化后中位数为 1.0，不再触发降档
+        self.assertFalse(has("tier T1", "降档"))
         self.assertTrue(has("tier T2", "一次通过率 33%"))
         self.assertFalse(has("tier T2", ">1.5"))  # its actual/est came only from contradictory r2
         self.assertFalse(has("model/effort sonnet/medium", ">1.5"))
-        self.assertTrue(has("model/effort sonnet/low", "降档"))
+        self.assertFalse(has("model/effort sonnet/low", "降档"))  # 同上：归一化后中位数为 1.0，不再触发
         self.assertTrue(has("run r2", "时间数据矛盾"))
         self.assertFalse(has("run r2", "并行加速比"))
         self.assertFalse(has("run r3", "并行加速比"))  # no critical path: room to parallelize unknown

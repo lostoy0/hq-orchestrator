@@ -559,6 +559,7 @@ def scale_signals(sc, add):
 
 
 FULL_PASS_FLOOR = 0.8  # "一次通过率 100%" counts as strong only when the interval's lower bound is above this
+DOWNGRADE_RATIO = 0.7  # downgrade hint: run-normalized actual/est median of risk=low tasks below this
 
 
 def make_add(out):
@@ -590,9 +591,12 @@ def signals(tiers, models, overall_ratio, effs, plan=None, scale=None, cov=None)
             d_tm = [("est_min+actual_min", g.get("cov_time"))]
             if n >= 3 and fp is not None and fp < 0.6:
                 add(sc, "一次通过率 %.0f%% (<60%%)" % (fp * 100), n, prop=(g["first_pass_k"], n, 0.6, "below"), deps=d_fp)
-            if n >= 5 and fp == 1 and rm is not None and rm < 0.7:
-                add(sc, "一次通过率 100%%，actual/est 中位数 %.2f (<0.7)，可能存在降档空间" % rm, n,
-                    prop=(g["first_pass_k"], n, FULL_PASS_FLOOR, "above"), deps=d_fp + d_tm)
+            # 降档（v0.3.3）：只看 risk=low 的任务；actual/est 先除以所在 run 全部任务的中位数做归一化，
+            # 避免把“整次运行估时偏保守”读成“档位过高”。1e-9：恰好 0.7 的浮点误差不算触发
+            ln, lk, lnn, lrm = g["low_n"], g["low_first_pass_k"], g["low_norm_ratio_n"], g["low_norm_ratio_median"]
+            if lnn >= 5 and ln and lk == ln and lrm is not None and lrm < DOWNGRADE_RATIO - 1e-9:
+                add(sc, "risk=low 任务一次通过率 100%%，归一化 actual/est 中位数 %.2f (<0.7)，可能存在降档空间" % lrm, ln,
+                    prop=(lk, ln, FULL_PASS_FLOOR, "above"), deps=d_fp + d_tm)
             if rm is not None and g["ratio_n"] >= 3 and rm > 1.5:
                 add(sc, "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % rm, g["ratio_n"], deps=d_tm)
     if plan and plan["n"] >= 5:
