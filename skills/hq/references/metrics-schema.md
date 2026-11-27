@@ -60,6 +60,9 @@
 | test_scope / test_min | `related`/`full`、数字（可选） | 子会话的测试范围（关联 / 全量）和测试耗时 | 交付后 |
 | rework_rounds | 整数（可选） | 返工轮数（修复后复测、同一问题反复出现、被退回） | 交付后 |
 | flags | 字符串数组（可选，v0.11.0 起） | 规则标记，用于按规则分组复盘：`bias:+1(tier)`、`bias:+1(effort)`（规则 9 上调）、`downgrade:user_allowed(-N)`（规则 11 授权降档）、`rate_limited`、`assist_unavailable:<原因>`、`assist_auto_models`、`billing:<计费方>`、`effort_env:<值>`、`tier:not-applied`。旧数据写在 notes 里的同样识别（`bias:+1(cost_low)` 视为 `bias:+1(tier)`） | 发生时追加 |
+| score | `{scope,ambiguity,context,risk,verify}`（可选，v0.12.0 起） | 难度评估 5 维打分（`calibration.md` “5 维打分”表），每项整数 0–2。用来检验哪一维打偏了；拿不到的维度写 null | 难度评估时 |
+| independent_review | `{ran,trigger,findings,major}`（可选，v0.12.0 起） | 独立审核：`ran` 布尔（本任务是否实际做了独立审核；触发了但没做写 false）；`trigger` 取 `high`（high 级）/`tier`（T3 及以上）/`lines`（改动超过约 300 行）/`assist_lines`（辅助执行者产出超过约 150 行）/`other`；`findings` 审核发现的问题数，`major` 其中 major 数（整数）。没触发独立审核的任务省略整个字段 | 审核时 |
+| review_wait_min | 数字（可选，v0.12.0 起） | 子会话交付到主会话开始审核的分钟数（不含在 `actual_min` 里）；用来判断巡检间隔是否偏长 | 开始审核时 |
 | notes | 字符串 | 备注。没有专门字段的问题原因写在这里，便于复盘检索（如 `worktree 未忽略`、`删远程分支失败`） | 任意 |
 
 示例：
@@ -158,6 +161,27 @@
 - 常驻模式推荐（6c）：同一项目、`standing_seq` 连续的两批算前后批；推荐过（前一批 `recommended_next` > 0）的批数、下一批 `from_recommendation` 为真的批数、采纳率、完工声明数（`recommended_next` = 0）。推荐过 ≥ 5 次且采纳率 < 30% 时给出信号。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
 
+### 信号的可信度与数据覆盖（v0.12.0 起）
+
+- **字段覆盖率（1b）**：est_min、actual_min、tokens、cost_usd、tier、verify_level、verify_pass、review_outcome、attempts、issues、score、independent_review、review_wait_min 各自“有有效值”的任务占全部任务的比例。有效值指类型和取值合法：数字字段是有限数字，`tier`/`verify_level`/`review_outcome` 在取值表内，`verify_pass` 是布尔，`issues` 至少有一个数字计数，`score` 至少有一维是 0/1/2，`independent_review` 是带布尔 `ran` 的对象，`review_wait_min` 是 ≥ 0 的数字。JSON 报告的 `coverage` 含 `fields`（每个字段的 `n`、`rate`、`sparse`）和 `joint`（`est_min+actual_min`、`attempts+review_outcome` 两个组合的覆盖率）。
+- **`data: "sparse"`**：信号依赖的字段覆盖率 < 50% 时，信号加 `data: "sparse"`、`data_field`、`data_coverage`，md 末尾标“（数据不足：<字段> 覆盖 x%）”。依赖关系：一次通过率类依赖 `attempts+review_outcome`；用时比类依赖 `est_min+actual_min`；加速比偏低依赖 `actual_min`；3i 信号依赖 `score`；6d 信号依赖 `independent_review`；审核等待信号依赖 `review_wait_min`。按档位/模型的信号用该分组自己的覆盖率，其余用全部任务的。信号仍保留。
+- **`confidence`**：所有基于比例的信号（一次通过率 < 60%、一次通过率 100% 的降档空间、计划预估偏低/偏高 > 30%、规则 9/规则 11 标记的通过率、推荐采纳率 < 30%、监控阈值误报率 > 30%、3i 升档率偏高、6d 有发现比例 < 10%）加 `confidence`、`ci`（Wilson 95% 区间 `[下限, 上限]`）、`threshold`。区间整体落在越界一侧（“低于”类的上限 < 阈值，“高于”类的下限 > 阈值）为 `"strong"`，跨过阈值为 `"weak"`，md 末尾标“（弱：95% 区间 a–b 跨过阈值）”。“一次通过率 100%”这类信号的阈值取 80%（下限 > 80% 才算 strong）；3i 的阈值是“该维度其他取值的升档率 + 30 个百分点”。weak 的信号仍然保留在列表里，复盘时只有 `strong` 的当改进建议依据，weak 的只作线索。非比例信号（用时比、加速比、审核等待、掉队比等）没有 `confidence`。
+- 按档位、按模型两张表在一次通过率旁边加了“95% 区间”列（JSON 里是各分组的 `first_pass_ci`、`first_pass_k`）。
+
+### 打分维度、独立审核、审核等待（v0.12.0 起；旧数据没有这些字段时不出对应小节）
+
+- **3i 按打分维度**：每个维度（scope/ambiguity/context/risk/verify）的每个取值（0/1/2）的 n、一次通过率、升档率（各带 95% 区间）。信号：某维度某取值 n ≥ 5 且升档率比该维度其他取值（合并计算）高 30 个百分点以上 → “维度 X=v 的任务升档率偏高，打分可能低估了这一维”。该维度没有其他取值的记录时不判断。JSON：`by_score`（`{维度: [{value, n, first_pass_*, escalation_*}]}`，没数据是 `{}`）。
+- **6d 独立审核**：只统计 `ran` 为 true 的任务，按 `trigger` 分组（不在枚举内的算 `other`）：触发次数、有发现（`findings` > 0）的次数和比例、发现总数、其中 major 数；标题里另注 `ran` 为 false 的记录数。信号：某 trigger n ≥ 5 且有发现比例 < 10% → “这一触发条件几乎发现不了问题，可考虑放宽”。JSON：`independent_review`（`ran`、`not_run`、`by_trigger`，没数据是 `{}`）。
+- **审核等待**：每个 run 里有效 `review_wait_min` 的个数、中位数、最大值，写进效率表（4 节）的“审核等待中位数/最大”两列（有任一 run 有数据时才出这两列；JSON 在 `efficiency[*]` 的 `wait_n`/`wait_median`/`wait_max`）。信号：某 run n ≥ 3 且中位数 > 15 分钟 → “交付后平均 X 分钟才审核，巡检间隔偏长”。
+
+## CHANGELOG 状态统计（`metrics.py --changelog-stats CHANGELOG.md`）
+
+```
+metrics.py --changelog-stats CHANGELOG.md [--format md|json]
+```
+
+不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，没有版本号的归“未发布”）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；带 `- **验收判定**` 行的条目数。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；带验收判定的条目占全部条目的比例。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged}], total: {…, verified_rate, withdrawn_rate, judged_rate}}`。`--check-changelog` 的输出不受影响。
+
 ## CHANGELOG 验收判定（`metrics.py --check-changelog CHANGELOG.md`）
 
 每条改动除了自由文本的“验收指标”，再写一行机器可判定的“验收判定”：
@@ -178,5 +202,6 @@
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
   - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`。
   - `flags` 只保留上表列出的已知规则标记，其他自由写法丢弃。
+  - `score` 每一维只保留整数 0/1/2（其他写 null）；`independent_review` 只保留 `ran`（布尔）、`trigger`（枚举，不在内的写 `other`）、`findings`、`major`（数字）；`review_wait_min` 按数字字段保留。
   - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。
   - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和所有未知字段。

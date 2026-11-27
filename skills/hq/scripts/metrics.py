@@ -4,6 +4,7 @@
 Usage: metrics.py <file|dir...> [--format md|json] [--last N] [--project NAME]
                   [--since-version V] [--before-version V]
        metrics.py <file|dir...> --check-changelog CHANGELOG.md [--format md|json]
+       metrics.py --changelog-stats CHANGELOG.md [--format md|json]
        metrics.py <file|dir...> --export-anon [--raw] [--last N] [--project NAME]
 --export-anon prints an anonymized JSON for sharing: records are first reduced to a
 whitelist of enum/number/boolean fields (all free text, project and goal dropped, run ids
@@ -120,6 +121,30 @@ def rate(k, n):
     return k / n if n else None
 
 
+SPARSE_BELOW = 0.5  # a signal that depends on a field present in fewer than half of the records is marked sparse
+
+
+def wilson(k, n, z=1.96):
+    """Wilson score interval (95% by default) for k successes in n trials; None when n == 0."""
+    if not n:
+        return None
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
+def judge(k, n, thr, side):
+    """Confidence of a proportion signal against its threshold. side='below': the signal fires when the rate is
+    under thr, 'above': when it is over thr. strong = the whole interval is on the firing side of thr."""
+    ci = wilson(k, n)
+    if ci is None:
+        return None, None
+    ok = ci[1] < thr if side == "below" else ci[0] > thr
+    return ("strong" if ok else "weak"), ci
+
+
 def med(xs):
     return statistics.median(xs) if xs else None
 
@@ -159,6 +184,58 @@ def quality(tasks, runs):
     }
 
 
+SCORE_DIMS = ("scope", "ambiguity", "context", "risk", "verify")
+REVIEW_OUTCOMES = ("pass", "pass_with_fixes", "rework", "failed")
+VERIFY_LEVELS = ("doc", "code", "high", "e2e")
+IR_TRIGGERS = ("high", "tier", "lines", "assist_lines", "other")
+
+
+def score_val(t, d):
+    s = t.get("score")
+    v = num(s.get(d)) if isinstance(s, dict) else None
+    return int(v) if v is not None and v in (0, 1, 2) else None
+
+
+def ir_rec(t):
+    """The independent_review record when it is a dict with a boolean `ran`, else None."""
+    r = t.get("independent_review")
+    return r if isinstance(r, dict) and isinstance(r.get("ran"), bool) else None
+
+
+# field -> "has a usable value" (a missing / null / wrong-typed field counts as absent)
+VALID = {
+    "est_min": lambda t: num(t.get("est_min")) is not None,
+    "actual_min": lambda t: num(t.get("actual_min")) is not None,
+    "tokens": lambda t: num(t.get("tokens")) is not None,
+    "cost_usd": lambda t: num(t.get("cost_usd")) is not None,
+    "tier": lambda t: t.get("tier") in TIER_ORDER,
+    "verify_level": lambda t: t.get("verify_level") in VERIFY_LEVELS,
+    "verify_pass": lambda t: isinstance(t.get("verify_pass"), bool),
+    "review_outcome": lambda t: t.get("review_outcome") in REVIEW_OUTCOMES,
+    "attempts": lambda t: num(t.get("attempts")) is not None,
+    "issues": lambda t: isinstance(t.get("issues"), dict) and any(num(t["issues"].get(k)) is not None for k in ("review", "integration", "user")),
+    "score": lambda t: any(score_val(t, d) is not None for d in SCORE_DIMS),
+    "independent_review": lambda t: ir_rec(t) is not None,
+    "review_wait_min": lambda t: num(t.get("review_wait_min")) is not None and t["review_wait_min"] >= 0,
+}
+
+
+def cov_frac(ts, fields):
+    """Share of tasks that have a usable value for every one of `fields`; None when there are no tasks."""
+    return rate(sum(1 for t in ts if all(VALID[k](t) for k in fields)), len(ts))
+
+
+def coverage(tasks):
+    n = len(tasks)
+    fields = {}
+    for k in VALID:
+        c = sum(1 for t in tasks if VALID[k](t))
+        fields[k] = {"n": c, "rate": rate(c, n), "sparse": n > 0 and c / n < SPARSE_BELOW}
+    return {"tasks": n, "fields": fields,
+            "joint": {"est_min+actual_min": cov_frac(tasks, ("est_min", "actual_min")),
+                      "attempts+review_outcome": cov_frac(tasks, ("attempts", "review_outcome"))}}
+
+
 def group(tasks, keyf, skip=frozenset()):
     """skip: id()s of tasks from runs with contradictory time data; left out of actual/est only."""
     g = {}
@@ -171,9 +248,12 @@ def group(tasks, keyf, skip=frozenset()):
         toks = [num(t.get("tokens")) for t in ts if num(t.get("tokens")) is not None]
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
         rs = [ratio(t) for t in ts if id(t) not in skip and ratio(t) is not None]
+        fpk = sum(1 for t in ts if first_pass(t))
         out.append({
             "key": k, "n": n, "insufficient": n < MIN_N,
-            "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
+            "first_pass_rate": rate(fpk, n), "first_pass_k": fpk, "first_pass_ci": wilson(fpk, n),
+            "cov_time": cov_frac(ts, ("est_min", "actual_min")),
+            "cov_first_pass": cov_frac(ts, ("attempts", "review_outcome")),
             "escalation_rate": rate(sum(1 for t in ts if isinstance(t.get("tier_changes"), list) and t["tier_changes"]), n),
             "handoff_rate": rate(sum(1 for t in ts if cnt(t.get("handoffs")) > 0), n),
             "avg_cost_usd": mean(cost), "avg_tokens": mean(toks),
@@ -216,8 +296,11 @@ def efficiency(rid, r):
         problems.append("speedup>max_concurrency")
     if wall and any(a > wall for a in acts):
         problems.append("task>wall")
+    waits = [t["review_wait_min"] for t in ts if VALID["review_wait_min"](t)]
     return {
         "run_id": rid, "tasks": len(ts),
+        "actual_cov": rate(len(acts), len(ts)),
+        "wait_n": len(waits), "wait_median": med(waits), "wait_max": max(waits) if waits else None,
         "missing_records": max(0, declared - len(ts)) if declared is not None else None,
         "wall_over_critical": wall / crit if wall is not None and crit else None,
         "speedup": speedup,
@@ -251,6 +334,7 @@ def plan_accuracy(tasks):
         "same_rate": rate(sum(1 for x in d if x == 0), n),
         "under_rate": rate(sum(1 for x in d if x > 0), n),  # plan estimated lower than needed
         "over_rate": rate(sum(1 for x in d if x < 0), n),
+        "under_k": sum(1 for x in d if x > 0), "over_k": sum(1 for x in d if x < 0),
         "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
     }
 
@@ -374,33 +458,60 @@ def scale_signals(sc, add):
         for k, g in sorted(x["monitor_by_metric"].items()):
             lab = g["effective"] + g["false_positive"]
             if lab >= 5 and g["false_positive_rate"] > 0.3:
-                add(scope, "监控阈值 %s 误报率 %.0f%% (>30%%)，校准时放宽" % (k, g["false_positive_rate"] * 100), lab)
+                add(scope, "监控阈值 %s 误报率 %.0f%% (>30%%)，校准时放宽" % (k, g["false_positive_rate"] * 100), lab,
+                    prop=(g["false_positive"], lab, 0.3, "above"))
             if g["missed"] >= 2 and g["missed"] > g["effective"] * 0.25:
                 add(scope, "监控阈值 %s 漏报 %d 次，校准时收紧" % (k, g["missed"]), g["missed"] + g["effective"])
 
 
-def signals(tiers, models, overall_ratio, effs, plan=None, scale=None):
+FULL_PASS_FLOOR = 0.8  # "一次通过率 100%" counts as strong only when the interval's lower bound is above this
+
+
+def make_add(out):
+    """add(scope, msg, n, prop=(k, n, thr, side), deps=[(field, coverage)]) appends a signal.
+    prop adds confidence/ci (Wilson 95% vs thr); deps adds data='sparse' when a needed field covers < 50%."""
+    def add(scope, msg, n, prop=None, deps=()):
+        sig = {"scope": scope, "message": msg, "n": n}
+        if prop:
+            conf, ci = judge(*prop)
+            if conf:
+                sig.update(confidence=conf, ci=[ci[0], ci[1]], threshold=prop[2])
+        low = [(k, v) for k, v in deps if v is not None and v < SPARSE_BELOW]
+        if low:
+            k, v = min(low, key=lambda x: x[1])
+            sig.update(data="sparse", data_field=k, data_coverage=v)
+        out.append(sig)
+    return add
+
+
+def signals(tiers, models, overall_ratio, effs, plan=None, scale=None, cov=None):
     s = []
-    def add(scope, msg, n):
-        s.append({"scope": scope, "message": msg, "n": n})
+    add = make_add(s)
+    jt = (cov or {}).get("joint", {})
     for label, groups in (("tier", tiers), ("model/effort", models)):
         for g in groups:
             fp, n, rm = g["first_pass_rate"], g["n"], g["ratio_median"]
             sc = "%s %s" % (label, g["key"])
+            d_fp = [("attempts+review_outcome", g.get("cov_first_pass"))]
+            d_tm = [("est_min+actual_min", g.get("cov_time"))]
             if n >= 3 and fp is not None and fp < 0.6:
-                add(sc, "一次通过率 %.0f%% (<60%%)" % (fp * 100), n)
+                add(sc, "一次通过率 %.0f%% (<60%%)" % (fp * 100), n, prop=(g["first_pass_k"], n, 0.6, "below"), deps=d_fp)
             if n >= 5 and fp == 1 and rm is not None and rm < 0.7:
-                add(sc, "一次通过率 100%%，actual/est 中位数 %.2f (<0.7)，可能存在降档空间" % rm, n)
+                add(sc, "一次通过率 100%%，actual/est 中位数 %.2f (<0.7)，可能存在降档空间" % rm, n,
+                    prop=(g["first_pass_k"], n, FULL_PASS_FLOOR, "above"), deps=d_fp + d_tm)
             if rm is not None and g["ratio_n"] >= 3 and rm > 1.5:
-                add(sc, "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % rm, g["ratio_n"])
+                add(sc, "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % rm, g["ratio_n"], deps=d_tm)
     if plan and plan["n"] >= 5:
         if plan["under_rate"] is not None and plan["under_rate"] > 0.3:
-            add("plan", "%.0f%% 的计划任务实际用了比预估更高的档位 (>30%%)，/hq-plan 打分偏低" % (plan["under_rate"] * 100), plan["n"])
+            add("plan", "%.0f%% 的计划任务实际用了比预估更高的档位 (>30%%)，/hq-plan 打分偏低" % (plan["under_rate"] * 100), plan["n"],
+                prop=(plan["under_k"], plan["n"], 0.3, "above"))
         if plan["over_rate"] is not None and plan["over_rate"] > 0.3:
-            add("plan", "%.0f%% 的计划任务实际用了比预估更低的档位 (>30%%)，/hq-plan 打分偏高" % (plan["over_rate"] * 100), plan["n"])
+            add("plan", "%.0f%% 的计划任务实际用了比预估更低的档位 (>30%%)，/hq-plan 打分偏高" % (plan["over_rate"] * 100), plan["n"],
+                prop=(plan["over_k"], plan["n"], 0.3, "above"))
     om, on = overall_ratio
     if om is not None and on >= 3 and om > 1.5:
-        add("overall", "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % om, on)
+        add("overall", "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % om, on,
+            deps=[("est_min+actual_min", jt.get("est_min+actual_min"))])
     for e in effs:
         if e["tasks"] < 3:
             continue
@@ -412,7 +523,7 @@ def signals(tiers, models, overall_ratio, effs, plan=None, scale=None):
         if (e["speedup"] is not None and e["speedup"] < 1.3
                 and e["speedup_ceiling"] is not None and e["speedup_ceiling"] >= 1.3):
             add("run %s" % e["run_id"], "并行加速比 %.2f (<1.3)，而任务图允许的上限为 %.2f"
-                % (e["speedup"], e["speedup_ceiling"]), e["tasks"])
+                % (e["speedup"], e["speedup_ceiling"]), e["tasks"], deps=[("actual_min", e.get("actual_cov"))])
     scale_signals(scale or [], add)
     return s
 
@@ -501,6 +612,7 @@ def by_flag(tasks):
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
         rows.append({"key": k, "n": n, "insufficient": n < MIN_N,
                      "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
+                     "first_pass_k": sum(1 for t in ts if first_pass(t)),
                      "rework_rate": rate(sum(1 for t in ts if t.get("review_outcome") in ("rework", "failed")), n),
                      "escalation_rate": rate(sum(1 for t in ts if isinstance(t.get("tier_changes"), list) and t["tier_changes"]), n),
                      "avg_cost_usd": mean(cost)})
@@ -558,16 +670,19 @@ def recommendations(runs):
 def extra_signals(add, flags, levels, rec):
     for g in flags:
         if g["n"] >= 5 and g["key"].startswith("bias:+1") and g["first_pass_rate"] == 1 and (g["rework_rate"] or 0) == 0:
-            add("flag %s" % g["key"], "规则 9 上调的任务一次通过率 100%%、返工 0：可以小范围实验不上调", g["n"])
+            add("flag %s" % g["key"], "规则 9 上调的任务一次通过率 100%%、返工 0：可以小范围实验不上调", g["n"],
+                prop=(g["first_pass_k"], g["n"], FULL_PASS_FLOOR, "above"))
         if g["n"] >= 3 and g["key"].startswith("downgrade:") and g["first_pass_rate"] is not None and g["first_pass_rate"] < 0.6:
-            add("flag %s" % g["key"], "规则 11 授权降档的任务一次通过率 %.0f%% (<60%%)：降档代价偏高" % (g["first_pass_rate"] * 100), g["n"])
+            add("flag %s" % g["key"], "规则 11 授权降档的任务一次通过率 %.0f%% (<60%%)：降档代价偏高" % (g["first_pass_rate"] * 100), g["n"],
+                prop=(g["first_pass_k"], g["n"], 0.6, "below"))
     for g in levels:
         if g["n"] >= 5 and g["escaped_per_task"] is not None and g["escaped_per_task"] > 0.3:
             add("verify %s" % g["key"], "%.2f 个问题/任务漏到合并或用户环节 (>0.3)：考虑加严这一级的子会话验证" % g["escaped_per_task"], g["n"])
         if g["escaped_major"]:
             add("verify %s" % g["key"], "%d 个 major 问题漏过了这一级的验证" % g["escaped_major"], g["n"])
     if rec["offered"] >= 5 and rec["acceptance_rate"] is not None and rec["acceptance_rate"] < 0.3:
-        add("standing", "推荐被采纳 %.0f%% (<30%%)：推荐的来源或排序不贴合用户" % (rec["acceptance_rate"] * 100), rec["offered"])
+        add("standing", "推荐被采纳 %.0f%% (<30%%)：推荐的来源或排序不贴合用户" % (rec["acceptance_rate"] * 100), rec["offered"],
+            prop=(rec["accepted"], rec["offered"], 0.3, "below"))
 
 
 # ---------- structured acceptance criteria in CHANGELOG (`- **验收判定**：` lines) ----------
@@ -669,6 +784,7 @@ def parse_changelog(text):
             if st:
                 cur["status"] = st.group(1)
             if line.startswith("- **验收判定**"):
+                cur["has_judge"] = True
                 cur["exprs"] += re.findall(r"`([^`]+)`", line)
     return entries
 
@@ -716,6 +832,114 @@ def render_check(res):
     return "\n".join(L) + "\n"
 
 
+# ---------- v0.12: score dimensions, independent review, review wait ----------
+def esc(t):
+    return isinstance(t.get("tier_changes"), list) and bool(t["tier_changes"])
+
+
+def by_score(tasks):
+    """{dimension: [{value, n, first_pass_*, escalation_*}]} over tasks that carry that dimension; {} for old data."""
+    out = {}
+    for d in SCORE_DIMS:
+        rows = []
+        for v in (0, 1, 2):
+            ts = [t for t in tasks if score_val(t, d) == v]
+            if not ts:
+                continue
+            n = len(ts)
+            fk, ek = sum(1 for t in ts if first_pass(t)), sum(1 for t in ts if esc(t))
+            rows.append({"value": v, "n": n, "insufficient": n < MIN_N,
+                         "first_pass_rate": rate(fk, n), "first_pass_k": fk, "first_pass_ci": wilson(fk, n),
+                         "escalation_rate": rate(ek, n), "escalation_k": ek, "escalation_ci": wilson(ek, n)})
+        if rows:
+            out[d] = rows
+    return out
+
+
+def independent_review(tasks):
+    """By trigger over tasks whose independent_review.ran is true; `not_run` counts ran=false records."""
+    recs = [ir_rec(t) for t in tasks if ir_rec(t) is not None]
+    ran = [r for r in recs if r["ran"]]
+    if not recs:
+        return {}
+    g = {}
+    for r in ran:
+        k = r.get("trigger") if r.get("trigger") in IR_TRIGGERS else "other"
+        g.setdefault(k, []).append(r)
+    rows = []
+    for k in IR_TRIGGERS:
+        if k not in g:
+            continue
+        rs = g[k]
+        n = len(rs)
+        found = sum(1 for r in rs if cnt(r.get("findings")) > 0)
+        rows.append({"trigger": k, "n": n, "insufficient": n < MIN_N,
+                     "found": found, "found_rate": rate(found, n), "found_ci": wilson(found, n),
+                     "findings": sum(cnt(r.get("findings")) for r in rs), "major": sum(cnt(r.get("major")) for r in rs)})
+    return {"ran": len(ran), "not_run": len(recs) - len(ran), "by_trigger": rows}
+
+
+def quality_signals(add, score, ir, effs, cov):
+    fields = cov["fields"]
+    for d, rows in score.items():
+        for r in rows:
+            others = [x for x in rows if x is not r]
+            on = sum(x["n"] for x in others)
+            if r["n"] < 5 or not on:
+                continue
+            orate = sum(x["escalation_k"] for x in others) / on
+            if r["escalation_rate"] - orate >= 0.3:
+                add("score %s=%d" % (d, r["value"]),
+                    "维度 %s=%d 的任务升档率偏高（%.0f%%，该维度其他取值 %.0f%%），打分可能低估了这一维"
+                    % (d, r["value"], r["escalation_rate"] * 100, orate * 100), r["n"],
+                    prop=(r["escalation_k"], r["n"], orate + 0.3, "above"),
+                    deps=[("score", fields["score"]["rate"])])
+    for r in (ir or {}).get("by_trigger", []):
+        if r["n"] >= 5 and r["found_rate"] is not None and r["found_rate"] < 0.1:
+            add("review %s" % r["trigger"], "这一触发条件几乎发现不了问题（%d 次审核 %d 次有发现），可考虑放宽" % (r["n"], r["found"]), r["n"],
+                prop=(r["found"], r["n"], 0.1, "below"), deps=[("independent_review", fields["independent_review"]["rate"])])
+    for e in effs:
+        if e["wait_n"] >= 3 and e["wait_median"] is not None and e["wait_median"] > 15:
+            add("run %s" % e["run_id"], "交付后平均 %.0f 分钟才审核（中位数，最长 %.0f 分钟），巡检间隔偏长"
+                % (e["wait_median"], e["wait_max"]), e["wait_n"], deps=[("review_wait_min", fields["review_wait_min"]["rate"])])
+
+
+# ---------- CHANGELOG status statistics (`--changelog-stats`) ----------
+def changelog_stats(text):
+    entries = parse_changelog(text)
+    order, g = [], {}
+    for e in entries:
+        v = e["version"] or "未发布"
+        if v not in g:
+            g[v] = {"version": v, "entries": 0, "pending": 0, "verified": 0, "withdrawn": 0, "other": 0, "judged": 0}
+            order.append(v)
+        x = g[v]
+        x["entries"] += 1
+        x[{"待验证": "pending", "已验证": "verified", "已撤回": "withdrawn"}.get(e["status"], "other")] += 1
+        x["judged"] += 1 if e.get("has_judge") else 0
+    rows = [g[v] for v in order]
+    tot = {k: sum(r[k] for r in rows) for k in ("entries", "pending", "verified", "withdrawn", "other", "judged")}
+    closed = tot["verified"] + tot["withdrawn"]
+    tot.update(verified_rate=rate(tot["verified"], closed), withdrawn_rate=rate(tot["withdrawn"], closed),
+               judged_rate=rate(tot["judged"], tot["entries"]))
+    return {"versions": rows, "total": tot}
+
+
+def render_changelog_stats(st):
+    def row(name, r):
+        c = r["verified"] + r["withdrawn"]
+        return [name, r["entries"], r["pending"], r["verified"], r["withdrawn"], r["other"],
+                f(rate(r["verified"], c), "p"), f(rate(r["withdrawn"], c), "p"), "%d (%s)" % (r["judged"], f(rate(r["judged"], r["entries"]), "p"))]
+    L = ["# CHANGELOG 状态统计", ""]
+    L += table(["版本", "条目数", "待验证", "已验证", "已撤回", "其他", "已验证率", "撤回率", "带验收判定"],
+               [row(r["version"], r) for r in st["versions"]] + [row("合计", st["total"])])
+    t = st["total"]
+    L += ["", "已验证率 = 已验证 / (已验证 + 已撤回)，撤回率同分母；%s；带验收判定的条目占 %s。"
+          % ("暂无已结案条目" if not (t["verified"] + t["withdrawn"]) else "已结案 %d 条" % (t["verified"] + t["withdrawn"]),
+             f(t["judged_rate"], "p"))]
+    return "\n".join(L) + "\n"
+
+
 def build(runs, corrupt):
     ids = list(runs)
     tasks = [t for i in ids for t in runs[i]["tasks"]]
@@ -742,8 +966,12 @@ def build(runs, corrupt):
     plan = plan_accuracy(tasks)
     sc = [x for x in (scale_out(i, runs[i]) for i in ids) if x]
     flags, levels, rec = by_flag(tasks), by_verify_level(tasks), recommendations(runs)
-    sig = signals(tiers, models, (med(rs), len(rs)), effs, plan, sc)
-    extra_signals(lambda scope, msg, n: sig.append({"scope": scope, "message": msg, "n": n}), flags, levels, rec)
+    cov = coverage(tasks)
+    sig = signals(tiers, models, (med(rs), len(rs)), effs, plan, sc, cov)
+    add = make_add(sig)
+    extra_signals(add, flags, levels, rec)
+    bs, ir = by_score(tasks), independent_review(tasks)
+    quality_signals(add, bs, ir, effs, cov)
     return {
         "overview": {"runs": len(ids), "tasks": len(tasks), "corrupt_lines": corrupt,
                      "missing_task_records": sum(miss) if miss else None,
@@ -759,6 +987,7 @@ def build(runs, corrupt):
                      "user_corrections": sum(cnt(t.get("user_corrections")) for t in tasks)},
         "plan": plan,
         "scale_out": sc,
+        "coverage": cov, "by_score": bs, "independent_review": ir,
         "by_version": by_version(runs), "by_flag": flags, "by_verify_level": levels, "recommendations": rec,
         "signals": sig,
     }
@@ -782,12 +1011,34 @@ def table(head, rows):
     return out
 
 
+def ci_s(ci):
+    return "-" if not ci else "%.0f%%–%.0f%%" % (ci[0] * 100, ci[1] * 100)
+
+
+def sig_notes(s):
+    out = ""
+    if s.get("confidence") == "weak":
+        out += "（弱：95%% 区间 %s 跨过阈值）" % ci_s(s["ci"])
+    if s.get("data") == "sparse":
+        out += "（数据不足：%s 覆盖 %.0f%%）" % (s["data_field"], s["data_coverage"] * 100)
+    return out
+
+
 def render_md(rep):
     o = rep["overview"]
     L = ["# HQ 指标报告 (schema v1)", "", "## 1. 总览", ""]
     L += table(["run 数", "task 数", "损坏行数", "缺记录任务数", "时间范围"],
                [[o["runs"], o["tasks"], o["corrupt_lines"], f(o["missing_task_records"], "d"),
                  "%s ~ %s" % (o["time_from"] or "-", o["time_to"] or "-")]])
+    cv = rep.get("coverage")
+    if cv:
+        names = {"est_min": "est_min", "actual_min": "actual_min", "tokens": "tokens", "cost_usd": "cost_usd", "tier": "tier",
+                 "verify_level": "verify_level", "verify_pass": "verify_pass", "review_outcome": "review_outcome",
+                 "attempts": "attempts", "issues": "issues", "score": "score（新）",
+                 "independent_review": "independent_review（新）", "review_wait_min": "review_wait_min（新）"}
+        L += ["", "## 1b. 字段覆盖率（有有效值的任务占比；< 50% 时依赖该字段的信号标“数据不足”）", ""]
+        L += table(["字段", "有值任务数", "覆盖率", "备注"],
+                   [[names.get(k, k), v["n"], f(v["rate"], "p"), "数据不足" if v["sparse"] else ""] for k, v in cv["fields"].items()])
     L += ["", "## 2. 质量门槛", ""]
     qh = ["范围", "n", "漂移率", "验证到位率", "问题/任务 review", "integration", "user", "major 数", "返工率", "合并通过率", "备注"]
     def qrow(name, q):
@@ -801,8 +1052,12 @@ def render_md(rep):
                 f(g["avg_cost_usd"]), f(g["avg_tokens"], "d"), f(g["ratio_median"]),
                 "；".join(x for x in ("样本不足" if g["insufficient"] else "",
                                      "用时比排除矛盾 run 的 %d 条" % g["ratio_excluded"] if g["ratio_excluded"] else "") if x)]
-    L += ["", "## 3a. 按档位", ""] + table(gh, [grow(g) for g in rep["by_tier"]])
-    L += ["", "## 3b. 按模型/思考深度", ""] + table(gh, [grow(g) for g in rep["by_model"]])
+    gh2 = gh[:3] + ["一次通过率 95% 区间"] + gh[3:]
+    def grow2(g):
+        r = grow(g)
+        return r[:3] + [ci_s(g.get("first_pass_ci"))] + r[3:]
+    L += ["", "## 3a. 按档位", ""] + table(gh2, [grow2(g) for g in rep["by_tier"]])
+    L += ["", "## 3b. 按模型/思考深度", ""] + table(gh2, [grow2(g) for g in rep["by_model"]])
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
     if any(g["key"].startswith("assist:") for g in rep["by_assist"]):
         L += ["", "## 3d. 辅助执行者 vs 主宿主（按档位；交接率≈被收回给主宿主的比例）", ""] + table(gh, [grow(g) for g in rep["by_assist"]])
@@ -826,6 +1081,12 @@ def render_md(rep):
             ["标记", "n", "一次通过率", "返工率", "升档率", "平均 cost_usd", "备注"],
             [[g["key"], g["n"], f(g["first_pass_rate"], "p"), f(g["rework_rate"], "p"), f(g["escalation_rate"], "p"),
               f(g["avg_cost_usd"]), "样本不足" if g["insufficient"] else ""] for g in rep["by_flag"]])
+    if rep.get("by_score"):
+        L += ["", "## 3i. 按打分维度（score 各维 0-2；升档率高说明这一维打分偏低）", ""]
+        L += table(["维度", "取值", "n", "一次通过率", "一次通过率 95% 区间", "升档率", "升档率 95% 区间", "备注"],
+                   [[d, r["value"], r["n"], f(r["first_pass_rate"], "p"), ci_s(r["first_pass_ci"]), f(r["escalation_rate"], "p"),
+                     ci_s(r["escalation_ci"]), "样本不足" if r["insufficient"] else ""]
+                    for d, rows in rep["by_score"].items() for r in rows])
     rc = rep["recommendations"]
     if rc["standing_runs"]:
         L += ["", "## 6c. 常驻模式推荐", ""] + table(
@@ -833,10 +1094,13 @@ def render_md(rep):
             [[rc["standing_runs"], rc["offered"], rc["accepted"], f(rc["acceptance_rate"], "p"),
               rc["recommended_total"], rc["completion_claims"]]])
     L += ["", "## 4. 效率", ""]
-    L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events", "备注"],
+    has_wait = any(e.get("wait_n") for e in rep["efficiency"])
+    L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events"]
+               + (["审核等待中位数(分)", "审核等待最大(分)"] if has_wait else []) + ["备注"],
                [[e["run_id"], e["tasks"], f(e["wall_over_critical"]), f(e["speedup"]), f(e["speedup_ceiling"]),
-                 f(e["max_concurrency"], "d"), f(e["throttle_events"], "d"),
-                 "数据矛盾：" + ", ".join(e["inconsistent"]) if e["inconsistent"] else ""] for e in rep["efficiency"]])
+                 f(e["max_concurrency"], "d"), f(e["throttle_events"], "d")]
+                + ([f(e["wait_median"], "d"), f(e["wait_max"], "d")] if has_wait else [])
+                + ["数据矛盾：" + ", ".join(e["inconsistent"]) if e["inconsistent"] else ""] for e in rep["efficiency"]])
     L += ["", "## 5. 开销（按 kind）", ""]
     L += table(["kind", "n", "平均 tokens", "每预计分钟成本 (USD)", "备注"],
                [[c["key"], c["n"], f(c["avg_tokens"], "d"), f(c["cost_per_est_min"], "c"), "样本不足" if c["insufficient"] else ""]
@@ -865,8 +1129,14 @@ def render_md(rep):
                      "；".join("%s %d/%s/%s/%d" % (k, g["triggers"], f(g["effective_rate"], "p"), f(g["false_positive_rate"], "p"), g["missed"])
                               for k, g in sorted(x["monitor_by_metric"].items())) or "-"]
                     for x in rep["scale_out"]])
+    ir = rep.get("independent_review")
+    if ir:
+        L += ["", "## 6d. 独立审核（按触发条件；执行 %d 次，记录了但未执行 %d 次）" % (ir["ran"], ir["not_run"]), ""]
+        L += table(["trigger", "触发次数", "有发现", "有发现比例", "有发现比例 95% 区间", "发现总数", "其中 major", "备注"],
+                   [[r["trigger"], r["n"], r["found"], f(r["found_rate"], "p"), ci_s(r["found_ci"]), r["findings"], r["major"],
+                     "样本不足" if r["insufficient"] else ""] for r in ir["by_trigger"]])
     L += ["", "## 7. 信号", ""]
-    L += ["- [%s] %s（n=%d）" % (s["scope"], s["message"], s["n"]) for s in rep["signals"]] or ["- 无"]
+    L += ["- [%s] %s（n=%d）%s" % (s["scope"], s["message"], s["n"], sig_notes(s)) for s in rep["signals"]] or ["- 无"]
     return "\n".join(L) + "\n"
 
 
@@ -885,7 +1155,8 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,64}$")  # model / effort names
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+[A-Za-z0-9.+-]{0,16}$")
 TASK_NUMS = ("tier_score", "est_min", "actual_min", "tokens", "cost_usd", "attempts", "handoffs",
              "derived_tasks", "checkpoints", "user_corrections",
-             "units_planned", "units_actual", "unit_min_est", "overhead_min", "test_min", "rework_rounds")
+             "units_planned", "units_actual", "unit_min_est", "overhead_min", "test_min", "rework_rounds",
+             "review_wait_min")
 TASK_BOOLS = ("user_manual_adjust", "scope_violation", "drift", "verify_pass", "resplit")
 RUN_NUMS = ("wall_min", "critical_path_min", "tasks", "max_concurrency", "throttle_events",
             "autonomy_stops", "decisions", "standing_seq", "recommended_next", "concurrency_limit",
@@ -948,6 +1219,13 @@ def anon_task(t, rid, idx):
         fl = [x for x in task_flags(t) if NOTE_FLAG_RE.fullmatch(x)]  # known rule markers only
         if fl:
             o["flags"] = fl
+    if isinstance(t.get("score"), dict):  # only the integers 0/1/2 per dimension survive
+        o["score"] = {d: score_val(t, d) for d in SCORE_DIMS}
+    if isinstance(t.get("independent_review"), dict):
+        r = t["independent_review"]
+        o["independent_review"] = {"ran": a_bool(r.get("ran")),
+                                   "trigger": r["trigger"] if r.get("trigger") in IR_TRIGGERS else ("other" if r.get("trigger") is not None else None),
+                                   "findings": num(r.get("findings")), "major": num(r.get("major"))}
     if "test_scope" in t:
         o["test_scope"] = t["test_scope"] if t["test_scope"] in ("related", "full") else None
     if "task_type" in t:
@@ -1032,7 +1310,8 @@ def export_anon(runs, corrupt, raw):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Summarize hq run records into a metrics report.")
-    ap.add_argument("paths", nargs="+", help="jsonl files or directories")
+    ap.add_argument("paths", nargs="*", help="jsonl files or directories")
+    ap.add_argument("--changelog-stats", metavar="CHANGELOG", help="count entries per version by 状态 (needs no run data)")
     ap.add_argument("--format", choices=["md", "json"], default="md")
     ap.add_argument("--last", type=int, metavar="N")
     ap.add_argument("--project", metavar="NAME")
@@ -1044,6 +1323,16 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.raw and not a.export_anon:
         ap.error("--raw requires --export-anon")
+    if a.changelog_stats:
+        try:
+            with open(a.changelog_stats, encoding="utf-8") as fh:
+                st = changelog_stats(fh.read())
+        except OSError as e:
+            sys.exit("metrics.py: cannot read %s: %s" % (a.changelog_stats, e))
+        sys.stdout.write(json.dumps(st, ensure_ascii=False, indent=2) + "\n" if a.format == "json" else render_changelog_stats(st))
+        return
+    if not a.paths:
+        ap.error("paths are required (unless --changelog-stats is given)")
     runs, corrupt = load(collect_files(a.paths))
     if a.project:
         runs = {k: v for k, v in runs.items() if run_project(v) == a.project}
