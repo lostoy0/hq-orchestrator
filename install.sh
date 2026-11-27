@@ -9,26 +9,82 @@ HQ_REPO_URL_DEFAULT=https://github.com/lostoy0/hq-orchestrator.git
 
 usage() {
   cat <<U
-用法: install.sh --host <宿主> [--scope user|project] [--project-dir <路径>] [--layout minimal|per-host]
-                 [--with-agents [--model-map 'T0=<模型>,…']] [--with-codex-agents] [--force] [--dry-run]
-      install.sh --list    [--host <宿主>] [--scope ...]   只显示检测结果、已装副本和安装计划，不写入
-      install.sh --update  [--scope ...]                   把本脚本装过的副本更新到当前版本
-      install.sh --uninstall [--scope ...]                 删除本脚本装过的副本（只删有安装记录的）
-  <宿主>: auto（自动检测本机已装的工具）| all | claude,codex,dsh,opencode,cursor,gemini 中的一个或多个（逗号分隔）
-          both 为旧写法，等同 claude,codex
-  --layout minimal  （默认）只装到能覆盖所选工具的最少目录，避免同一工具读到重复技能
-           per-host 每个工具装到各自的专属目录
-  目录对照见 adapters/skill-dirs.tsv、adapters/hosts.tsv。例如 ~/.agents/skills 可被 codex、dsh、opencode、gemini 读取，
-  ~/.claude/skills 可被 claude、opencode、cursor 读取；所以 dsh 也会读取 ~/.agents/skills，装过 codex 的不必再装 dsh。
-  --with-agents      同时安装所选宿主的子代理档位模板 hq-t0…hq-t4（目前 codex、opencode、gemini；见 adapters/agent-dirs.tsv）
-  --model-map <映射> 生成模板时填入模型（只能配合一个宿主的模板）：codex、gemini 写模型名；opencode 写 provider/model[#variant]
-                    codex 可写 auto：读本机 codex debug models，按模型说明推荐 T0–T4（skills/hq/scripts/assist-config.py suggest）
-  --with-codex-agents 只装 Codex 模板（旧写法，不管 --host 是什么都装）
-  不在仓库里运行时（如 curl | bash），先把 v\$HQ_VERSION（可用 HQ_REF 覆盖）下载到 ~/.hq-orchestrator/<ref> 再安装。
-退出码: 0 成功; 2 参数非法; 3 目标已存在(加 --force 覆盖); 4 没有可操作的对象; 5 下载失败
+hq-orchestrator 安装脚本 v${HQ_VERSION}
+把 /hq 和各阶段技能复制到 AI 编程工具会读取的目录。只复制文件，不改任何配置。
+
+用法
+  install.sh --host <宿主> [选项]    安装
+  install.sh --list        [选项]    只看检测结果、已装副本和安装计划，不写入
+  install.sh --update      [选项]    把本脚本装过的副本更新到当前版本
+  install.sh --uninstall   [选项]    删除本脚本装过的副本（只删有安装记录的）
+  install.sh --help                  显示本说明
+
+常用示例
+  ./install.sh --host auto                                   自动检测本机工具，装到个人目录（推荐）
+  ./install.sh --host claude --scope project                 只装进当前项目
+  ./install.sh --host codex --with-agents --model-map auto   装 Codex，并按本机模型生成档位模板
+  ./install.sh --list                                        先看会装到哪里
+  ./install.sh --update                                      升级已装的副本
+  curl -fsSL https://raw.githubusercontent.com/lostoy0/hq-orchestrator/v${HQ_VERSION}/install.sh | bash -s -- --host auto
+                                                             不 clone 仓库，一行安装
+
+━━ 装给谁 ━━
+  --host <宿主>          要装给哪些工具，可逗号分隔多个
+                           auto    自动检测本机已装的工具
+                           all     全部：claude、codex、dsh、opencode、cursor、gemini
+                           both    旧写法，等同 claude,codex
+                         例：--host auto
+                             --host claude,codex
+
+━━ 装到哪 ━━
+  --scope user|project   user（默认）装到个人目录，所有项目都能用；project 只装进一个项目
+                         例：--scope project
+  --project-dir <路径>   配合 --scope project 指定项目，默认当前目录
+                         例：--scope project --project-dir ~/code/my-app
+  --layout minimal|per-host
+                         minimal（默认）只装到能覆盖所选工具的最少目录，同一工具不会读到两份
+                         per-host 每个工具装到自己的专属目录
+                         例：--host claude,codex --layout per-host
+  目录对照：~/.claude/skills 被 claude、opencode、cursor 读取；
+           ~/.agents/skills 被 codex、dsh、opencode、gemini 读取（详见 adapters/skill-dirs.tsv）
+           dsh 也会读取 ~/.agents/skills，所以装过 codex 的不必再装 dsh
+
+━━ 子代理档位模板（让 T0–T4 用不同模型，codex、opencode、gemini 有模板）━━
+  --with-agents          同时安装 hq-t0…hq-t4 模板
+                         例：--host codex --with-agents
+  --model-map <映射>     生成模板时填入模型，只能配合一个宿主；没填的档位保留占位符
+                           codex、gemini   写模型名；codex 可写 auto，按本机 codex 模型目录推荐
+                           opencode        写 provider/model，可带 #思考深度
+                         例：--host codex --with-agents --model-map auto
+                             --host gemini --with-agents --model-map 'T0=<快模型>,T3=<强模型>'
+                             --host opencode --with-agents --model-map 'T0=<提供方>/<模型>,T4=<提供方>/<模型>#high'
+  --with-codex-agents    旧写法：只装 Codex 模板，不管 --host 是什么
+                         例：--host claude --with-codex-agents
+
+━━ 预览与覆盖 ━━
+  --dry-run              只打印将要做的事，不写入
+                         例：--host auto --dry-run
+  --force                目标已存在时覆盖（默认不覆盖，退出码 3）
+                         例：--host claude --force
+
+━━ 环境变量 ━━
+  HQ_REF=<标签或分支>    一行安装时下载哪个版本，默认 v${HQ_VERSION}
+                         例：HQ_REF=main bash install.sh --host auto
+  HQ_CACHE_DIR=<目录>    下载缓存目录，默认 ~/.hq-orchestrator
+                         例：HQ_CACHE_DIR=/tmp/hq bash install.sh --host auto
+  HQ_REPO_URL=<地址>     从哪个 git 仓库下载，默认 GitHub 上的 lostoy0/hq-orchestrator
+                         例：HQ_REPO_URL=https://example.com/fork.git bash install.sh --host auto
+  DSH_HOME=<目录>        dsh 的主目录，默认 ~/.dsh
+                         例：DSH_HOME=~/tools/dsh ./install.sh --host dsh
+  CODEX_AGENTS_DIR、OPENCODE_AGENTS_DIR、GEMINI_AGENTS_DIR=<目录>
+                         改放子代理模板的目录
+                         例：CODEX_AGENTS_DIR=~/tmp/agents ./install.sh --host codex --with-agents
+
+━━ 退出码 ━━
+  0 成功    2 参数非法    3 目标已存在（加 --force 覆盖）    4 没有可操作的对象    5 下载失败
 U
 }
-die2() { echo "错误: $1" >&2; usage >&2; exit 2; }
+die2() { echo "错误: $1" >&2; echo "运行 install.sh --help 查看用法和例子" >&2; exit 2; }
 
 # ---------- 引导：不在仓库里运行时先下载 ----------
 src="${BASH_SOURCE[0]:-}"
