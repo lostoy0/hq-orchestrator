@@ -331,6 +331,7 @@ def plan_accuracy(tasks):
     d = [TIER_ORDER.index(t["tier"]) - TIER_ORDER.index(t["plan_tier"]) for t in ts]
     return {
         "n": n, "insufficient": n < MIN_N,
+        "cov_tier": cov_frac([t for t in tasks if t.get("plan_tier") in TIER_ORDER], ("tier",)),
         "same_rate": rate(sum(1 for x in d if x == 0), n),
         "under_rate": rate(sum(1 for x in d if x > 0), n),  # plan estimated lower than needed
         "over_rate": rate(sum(1 for x in d if x < 0), n),
@@ -504,10 +505,10 @@ def signals(tiers, models, overall_ratio, effs, plan=None, scale=None, cov=None)
     if plan and plan["n"] >= 5:
         if plan["under_rate"] is not None and plan["under_rate"] > 0.3:
             add("plan", "%.0f%% 的计划任务实际用了比预估更高的档位 (>30%%)，/hq-plan 打分偏低" % (plan["under_rate"] * 100), plan["n"],
-                prop=(plan["under_k"], plan["n"], 0.3, "above"))
+                prop=(plan["under_k"], plan["n"], 0.3, "above"), deps=[("tier", plan.get("cov_tier"))])
         if plan["over_rate"] is not None and plan["over_rate"] > 0.3:
             add("plan", "%.0f%% 的计划任务实际用了比预估更低的档位 (>30%%)，/hq-plan 打分偏高" % (plan["over_rate"] * 100), plan["n"],
-                prop=(plan["over_k"], plan["n"], 0.3, "above"))
+                prop=(plan["over_k"], plan["n"], 0.3, "above"), deps=[("tier", plan.get("cov_tier"))])
     om, on = overall_ratio
     if om is not None and on >= 3 and om > 1.5:
         add("overall", "actual/est 用时比中位数 %.2f (>1.5)，估时偏乐观" % om, on,
@@ -613,6 +614,7 @@ def by_flag(tasks):
         rows.append({"key": k, "n": n, "insufficient": n < MIN_N,
                      "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), n),
                      "first_pass_k": sum(1 for t in ts if first_pass(t)),
+                     "cov_first_pass": cov_frac(ts, ("attempts", "review_outcome")),
                      "rework_rate": rate(sum(1 for t in ts if t.get("review_outcome") in ("rework", "failed")), n),
                      "escalation_rate": rate(sum(1 for t in ts if isinstance(t.get("tier_changes"), list) and t["tier_changes"]), n),
                      "avg_cost_usd": mean(cost)})
@@ -630,6 +632,7 @@ def by_verify_level(tasks):
         n = len(ts)
         rows.append({"key": k, "n": n, "insufficient": n < MIN_N,
                      "verify_rate": rate(sum(1 for t in ts if t.get("verify_evidence") and t.get("verify_pass") is True), n),
+                     "cov_issues": cov_frac(ts, ("issues",)),
                      "escaped_integration": rate(sum(issue(t, "integration") for t in ts), n),
                      "escaped_user": rate(sum(issue(t, "user") for t in ts), n),
                      "escaped_per_task": rate(sum(issue(t, "integration") + issue(t, "user") for t in ts), n),
@@ -667,19 +670,24 @@ def recommendations(runs):
             "recommended_total": sum(cnt(x[3].get("recommended_next")) for x in rs)}
 
 
+def fp_dep(g):
+    return ("attempts+review_outcome", g.get("cov_first_pass"))
+
+
 def extra_signals(add, flags, levels, rec):
     for g in flags:
         if g["n"] >= 5 and g["key"].startswith("bias:+1") and g["first_pass_rate"] == 1 and (g["rework_rate"] or 0) == 0:
             add("flag %s" % g["key"], "规则 9 上调的任务一次通过率 100%%、返工 0：可以小范围实验不上调", g["n"],
-                prop=(g["first_pass_k"], g["n"], FULL_PASS_FLOOR, "above"))
+                prop=(g["first_pass_k"], g["n"], FULL_PASS_FLOOR, "above"), deps=[fp_dep(g)])
         if g["n"] >= 3 and g["key"].startswith("downgrade:") and g["first_pass_rate"] is not None and g["first_pass_rate"] < 0.6:
             add("flag %s" % g["key"], "规则 11 授权降档的任务一次通过率 %.0f%% (<60%%)：降档代价偏高" % (g["first_pass_rate"] * 100), g["n"],
-                prop=(g["first_pass_k"], g["n"], 0.6, "below"))
+                prop=(g["first_pass_k"], g["n"], 0.6, "below"), deps=[fp_dep(g)])
     for g in levels:
+        d_is = [("issues", g.get("cov_issues"))]
         if g["n"] >= 5 and g["escaped_per_task"] is not None and g["escaped_per_task"] > 0.3:
-            add("verify %s" % g["key"], "%.2f 个问题/任务漏到合并或用户环节 (>0.3)：考虑加严这一级的子会话验证" % g["escaped_per_task"], g["n"])
+            add("verify %s" % g["key"], "%.2f 个问题/任务漏到合并或用户环节 (>0.3)：考虑加严这一级的子会话验证" % g["escaped_per_task"], g["n"], deps=d_is)
         if g["escaped_major"]:
-            add("verify %s" % g["key"], "%d 个 major 问题漏过了这一级的验证" % g["escaped_major"], g["n"])
+            add("verify %s" % g["key"], "%d 个 major 问题漏过了这一级的验证" % g["escaped_major"], g["n"], deps=d_is)
     if rec["offered"] >= 5 and rec["acceptance_rate"] is not None and rec["acceptance_rate"] < 0.3:
         add("standing", "推荐被采纳 %.0f%% (<30%%)：推荐的来源或排序不贴合用户" % (rec["acceptance_rate"] * 100), rec["offered"],
             prop=(rec["accepted"], rec["offered"], 0.3, "below"))
@@ -896,11 +904,11 @@ def quality_signals(add, score, ir, effs, cov):
             if r["n"] < 5 or not on:
                 continue
             orate = sum(x["escalation_k"] for x in others) / on
-            if r["escalation_rate"] - orate >= 0.3:
+            if r["escalation_rate"] - orate >= 0.3 - 1e-9:  # tolerance: 0.7 - 0.4 is 0.29999999999999993
                 add("score %s=%d" % (d, r["value"]),
                     "维度 %s=%d 的任务升档率偏高（%.0f%%，该维度其他取值 %.0f%%），打分可能低估了这一维"
                     % (d, r["value"], r["escalation_rate"] * 100, orate * 100), r["n"],
-                    prop=(r["escalation_k"], r["n"], orate + 0.3, "above"),
+                    prop=(r["escalation_k"], r["n"], orate + 0.3 - 1e-9, "above"),
                     deps=[("score", fields["score"]["rate"])])
     for r in (ir or {}).get("by_trigger", []):
         if r["n"] >= 5 and r["found_rate"] is not None and r["found_rate"] < 0.1:

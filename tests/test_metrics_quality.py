@@ -162,6 +162,45 @@ class ConfidenceTest(Base):
         self.assertEqual(len(j["by_tier"][0]["first_pass_ci"]), 2)
 
 
+class SparseDepsTest(Base):
+    def test_rule11_flag_sparse(self):
+        ts = ([task(i, tier="T2", flags=["downgrade:user_allowed(-1)"], attempts=2, review_outcome="rework") for i in range(2)]
+              + [task(10 + i, tier="T2", flags=["downgrade:user_allowed(-1)"]) for i in range(4)])
+        s = self.sig(self.rep(ts), "flag downgrade:user_allowed(-1)", "规则 11")[0]
+        self.assertEqual((s["data"], s["data_field"]), ("sparse", "attempts+review_outcome"))
+        full = [passing(i, flags=["downgrade:user_allowed(-1)"]) for i in range(1)] + \
+               [failing(10 + i, flags=["downgrade:user_allowed(-1)"]) for i in range(3)]
+        self.assertNotIn("data", self.sig(self.rep(full), "flag downgrade:user_allowed(-1)", "规则 11")[0])
+
+    def test_rule9_flag_dependency(self):
+        out = []
+        g = {"key": "bias:+1(tier)", "n": 5, "first_pass_rate": 1, "first_pass_k": 5, "rework_rate": 0, "cov_first_pass": 0.2}
+        metrics.extra_signals(metrics.make_add(out), [g], [], {"offered": 0, "accepted": 0, "acceptance_rate": None})
+        self.assertEqual(out[0]["data"], "sparse")
+        out.clear()
+        metrics.extra_signals(metrics.make_add(out), [dict(g, cov_first_pass=1.0)], [], {"offered": 0, "accepted": 0, "acceptance_rate": None})
+        self.assertNotIn("data", out[0])
+
+    def test_plan_signal_sparse_on_tier(self):
+        ts = [passing(i, plan_tier="T1") for i in range(5)] + [task(10 + i, plan_tier="T1") for i in range(6)]
+        s = self.sig(self.rep(ts), "plan", "打分偏低")[0]
+        self.assertEqual((s["data"], s["data_field"]), ("sparse", "tier"))
+        ok = [passing(i, plan_tier="T1") for i in range(6)]
+        self.assertNotIn("data", self.sig(self.rep(ok), "plan", "打分偏低")[0])
+
+    def test_verify_level_escape_sparse_on_issues(self):
+        ts = ([task(i, verify_level="code", issues={"integration": 1}) for i in range(2)]
+              + [task(10 + i, verify_level="code") for i in range(3)])
+        s = self.sig(self.rep(ts), "verify code", "漏到合并或用户环节")[0]
+        self.assertEqual((s["data"], s["data_field"]), ("sparse", "issues"))
+        ok = [task(i, verify_level="code", issues={"integration": 1 if i < 2 else 0}) for i in range(5)]
+        self.assertNotIn("data", self.sig(self.rep(ok), "verify code", "漏到合并或用户环节")[0])
+
+    def test_other_boundaries_not_fooled(self):
+        # exactly 10% found, exactly 15 min median and exactly 50% coverage are not signals / not sparse
+        self.assertFalse(metrics.coverage([task(1, est_min=1), task(2)])["fields"]["est_min"]["sparse"])
+
+
 class CoverageTest(Base):
     def test_coverage_counts(self):
         ts = [task(1, est_min=5, actual_min=5, cost_usd=0.1, tier="T1", attempts=1, review_outcome="pass",
@@ -346,6 +385,14 @@ class ScoreTest(Base):
         self.assertEqual(self.sig(self.rep(self.tasks((6, 0), (4, 4))), "score ambiguity=2", "升档率偏高"), [])
         # gap below 30 points: 2/5 = 40% vs 1/6 = 16.7%
         self.assertEqual(self.sig(self.rep(self.tasks((6, 1), (5, 2))), "score ambiguity=2", "升档率偏高"), [])
+
+    def test_float_boundary_7_of_10_vs_4_of_10_fires(self):
+        r = self.rep(self.tasks((10, 4), (10, 7)))  # 0.7 - 0.4 == 0.29999999999999993
+        s = self.sig(r, "score ambiguity=2", "升档率偏高")
+        self.assertEqual(len(s), 1)
+        self.assertIn(s[0]["confidence"], ("weak", "strong"))
+        # just under the gap still does not fire: 6/10 vs 4/10
+        self.assertEqual(self.sig(self.rep(self.tasks((10, 4), (10, 6))), "score ambiguity=2", "升档率偏高"), [])
 
     def test_gap_exactly_30_points_fires(self):
         r = self.rep(self.tasks((10, 1), (10, 4)))  # 40% vs 10%
