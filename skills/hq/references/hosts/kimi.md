@@ -22,7 +22,7 @@ Kimi 在 hq 里**不是宿主**，而是**辅助执行者**：主宿主（运行
 |---|---|
 | 隔离 | 独立 git worktree，分支 `hq/<id>`；和其他 W worker 一样占本地资源，派发前过 `resources.sh` |
 | 回报 | 没有回信通道，结果写在交付格式里，主会话用 `cli-worker.sh status/usage` 读取 |
-| 用量 | 路径一：`usage` 里的 `tokens` 可用；`cost_usd` 是 claude CLI 按 Claude 价格算的，**不可信**，task 记录填 null，notes 写 `billing:kimi`，以 Moonshot 控制台账单为准 |
+| 用量 | 路径一：`usage` 里的 `tokens` 可用；`cost_usd` 是 claude CLI 按 Claude 价格算的，**不可信**，task 记录填 null，`flags` 记 `billing:kimi`，以 Moonshot 控制台账单为准 |
 | 记录 | `--label kimi`；task 记录 `assist: kimi`，model 写 `kimi:<模型名>` |
 
 ## 3. 档位映射（只到 T2）

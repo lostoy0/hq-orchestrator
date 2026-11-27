@@ -22,7 +22,7 @@ Handing a big goal to a single session tends to drift, run serially and fill the
 2. **Break it into a task graph**: shorten the critical path first, bundle small related tasks.
 3. **Pick a model by difficulty**: each subtask is scored on 5 dimensions into a tier T0–T4, then mapped to a concrete model and thinking depth on the host.
 4. **Throttle by resources**: CPU and memory are checked before each dispatch; work that does not fit locally waits or goes to the cloud.
-5. **Review and merge**: a sub-session's result is merged only after review, followed by one full test run.
+5. **Review and merge**: a sub-session's result is merged only after review; each check-in merges everything delivered as one group and verifies once, and the full suite runs only at checkpoints.
 6. **Record and retro**: each run's usage and outcome go into `.hq/runs/`, and `/hq-retro` uses them to calibrate tiers.
 
 **Maturity**: Claude Code is the primary host and has been used for real; the other hosts' adapters follow official docs and most have not been run on a real host yet. See [Supported hosts](#supported-hosts) and [Known limitations](#known-limitations).
@@ -79,7 +79,7 @@ What one run does:
 2. **Plan**: breaks the goal into a task graph, writes it to the ledger `.hq/LEDGER.md` and sends you the plan as a notification.
 3. **Dispatch**: picks a model per tier and throttles concurrency by resources; work that needs local resources runs locally, long parallel tasks go to the cloud.
 4. **Monitor and re-tier**: a stuck sub-session is handed to a new session one tier higher that continues from its branch.
-5. **Review and merge**: merges into the integration branch only after review, then runs the full tests; merging into the default branch and opening PRs ask you by default.
+5. **Review and merge**: merges into the integration branch only after review, merging and verifying everything delivered at a check-in together, with the full suite only at checkpoints; merging into the default branch and opening PRs ask you by default.
 6. **Report and record**: reports the result and writes usage to `.hq/runs/`.
 
 ## Standing mode: keep one session as the coordinator
@@ -434,7 +434,7 @@ Notes:
 ### Improvement loop: record → retro → change the plugin
 
 1. **Record**: when each task and each run ends, the main session appends a line to `.hq/runs/<run_id>.jsonl` (format in `metrics-schema.md`, including `host`; local runs also keep a copy in `~/.claude/hq/runs/`, which the Codex host uses too). Cost is measured mainly by `cost_usd`; `tokens` excludes cache reads.
-2. **Retro**: after roughly 5 runs or 20 tasks, the main session reminds you to run `/hq-retro`. It produces a metrics report with `metrics.py`, first checks earlier changes against their acceptance metrics in `CHANGELOG.md`, then has an independent sub-agent draft evidence-backed suggestions (a pattern must appear in at least 3 tasks or 2 runs). Project-specific lessons go straight into `.hq/PLAYBOOK.md`.
+2. **Retro**: after roughly 5 runs or 20 tasks, the main session reminds you to run `/hq-retro`. It produces a metrics report with `metrics.py`, first checks earlier changes against their acceptance metrics in `CHANGELOG.md`, then has an independent sub-agent draft evidence-backed suggestions (a pattern must appear in at least 3 tasks or 2 runs). Project-specific lessons go straight into `.hq/PLAYBOOK.md`. Whether an earlier change met its target is decided, where possible, by `metrics.py --check-changelog` from the machine-checkable "验收判定" expressions in `CHANGELOG.md`, on data split by plugin version and with a quality guard; the report also groups results by version, verification level, rule flags (`flags`) and standing-mode recommendation acceptance.
 3. **Change the plugin**: suggestions about the plugin itself need your approval. The report ends with a prompt you copy into a session on the hq-orchestrator repository; it edits the files, runs the tests, adds a "pending verification" entry to `CHANGELOG.md` and bumps the patch version. The next retro verifies the change and reverts it if it missed its target.
 
 ### Saving run records
@@ -488,7 +488,10 @@ Entirely voluntary, never uploaded automatically:
 - **Dynamic re-tiering**: sub-sessions send a checkpoint on out-of-scope derived work, unexpected difficulty or repeated failure; a stuck task is handed to a new session one tier higher that continues from its branch. No downgrade handoffs.
 - **Run-location routing**: tasks that need local resources always run locally; long tasks that can run in parallel go to the cloud; small tasks run in-process.
 - **Resource protection**: resources are checked before every dispatch, and dispatch is controlled at three levels: GREEN/YELLOW/RED (UNKNOWN when some readings cannot be read, treated like YELLOW: at most one more). Each sub-session is given a build parallelism limit. At RED, the most recently started heavy task is stopped.
-- **Quality control**: three quality gates; verification is graded by risk into doc/code/high/e2e, the main session re-runs acceptance commands itself only for high, and a full test run happens once after merging; high-risk or large changes get a separate independent reviewer.
+- **Quality control**: three quality gates; verification is graded by risk into doc/code/high/e2e, the main session re-runs acceptance commands itself only for high, and the full suite runs only at checkpoints; high-risk or large changes get a separate independent reviewer.
+- **Large batches sharded by workload** (`references/scale-out.md`, `scripts/scale.py`): for tasks that repeat one kind of work unit many times (page walkthroughs, bulk file edits), the shard count comes from "units × minutes per unit + start-up overhead" and a target shard length (40 minutes by default), not from the number of modules (e.g. 600 pages × 1.5 min with a concurrency limit of 20 → 16 shards and about an hour for the batch, instead of 4 shards of 4 hours each). Shared tools are fixed first by a prerequisite session, and each shared file gets a single owner. At each check-in an `HQ-PROGRESS` line gives the remaining time; a straggler with enough work left is split onto new sessions, one that is nearly done is left alone.
+- **Layered verification, group merges**: sub-sessions run only type checks and related tests (the full suite only when they change shared foundation files); each check-in merges all delivered shards together and verifies once, and a failure is traced to the shard that caused it so only that one is handled; the full suite waits for checkpoints such as a finished batch, every N merged shards or before pushing to main. Completion requires a `## 交付` (Delivery) section with a verification result, not just the word appearing somewhere.
+- **Active monitoring**: each check-in also looks at duration, idle time (from the event stream), cost, rework, failure rate and straggler ratio; a threshold fires after 2 consecutive breaches, severe levels fire at once. Level 1 acts on the spot (remind, re-split, locate, pause and ask you); level 2 analyses whether hq itself could avoid the problem, deduplicated by "metric + root cause", at most once per batch and 3 times a day, with non-severe triggers merged at batch end. Thresholds are calibrated from false positives and misses (≤20% per step, with bounds, per task type, never overriding values you set, one-step rollback).
 - **Recoverable**: all state is written to the ledger, so work can continue after context compression or a session restart.
 
 ## Repository layout
@@ -516,6 +519,7 @@ Stage skills
 
 Reference docs (skills/hq/references/)
   runtimes.md                            abstract capabilities, general rules for dispatch channels (A/B/C/D/W) and host index
+  scale-out.md                           large batches: shard by workload, shared tools and ownership, straggler re-split, layered verification, group merges, active monitoring, threshold calibration
   hosts/*.md                             per-host capability table, tier mapping, install/invocation, open items; kimi.md is an assist worker
   brief-template.md                      task brief template for sub-sessions (with verification level and checkpoints) and delivery format
   metrics-schema.md                      run-data format (JSONL, v1) and usage definitions
@@ -529,6 +533,7 @@ Scripts (skills/hq/scripts/)
   cli-worker.sh, backends/*.sh           W channel: runs each CLI in the background in a separate git worktree; one backend file per CLI
   assist-config.py                       assist worker settings: reads the codex model catalog, suggests tiers, writes user or project settings, validates
   metrics.py                             summarizes run data into a metrics report (read-only); --export-anon exports a whitelisted anonymized copy
+  scale.py                               the sharding rules as code: shard count, stragglers, delivery check, test scope, full-suite gate, merge groups, failure location, monitoring, calibration
   runs-persist.sh                        saves run records into the repository (dedicated hq/runs branch or the current branch) and fetches them back
   backlog-check.py                       backlog checker (read-only): ids, dependencies, tier vs score, requirement coverage, tasks on hold, critical path
   doc-check.py                           requirements doc, research report, architecture and launch checklist checker (read-only)

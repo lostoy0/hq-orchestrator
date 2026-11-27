@@ -15,7 +15,7 @@
 | monitor | 子代理完成时 dsh 会通知父代理；另用 `list_agents` 看子代理树（状态 running / inactive，**不代表任务是否完成**，以完成通知和交付内容为准） | 等完成通知，交付格式里写清结果 |
 | message_worker | `send_message`，给子代理树里的成员发消息（纠偏、回答 CHECKPOINT） | 停掉后带补充信息重新派 |
 | stop_worker | 待核实（文档里没有找到明确的中止工具） | 等它自然结束，不合并其结果 |
-| worker_usage | 待核实：子代理用量和成本的读取方式未在已读文档中找到。tokens 口径同 runtimes.md（input + output + cache_write，不含 cache_read） | 拿不到就 tokens、cost_usd 都填 null，不估算；以 DeepSeek 控制台账单为准，notes 标 `billing:deepseek` |
+| worker_usage | 待核实：子代理用量和成本的读取方式未在已读文档中找到。tokens 口径同 runtimes.md（input + output + cache_write，不含 cache_read） | 拿不到就 tokens、cost_usd 都填 null，不估算；以 DeepSeek 控制台账单为准，`flags` 记 `billing:deepseek` |
 | schedule_checkin | dsh 的 Schedule（宿主级持久定时任务，时间类型 after、at、every、daily、weekly、cron、rrule；目标可复用已有 Session、新建 Session 或每次投递）。用“after/every + 复用当前 Session”做兜底巡检。面向模型的具体工具名：待核实 | 主会话在等待期间定期 `list_agents` |
 | remote_workers | 无云端子会话。外部后端（ACP、Codex、Claude Code）**不支持选择模型**（挂载会失败），只能做跨厂商的一次性任务，且需 PLAYBOOK `worker_clis` 授权 | 只用本地 `subagent` |
 | local_machine | 不适用：dsh 本来就在本地运行 | — |
@@ -23,7 +23,7 @@
 
 ## 3. 档位映射 T0–T4 →（模型, 思考深度）
 
-**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 notes 记 `bias:+1(tier)`。
+**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 `flags` 记 `bias:+1(tier)`。
 
 DeepSeek 只有 pro 和 flash 两档，五档合成两档，靠思考深度区分。下表 provider/model 名只是示意（直连 API 名为 deepseek-v4-flash / deepseek-v4-pro），**以 `list_subagent_models` 返回为准**，首次运行写进 PLAYBOOK。
 

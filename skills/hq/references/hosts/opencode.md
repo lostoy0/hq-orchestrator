@@ -11,7 +11,7 @@
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | `subagent` 工具：agent 填 `hq-t0`…`hq-t4`（按档位），`description` 写任务标题，`prompt` 写完整任务说明。调用立即返回 `sessionID`，子代理在后台运行。只有 `mode: subagent` 的 agent 能被派发；默认嵌套深度 1（子代理不能再派子代理，正合 hq）。**首次运行先确认 `hq-t*` 存在**（见第 4 节），不存在时用内置 `general`（档位不生效，notes 记 `tier:not-applied`） | 子代理不可用：W 通道（`cli-worker.sh start --cli opencode ...`）或降级模式（见 `generic.md`） |
+| spawn_worker | `subagent` 工具：agent 填 `hq-t0`…`hq-t4`（按档位），`description` 写任务标题，`prompt` 写完整任务说明。调用立即返回 `sessionID`，子代理在后台运行。只有 `mode: subagent` 的 agent 能被派发；默认嵌套深度 1（子代理不能再派子代理，正合 hq）。**首次运行先确认 `hq-t*` 存在**（见第 4 节），不存在时用内置 `general`（档位不生效，`flags` 记 `tier:not-applied`） | 子代理不可用：W 通道（`cli-worker.sh start --cli opencode ...`）或降级模式（见 `generic.md`） |
 | monitor | 子代理空闲时父会话会收到 `<subagent>` 消息，之后每轮工作结束再收到一次；**不要轮询**。需要总览时用 shell：`opencode session list --format json` | 等通知 |
 | message_worker | 再次调用 `subagent`，带上返回的 `sessionID`，就是给同一个子会话发后续消息；子代理还在运行时，消息并入它当前这一轮。用于回答 CHECKPOINT、纠偏 | — |
 | stop_worker | 待核实：文档没有写中止单个子代理的工具。`opencode session delete <id>` 会删除会话及其子会话，是否能中止运行中的子代理未写明，**不要默认使用**（不可逆） | 不再给它发消息，等它结束后不合并其结果；需要时请用户在界面里停止 |
@@ -40,7 +40,7 @@
 | T4 | hq-t4 | 最强模型 | high |
 
 - 模型写在 agent 文件的 `model: provider/model#variant` 里，由 `install.sh --host opencode --with-agents --model-map 'T0=…,T1=…,…'` 生成（见 `adapters/opencode/README.md`）。**variant 名来自模型目录，不是每个模型都有 `low`/`medium`/`high`**，写了不存在的 variant 会报模型解析错误；可在 `--model-map` 里显式写 `#<variant>` 覆盖。用 `opencode models` 查看可用模型。
-- 没设 model 的 `hq-t*` 继承父会话模型，这时五档只是说明不同，台账和 notes 记 `tier:not-applied`。
+- 没设 model 的 `hq-t*` 继承父会话模型，这时五档只是说明不同，台账和 `flags` 记 `tier:not-applied`。
 - **成本系数**（`calibration.md` 规则 9）：按 hq-t* 实际用的 provider 判断计费方。Anthropic 模型按 `high`；OpenAI、DeepSeek 等按 `low`。混用时在 PLAYBOOK 写 `cost_weight`。
 - task 记录：`host` 记 `opencode`，`channel` 记 `A`，`model` 记 agent 文件里的 `provider/model#variant`（没设时记 `inherit:<父会话模型>`）。
 - 首次运行把最终映射写进 PLAYBOOK“选档偏好”（注明宿主 opencode）。
