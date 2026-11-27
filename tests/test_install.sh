@@ -284,6 +284,16 @@ fresh; PATH="$T/fc:$PATH" HOME="$T/h" CODEX_HOME="$T/h/.codex" bash "$INST" --ho
 fresh; HOME="$T/h" bash "$INST" --host gemini --with-agents --model-map auto >"$T/out" 2>&1; rc=$?
 [ $rc = 2 ] && ok "--model-map auto 只支持 codex" || bad "map auto gemini" "rc=$rc"
 
+# 32c. --help：每个参数都出现在说明里，并且每个参数块带例子；参数错误时只提示看 --help，不刷整屏说明
+bash "$INST" --help >"$T/help" 2>&1; rc=$?
+opts=$(grep -oE '^    --[a-z-]+\)' "$INST" | tr -d ' )' | sort -u)
+miss=""; for o in $opts; do grep -q -- "$o" "$T/help" || miss="$miss $o"; done
+[ $rc = 0 ] && [ -z "$miss" ] && ok "--help 列出全部参数" || bad "help options" "rc=$rc 缺:$miss"
+n_opt=$(grep -cE '^  --[a-z-]+' "$T/help"); n_ex=$(grep -c '例：' "$T/help")
+[ "$n_ex" -ge "$n_opt" ] && ok "--help 每个参数都有例子（$n_opt 个参数，$n_ex 处例子）" || bad "help examples" "参数 $n_opt 例子 $n_ex"
+bash "$INST" --bogus >"$T/out" 2>&1; rc=$?
+[ $rc = 2 ] && grep -q -- "--help" "$T/out" && [ "$(wc -l <"$T/out")" -le 3 ] && ok "参数错误时只给简短提示" || bad "short error" "rc=$rc"
+
 # 33. macOS 自带 bash 3.2 在 UTF-8 locale 下会把非 ASCII 字节当成变量名的一部分（如 $ 后跟 s 再跟全角括号，会被读成变量 s\xEF…，set -u 下报 unbound variable）；
 #     所以紧跟非 ASCII 字符的变量必须写成 ${var}
 ROOTD="$(dirname "$INST")"

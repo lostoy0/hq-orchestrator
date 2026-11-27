@@ -52,7 +52,14 @@ chmod 600 ~/.hq/env/kimi.env
 - 不要在这个文件里设 `CLAUDE_CODE_SUBAGENT_MODEL` 之类会覆盖 `--model` 的变量。
 - `cli-worker.sh` 只把它注入这一个 worker 进程，不影响主会话；权限不是 600 时拒绝启动（退出码 2）。
 
-PLAYBOOK：
+然后在 Claude Code 会话里一条命令配好（`--save` 对所有项目生效，换成 `--save-project` 只对当前项目生效）：
+
+```
+/hq --assist kimi --assist-cli claude --assist-env-file ~/.hq/env/kimi.env --assist-models T0=<模型>,T1=<模型>,T2=<模型> --save
+/hq --assist codex,kimi --save        # 想让 codex 优先、kimi 兜底时再执行这一条
+```
+
+终端里等价的命令是 `python3 <hq 技能目录>/scripts/assist-config.py set --scope user --use kimi --profile kimi --cli claude --env-file ~/.hq/env/kimi.env --models T0=<模型>,T1=<模型>,T2=<模型>`。保存后用 `/hq --assist-show` 确认。写进文件的内容等同于下面这段（也可以手写进 `~/.hq/config.yaml` 或项目 PLAYBOOK 的授权区）：
 
 ```yaml
 assist:
@@ -65,7 +72,7 @@ assist:
       models: {T0: <模型>, T1: <模型>, T2: <模型>}
 ```
 
-单次运行也可以不改 PLAYBOOK：`/hq --assist kimi <目标>`（profiles 仍从 PLAYBOOK 读）。
+单次运行也可以不改配置：`/hq --assist kimi <目标>`（profile 仍从用户级配置或 PLAYBOOK 读）。思考深度不填时不传 `--effort`。
 
 ### 云端会话
 
