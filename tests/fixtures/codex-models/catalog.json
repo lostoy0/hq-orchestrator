@@ -1,0 +1,12 @@
+{"fetched_at": "2026-11-26T00:00:00Z", "models": [
+ {"slug": "m-main", "display_name": "M Main", "visibility": "list", "priority": 1, "description": "Fast, go-to model for coding and everyday work.",
+  "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}]},
+ {"slug": "m-big", "display_name": "M Big", "visibility": "list", "priority": 2, "description": "Our most capable model for complex coding.",
+  "supported_reasoning_levels": [{"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}]},
+ {"slug": "m-small-old", "display_name": "M Small Old", "visibility": "list", "priority": 3, "description": "Legacy fast model for simpler tasks.",
+  "supported_reasoning_levels": [{"effort": "low"}], "upgrade": {"model": "m-small", "retirement_at": "2026-12-23T20:00:00Z"}},
+ {"slug": "m-small", "display_name": "M Small", "visibility": "list", "priority": 4, "description": "Fast and affordable model for easier tasks.",
+  "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}]},
+ {"slug": "m-hidden", "display_name": "Hidden", "visibility": "hide", "priority": 0, "description": "Fast and affordable agentic coding model.",
+  "supported_reasoning_levels": [{"effort": "low"}]}
+]}

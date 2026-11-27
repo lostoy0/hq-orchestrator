@@ -26,8 +26,9 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 ## 辅助执行者（可选，默认关闭）
 
 让主宿主只做难的、重要的任务，把需求明确的中低难度任务交给更便宜的辅助模型（如 Codex、Kimi），产出一律由主宿主审核后才归并。**主宿主就是运行本插件的宿主和模型**（Claude Code、Codex、Gemini CLI 等都可能），不要假定是 Claude；接手、审核、重新选档都按主宿主自己的映射。
-- **开启**：命令参数 `/hq --assist codex,kimi [--assist-max T1] <目标>`（按顺序优先），或 PLAYBOOK 授权区的 `assist.use`；命令参数优先，只影响本次运行。`--assist off` 本次关闭。`--stay` 可以和它连用。
-- **配置**：每个辅助执行者是 PLAYBOOK `assist.profiles` 里的一项：用哪个 CLI（W 通道）、T0–T2 各用什么模型、可选 `env_file`（接口地址和密钥，权限 600；只写路径，密钥绝不写进 PLAYBOOK、台账或说明）。Kimi 的接法见 `references/hosts/kimi.md`。PLAYBOOK 里没有同名 profile 时：名字正好是 W 通道支持的 CLI（codex、claude、opencode、gemini、cursor）就直接用这个 CLI、按其宿主文档第 3 节的档位映射选模型；否则这个名字本次不可用。
+- **开启**：三层设置，后者逐项覆盖前者：用户级 `~/.hq/config.yaml`（所有项目共用，`$HQ_HOME` 可改目录）→ 项目 PLAYBOOK 授权区的 `assist` → 命令参数 `/hq --assist codex,kimi [--assist-max T1] <目标>`（按顺序优先，只影响本次运行）。`--assist off` 本次关闭；PLAYBOOK 里 `use: []` 表示沿用用户级，`use: off` 才是本项目关闭。`--stay` 可以和它连用。
+- **保存设置**：`--save` 把本次的 `--assist`/`--assist-max` 写进用户级配置（以后所有项目都生效），`--save-project` 只写进本项目 PLAYBOOK；都用同目录的 `scripts/assist-config.py set`（`--scope user|project --use <名单> [--max-tier <档>] --auto-models`），不要手改。没给目标（如 `/hq --assist codex --save`）时只保存：运行 `assist-config.py check`，把写入的文件、生效的名单和各档模型告诉用户，然后结束，不开始运行。用户说“以后都用 codex 当辅助”这类话，等同 `--assist codex --save`。
+- **配置**：每个辅助执行者是 PLAYBOOK `assist.profiles` 里的一项：用哪个 CLI（W 通道）、T0–T2 各用什么模型、可选 `env_file`（接口地址和密钥，权限 600；只写路径，密钥绝不写进 PLAYBOOK、台账或说明）。Kimi 的接法见 `references/hosts/kimi.md`。没有同名 profile 时：名字正好是 W 通道支持的 CLI（codex、claude、opencode、gemini、cursor）就直接用这个 CLI；否则这个名字本次不可用。**某档没填模型时**：codex 用 `assist-config.py check --json` 的 `fills`（读本机 `codex debug models` 的模型目录、按模型说明推荐的模型和思考深度），本次照用，台账“决策”区记一行 `assist_auto_models:<profile>:<T0=…,…>`，第一次汇报里说明一次并给出保存命令（`/hq --assist codex --save`）；其他 CLI 按其宿主文档第 3 节的档位映射选。
 - **路由、审核、回收、停用**：只按 `calibration.md` 规则 10 执行。辅助不可用、连续失败 2 次或累计失败达到 `assist.max_failures`（默认 2）就停用它；全部停用后本次剩余任务全部由主宿主自己做，不停下问用户。第 1 步把生效的设置写进台账头部 `assist:`，例如 `assist: codex,kimi ≤T2`。
 
 ## 常驻模式（可选）
@@ -115,7 +116,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - **降级模式**：宿主没有子代理能力、也用不了 W 时，主会话按同样的计划、台账、质量门槛**串行**亲自执行，仍然记录数据，channel 记 `main`。此时**暂停铁律 1**（“不做重活”），其余铁律照常；每个任务做完就更新台账，控制上下文。
 - **仓库**：`git remote -v`、默认分支、`git status`。未推送的改动远程子会话看不到。
 - **资源基线**：先读 `~/.hq/skill-path`（安装脚本写入的 hq 技能目录），其下 `scripts/resources.sh` 存在就用它；否则用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/resources.sh' 2>/dev/null | head -1`。执行 `bash <路径> 1500 1`。同目录的 `cli-worker.sh` 用同样方式找。
-- **辅助执行者**（开启时）：先去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥；辅助都走 W 通道，还要确认本会话能建 worktree（`git worktree add` 要写 `.git`，Codex 等宿主的沙箱可能禁止），不能建就整个名单按“不可用”停用。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
+- **辅助执行者**（开启时）：先运行 `python3 <scripts>/assist-config.py check --project . --json`，拿到合并后生效的设置（`effective`，再叠加本次 `--assist` 参数）、错误和提醒：模型不在 codex 模型目录里、思考深度不被该模型支持的 profile 按“不可用”处理（`unavailable:bad_model`），即将下线的模型只在汇报里提醒。然后去掉与主宿主相同的 profile（规则 10，例如 Codex 宿主上的 `codex`），再逐个检查剩下的能不能用——CLI 在 PATH 上（`command -v`）、`env_file` 存在且权限 600、目标 CLI 已登录或有密钥；辅助都走 W 通道，还要确认本会话能建 worktree（`git worktree add` 要写 `.git`，Codex 等宿主的沙箱可能禁止），不能建就整个名单按“不可用”停用。不能用的从本次名单去掉，台账“决策”区记一行原因，不停下问用户（全都不能用时，在第一次汇报里说明一次）。云端会话里还需要放行接口主机、配好密钥，见 `references/hosts/kimi.md` 第 4 节。
 - **预算**：远程并发上限取 PLAYBOOK 的 `remote_concurrency`（默认 4；宿主有更低的 concurrency_limit 时取低者）、每任务最多 2 次失败、单批子任务数上限取 `max_subtasks`（默认 12）、金额上限取 `budget_usd`（没写就不设）。要超出时按“停止条件 2”处理。并发上限只决定同时开几个，不影响每个任务的档位（铁律 8）。
 - 生成 `run_id`（如 `20261124-1530-<目标缩写>`），写进台账。
 
@@ -262,7 +263,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 - `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
 - `runs_persist: off | branch | commit`（本地默认 `off`，云端没写时问一次）：运行记录是否保存进仓库，见第 9 步。
-- `assist`（默认关闭）：辅助执行者的名单、最高档位和各自的 CLI、模型、`env_file`，见上文“辅助执行者”和 `calibration.md` 规则 10。`assist.use` 里的 profile 视为已授权，它用的 CLI 不必再列进 `worker_clis`。
+- `assist`（默认关闭）：辅助执行者的名单、最高档位和各自的 CLI、模型、`env_file`，见上文“辅助执行者”和 `calibration.md` 规则 10。也可以写在用户级 `~/.hq/config.yaml`（所有项目共用），项目里写了的项优先；用 `scripts/assist-config.py set` 或 `/hq --assist … --save` 写入。`assist.use` 里的 profile 视为已授权，它用的 CLI 不必再列进 `worker_clis`。
 
 ## 台账格式（`.hq/LEDGER.md`）
 

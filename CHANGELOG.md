@@ -20,6 +20,13 @@
 
 ## 未发布
 
+### 辅助执行者：命令一次配好、用户级配置、自动读取 Codex 模型目录
+- **改动**：新增 `skills/hq/scripts/assist-config.py`：`models` 读本机 `codex debug models`（失败时读 `~/.codex/models_cache.json`），列出可用模型、支持的思考深度和下线时间；`suggest` 按模型说明把 T0–T4 映射到 小而便宜 / 日常主力 / 最强 三类，避开即将下线和 legacy 模型；`set --scope user|project` 写用户级 `~/.hq/config.yaml`（`$HQ_HOME` 可改）或项目 `.hq/PLAYBOOK.md` 的 `assist` 块，`--auto-models` 只补没填的档位；`show` 显示合并后的设置和来源；`check` 校验模型是否在目录里、思考深度是否被支持、`env_file` 权限。设置三层逐项覆盖：用户级 < PLAYBOOK < `/hq --assist`；PLAYBOOK 的 `use: []` 和 `<占位符>` 视为没填，`use: off` 才关闭。`SKILL.md`“辅助执行者”新增 `--save`（写用户级）、`--save-project`（写项目），没给目标时只保存不运行；第 1 步先跑 `assist-config.py check`，模型或深度不对的 profile 按不可用停用；codex profile 没填模型时按推荐自动选、在台账记 `assist_auto_models` 并提示保存。`install.sh --model-map auto`（仅 codex 模板）用同样的推荐。`playbook-template.md`、`hosts/codex.md`（第 3、4、5 节，xhigh 待核实项改为看模型目录）、`adapters/codex/README.md`、`README.md`、`README.en.md` 同步。测试：新增 `tests/test_assist_config.py`；`tests/test_install.sh` 新增 `--model-map auto`。
+- **原因/假设**：用户反馈辅助模型只能手改每个项目的 PLAYBOOK 或每次带 `--assist`，Codex 模型名要自己查。预期配一次就对所有项目生效，codex 模型名不再靠手填或凭记忆，配置错的模型在派发前就被发现。
+- **验收指标**：辅助 worker 因模型名或思考深度不对而启动失败的次数 = 0；开启 assist 的运行里，台账出现 `assist_auto_models` 后用户保存配置的比例（复盘时看下一次运行是否还出现同一条）；用户为配置辅助手改 PLAYBOOK 的次数下降。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自用户反馈）
+
 ## v0.10.4（2026-11-26）
 
 ### 计划清单：新增 hold（暂缓）状态
