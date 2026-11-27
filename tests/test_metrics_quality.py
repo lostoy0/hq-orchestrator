@@ -1,4 +1,4 @@
-"""Signal confidence (Wilson), field coverage, CHANGELOG stats, score / independent review / review wait."""
+"""Signal confidence (Wilson), field coverage, score / independent review / review wait."""
 import json
 import os
 import subprocess
@@ -143,19 +143,6 @@ class ConfidenceTest(Base):
         out.clear()
         flags = [{"key": "downgrade:user_allowed(-1)", "n": 12, "first_pass_rate": 0.1, "first_pass_k": 1}]
         metrics.extra_signals(add, flags, [], {"offered": 0, "accepted": 0, "acceptance_rate": None})
-        self.assertEqual(out[0]["confidence"], "strong")
-
-    def test_monitor_false_positive_signal(self):
-        out = []
-        add = metrics.make_add(out)
-        mk = lambda fp, ok: {"run_id": "r", "shards": 3, "concurrency_utilization": None, "concurrency_limit": None,
-                              "straggler_ratio": None, "full_tests": 0, "unit_est_error_median": None, "unit_est_n": 0,
-                              "monitor_by_metric": {"idle_min": {"effective": ok, "false_positive": fp, "missed": 0,
-                                                              "false_positive_rate": fp / (fp + ok)}}}
-        metrics.scale_signals([mk(3, 4)], add)  # 3/7 -> weak
-        self.assertEqual(out[0]["confidence"], "weak")
-        out.clear()
-        metrics.scale_signals([mk(40, 5)], add)
         self.assertEqual(out[0]["confidence"], "strong")
 
     def test_tier_and_model_tables_have_interval_column(self):
@@ -303,61 +290,20 @@ CHANGELOG = """# 更新记录
 """
 
 
-class ChangelogStatsTest(Base):
-    def test_counts(self):
-        p = self.write("CHANGELOG.md", None, text=CHANGELOG)
-        r = run("--changelog-stats", p, "--format", "json")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        st = json.loads(r.stdout)
-        by = {v["version"]: v for v in st["versions"]}
-        self.assertEqual([v["version"] for v in st["versions"]], ["未发布", "1.2.0", "1.1.0"])
-        self.assertEqual((by["未发布"]["entries"], by["未发布"]["pending"], by["未发布"]["verified"], by["未发布"]["judged"]), (2, 1, 1, 1))
-        self.assertEqual((by["1.2.0"]["entries"], by["1.2.0"]["verified"], by["1.2.0"]["withdrawn"],
-                          by["1.2.0"]["other"], by["1.2.0"]["judged"]), (4, 2, 1, 1, 2))
-        self.assertEqual((by["1.1.0"]["entries"], by["1.1.0"]["other"]), (1, 1))
-        t = st["total"]
-        self.assertEqual((t["entries"], t["pending"], t["verified"], t["withdrawn"], t["other"], t["judged"]), (7, 1, 3, 1, 2, 3))
-        self.assertAlmostEqual(t["verified_rate"], 0.75)  # 3 / (3 + 1)
-        self.assertAlmostEqual(t["withdrawn_rate"], 0.25)
-        self.assertAlmostEqual(t["judged_rate"], 3 / 7)
-
-    def test_md(self):
-        p = self.write("CHANGELOG.md", None, text=CHANGELOG)
-        r = run("--changelog-stats", p)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| 未发布 | 2 | 1 | 1 | 0 | 0 |", r.stdout)
-        self.assertIn("| 合计 | 7 | 1 | 3 | 1 | 2 | 75.0% | 25.0% | 3 (42.9%) |", r.stdout)
-
-    def test_unparseable_version_heading_not_counted_as_unreleased(self):
+class ChangelogCheckSmokeTest(Base):
+    """--changelog-stats was removed; what is left here only checks --check-changelog on the same inputs."""
+    def test_unparseable_version_heading(self):
         text = ("## 格式说明\n\n- 说明\n\n## 未发布\n\n### a\n- **状态**：待验证\n\n"
                 "## v0.1.x（复盘后的小改进）\n\n### b\n- **状态**：已验证\n\n### c\n- **状态**：待验证\n"
                 "- **验收判定**：`quality.overall.rework_rate <= 0.5`\n\n## 杂项说明\n\n### d\n- **状态**：已撤回\n")
-        st = metrics.changelog_stats(text)
-        by = {v["version"]: v for v in st["versions"]}
-        self.assertEqual(list(by), ["未发布", "v0.1.x", "杂项说明"])
-        self.assertEqual(by["未发布"]["entries"], 1)
-        self.assertEqual((by["v0.1.x"]["entries"], by["v0.1.x"]["verified"], by["v0.1.x"]["pending"]), (2, 1, 1))
-        self.assertEqual(st["total"]["entries"], 4)
         p = self.write("CHANGELOG.md", None, text=text)
         r = run(FIX, "--check-changelog", p)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("c", r.stdout)
 
-    def test_no_closed_entries(self):
-        st = metrics.changelog_stats("## 未发布\n\n### a\n- **状态**：待验证\n")
-        self.assertIsNone(st["total"]["verified_rate"])
-        self.assertIsNone(st["total"]["withdrawn_rate"])
-        self.assertEqual(metrics.changelog_stats("")["total"]["entries"], 0)
-
-    def test_real_changelog(self):
-        for fmt in ("md", "json"):
-            r = run("--changelog-stats", os.path.join(ROOT, "CHANGELOG.md"), "--format", fmt)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertTrue(r.stdout.strip())
-
-    def test_missing_file_and_check_changelog_unchanged(self):
-        self.assertNotEqual(run("--changelog-stats", "/nonexistent/CHANGELOG.md").returncode, 0)
-        self.assertNotEqual(run().returncode, 0)  # paths still required without --changelog-stats
+    def test_missing_paths_and_check_changelog(self):
+        self.assertNotEqual(run().returncode, 0)  # paths are required
+        self.assertNotEqual(run("--changelog-stats", "x").returncode, 0)  # option removed
         p = self.write("CHANGELOG.md", None, text=CHANGELOG)
         r = run(FIX, "--check-changelog", p)
         self.assertEqual(r.returncode, 0, r.stderr)
