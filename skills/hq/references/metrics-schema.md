@@ -6,7 +6,7 @@
 ## 通用规则
 
 - 编码 UTF-8，一行一个对象，行内不能换行。
-- `type` 取 `"task"` 或 `"run"`。其他 type、未知字段，读取方一律忽略。
+- `type` 取 `"task"`、`"run"`、`"merge"`（v0.11.0 起，合入组）或 `"monitor"`（v0.11.0 起，监控触发和漏报）。其他 type、未知字段，读取方一律忽略。
 - 所有字段都可能缺失或为 `null`，读取方必须容错；写入方拿不到值时写 `null`（不要编造）。
 - 损坏的行（不是合法 JSON，或不是对象）由读取方跳过并计数。
 - 一个 run 对应一个文件：多条 `task` 记录 + 一条 `run` 记录。`task` 通过 `run_id` 关联所属 run。
@@ -53,6 +53,13 @@
 | review_outcome | `pass`/`pass_with_fixes`/`rework`/`failed` | 审核结论 | 审核时 |
 | user_corrections | 整数 | 用户纠正次数 | 发生时累加 |
 | assist | 字符串或 null | 可选（v0.5.0 起）。由辅助执行者完成时写 profile 名（如 `kimi`、`codex`），主宿主自己做的写 null 或省略。辅助失败被主宿主接手时仍写原 profile，靠 `handoffs` 区分 | 任务结束时 |
+| shard_group / task_type | 字符串（可选，v0.11.0 起） | 分片任务所属的分片组（同一批同一种工作单元，如 `patrol`）；任务类型（`patrol` 巡检、`dev` 开发、`docs`、`test`…），监控阈值按它分别校准，没写时按 `kind` | 规划完成时 |
+| units_planned / units_actual | 整数（可选） | 计划和实际完成的工作单元数 | 规划时 / 交付后 |
+| unit_min_est / overhead_min | 数字（可选） | 预估的单元耗时、子会话固定开销（分钟） | 规划时 |
+| resplit / resplit_from | 布尔 / 字符串（可选） | 本片是否被再拆；由哪片拆出来 | 再拆时 |
+| test_scope / test_min | `related`/`full`、数字（可选） | 子会话的测试范围（关联 / 全量）和测试耗时 | 交付后 |
+| rework_rounds | 整数（可选） | 返工轮数（修复后复测、同一问题反复出现、被退回） | 交付后 |
+| flags | 字符串数组（可选，v0.11.0 起） | 规则标记，用于按规则分组复盘：`bias:+1(tier)`、`bias:+1(effort)`（规则 9 上调）、`downgrade:user_allowed(-N)`（规则 11 授权降档）、`rate_limited`、`assist_unavailable:<原因>`、`assist_auto_models`、`billing:<计费方>`、`effort_env:<值>`、`tier:not-applied`。旧数据写在 notes 里的同样识别（`bias:+1(cost_low)` 视为 `bias:+1(tier)`） | 发生时追加 |
 | notes | 字符串 | 备注。没有专门字段的问题原因写在这里，便于复盘检索（如 `worktree 未忽略`、`删远程分支失败`） | 任意 |
 
 示例：
@@ -85,6 +92,7 @@
 | standing_seq | 整数（可选） | 常驻模式下本会话的第几批；非常驻不写 |
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
+| concurrency_limit / target_shard_min | 整数 / 数字（可选，v0.11.0 起） | 本次的并发上限、分片目标时长；用于并发利用率和片数建议 |
 | assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
 | stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 8 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
 
@@ -93,6 +101,28 @@
 ```json
 {"type":"run","run_id":"20260101-a","project":"hq-orchestrator","goal":"增加指标汇总","started_at":"2026-01-01T10:00:00Z","ended_at":"2026-01-01T11:00:00Z","wall_min":60,"critical_path_min":40,"tasks":5,"max_concurrency":3,"throttle_events":1,"autonomy_stops":1,"decisions":2,"integration_pass":true,"host":"claude-code","plugin_version":"0.3.0"}
 ```
+
+## merge 记录（v0.11.0 起）
+
+每次巡检合入一组已交付分片后写一条：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| type / run_id | `"merge"` / 字符串 | |
+| group_seq | 整数 | 本批第几组 |
+| shards | 字符串数组 | 这一组合入的 task_id（推迟的不算） |
+| verify_runs | 整数 | 这一组跑了几次校验（正常为 1；失败定位后复测会增加） |
+| full_test / full_test_min | 布尔 / 数字 | 这次是否跑了全量测试、耗时 |
+| reasons | 字符串数组 | 跑或没跑全量的原因（`scale.py full-gate` 的 `reasons`） |
+| pass / culprits / conflicts | 布尔 / 数组 / 数组 | 校验结果、定位到的分片、冲突文件 |
+| wait_min | 数字 | 为攒批等待的分钟 |
+
+## monitor 记录（v0.11.0 起）
+
+`scale.py monitor` 输出的 `records` 原样追加；`event` 为 `trigger`（触发）或 `missed`（事后补记的漏报）。
+字段：`ts`、`batch_id`、`task_id`、`task_type`、`metric`（duration_ratio/idle_min/cost_ratio/rework/failure_rate/straggler_ratio，以及拆分合理性 split_unit_error/split_uneven/split_underused/split_boundary）、
+`value`、`threshold`、`severity`（normal/severe）、`level`（1 当场处置 / 2 进入分析）、`action`、`key`（指标:根因类别）、
+`rate_limited`、`skip_reason`、`deferred`、`analysis_cost_usd`（分析结束后补）、`label`（事后标 `effective` / `false_positive`）。
 
 ## 用量口径
 
@@ -119,12 +149,34 @@
   - “加速比偏低”信号只在加速比 < 1.3、且加速比上限 ≥ 1.3（任务图本来允许并行）时给出；没记 critical_path_min 的 run 不判断。
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 计划预估 vs 实际（有 `plan_tier` 的任务才出这一节）：`tier` 与 `plan_tier` 一致、偏低（实际档位更高）、偏高的比例，以及一次通过率；n ≥ 5 且偏低或偏高超过 30% 时给出信号，提示调整 `/hq-plan` 的打分说明。
+- 分片、分层校验与合入（4b，有 v0.11.0 字段的 run 才出）：并行效率 = 各片 actual_min 之和 ÷（片数 × 最长片）；掉队比 = 最长片 ÷ 中位片；并发利用率 = `max_concurrency` ÷ `concurrency_limit`；单元耗时估算误差 = |（actual_min − overhead_min）÷ 单元数 ÷ unit_min_est − 1| 的中位数；全量测试次数 = merge 的 `full_test` + 子会话 `test_scope: full`，每次全量覆盖片数 = 两次全量之间合入的片数均值；合入组数、每组片数、校验次数；按实测单元耗时用 `scale.py shards` 同一规则算出的建议片数。
+- 主动监控（4c）：触发数、一级/二级、限频跳过数、漏报数、分析花费，以及各阈值的触发数、有效率、误报率、漏报数。
+- 信号：并发利用率 < 50%（附“下次切成 N 片”）、掉队比 > 2、全量测试 > 0.5 次每片（附“每 N 片合入后跑一次”）、单元耗时误差 > 50%、某阈值误报率 > 30% 或漏报偏多。
+- 按插件版本（3f）：每个 `plugin_version` 的 run 数、task 数、一次通过率、返工率、漂移率、验证到位率、漏网问题/任务（integration + user）、actual/est 中位数、平均 cost_usd。`--since-version V` 只看 ≥V 的 run，`--before-version V` 只看 <V 的；给了任一项时，没有版本号的 run 被排除。
+- 按验证级别（3g）：每级的验证到位率、漏到合并/漏到用户的问题数每任务、漏网 major 数、返工率。n ≥ 5 且漏网 > 0.3 个/任务，或出现漏网 major 时给出信号。
+- 按规则标记（3h）：每个 flag 的一次通过率、返工率、升档率、平均 cost_usd，另有“(无标记)”基线行。规则 9 上调的任务（n ≥ 5）一次通过率 100% 且返工 0、规则 11 授权降档的任务（n ≥ 3）一次通过率 < 60% 时给出信号。
+- 常驻模式推荐（6c）：同一项目、`standing_seq` 连续的两批算前后批；推荐过（前一批 `recommended_next` > 0）的批数、下一批 `from_recommendation` 为真的批数、采纳率、完工声明数（`recommended_next` = 0）。推荐过 ≥ 5 次且采纳率 < 30% 时给出信号。
 - 调档与检查点：升档任务数、其中 `checkpoints`>0 的比例（近似“升档由检查点触发、而不是等失败”）、checkpoints / handoffs / derived_tasks 合计、`user_manual_adjust` 次数。
+
+## CHANGELOG 验收判定（`metrics.py --check-changelog CHANGELOG.md`）
+
+每条改动除了自由文本的“验收指标”，再写一行机器可判定的“验收判定”：
+
+```markdown
+- **验收判定**：`<路径> <比较> <数值> [n>=<最少样本>] [since=<版本>] [before=<版本>]`；`…`
+```
+
+- **路径**是 `metrics.py --format json` 报告里的字段，用点连接：`quality.overall.rework_rate`。列表用 `[字段=值]` 选一项（`by_tier[key=T2].first_pass_rate`、`efficiency[run_id=r2].speedup`），或用 `[*]` 配合聚合函数 `median`/`mean`/`max`/`min`/`sum`（`median(scale_out[*].straggler_ratio)`）。
+- **比较**：`<=`、`>=`、`<`、`>`、`==`、`!=`。**样本**：选中项自带的 `n`（或 `ratio_n`、`tasks`、`shards`、`offered`），聚合时是有值的项数；默认至少 3。
+- **since**：只用这个插件版本及以后的 run 计算；条目在 `## vX.Y.Z` 下时默认就是这个版本，在“未发布”下要写明即将发布的版本号。
+- 只判定状态为“待验证”的条目。每条判定给出“达到 / 未达到 / 样本不足 / 无法解析”，整条：任一未达到 → 未达到；全部达到 → 达到；否则样本不足。
+- **质量护栏**：since 前后各有 ≥ 5 个任务、且改动后返工率比之前高出 5 个百分点以上时，整条判为“未达到”（不能拿质量换别的指标）。
 
 ## 保存进仓库与脱敏导出
 
 - **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id` 去重。
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
   - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`。
+  - `flags` 只保留上表列出的已知规则标记，其他自由写法丢弃。
   - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。
   - 删除：`title`、`project`、`goal`、`notes`、`drift_note`、`tier_changes.reason` 和所有未知字段。

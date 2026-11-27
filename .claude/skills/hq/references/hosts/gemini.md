@@ -11,7 +11,7 @@
 
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
-| spawn_worker | 子代理以**同名工具**出现：调用 `hq-t0`…`hq-t4`（按档位），参数里给完整任务说明。子代理在独立上下文里运行，不能再派子代理。**调用会等子代理完成才返回**（文档未写后台运行）；同一轮里发起多个子代理调用能否并行，待核实。首次运行先确认 `hq-t*` 存在（`/agents` 列表），不存在时用内置 `generalist`（档位不生效，notes 记 `tier:not-applied`）。需要真正的并行或进程隔离时改用 W：`cli-worker.sh start --cli gemini --model <m> ...`（宿主自己的 CLI，不需 `worker_clis` 授权） | W 通道或降级模式（见 `generic.md`） |
+| spawn_worker | 子代理以**同名工具**出现：调用 `hq-t0`…`hq-t4`（按档位），参数里给完整任务说明。子代理在独立上下文里运行，不能再派子代理。**调用会等子代理完成才返回**（文档未写后台运行）；同一轮里发起多个子代理调用能否并行，待核实。首次运行先确认 `hq-t*` 存在（`/agents` 列表），不存在时用内置 `generalist`（档位不生效，`flags` 记 `tier:not-applied`）。需要真正的并行或进程隔离时改用 W：`cli-worker.sh start --cli gemini --model <m> ...`（宿主自己的 CLI，不需 `worker_clis` 授权） | W 通道或降级模式（见 `generic.md`） |
 | monitor | 子代理调用返回即完成；W 用 `cli-worker.sh status` / `list` | — |
 | message_worker | 不支持向运行中的子代理发消息 | 子代理遇到检查点提前返回，主会话处理后再派一个接着做 |
 | stop_worker | 子代理受 `max_turns`、`timeout_mins` 限制（模板为 100 轮、60 分钟）；中途中止只能由用户在界面上取消。W：`cli-worker.sh stop` | 等它结束，不合并其结果 |

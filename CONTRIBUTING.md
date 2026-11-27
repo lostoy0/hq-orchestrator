@@ -22,7 +22,7 @@
   for t in tests/test_*.sh; do bash "$t" || echo "FAILED: $t"; done
   python3 -m unittest discover tests
   ```
-- 改了行为（技能、脚本、校准表），在 `CHANGELOG.md` 加一条，按文件顶部的五项格式写：改动、原因/假设、验收指标、状态、复盘报告。新改动状态一律先写“待验证”。
+- 改了行为（技能、脚本、校准表），在 `CHANGELOG.md` 加一条，按文件顶部的格式写：改动、原因/假设、验收指标、验收判定（能用 `metrics.py --check-changelog` 判定的表达式，写不出就写“不适用”和原因）、状态、复盘报告。新改动状态一律先写“待验证”。
 - 改了 `adapters/tiers.tsv`，用 `adapters/render.sh` 重新生成各宿主的 `hq-t0…t4` 模板，不要手改生成物。
 - 中英文 README 要同步改。
 - 版本号只在发版时改（`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、`gemini-extension.json` 保持一致），普通 PR 不用动。
@@ -54,7 +54,7 @@ If you don't agree, please don't open a PR. Open an issue first if you have ques
   for t in tests/test_*.sh; do bash "$t" || echo "FAILED: $t"; done
   python3 -m unittest discover tests
   ```
-- If you change behavior (skills, scripts, the calibration table), add a `CHANGELOG.md` entry in the five-field format at the top of that file: change, reason/hypothesis, acceptance metric, status, retro report. New changes start as "待验证" (unverified).
+- If you change behavior (skills, scripts, the calibration table), add a `CHANGELOG.md` entry in the format at the top of that file: change, reason/hypothesis, acceptance metric, machine-checkable acceptance criteria ("验收判定", an expression `metrics.py --check-changelog` can evaluate, or "不适用" with a reason), status, retro report. New changes start as "待验证" (unverified).
 - If you change `adapters/tiers.tsv`, regenerate the `hq-t0…t4` templates with `adapters/render.sh`; don't hand-edit generated files.
 - Keep `README.md` and `README.en.md` in sync.
 - Version numbers change only at release time (keep `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `gemini-extension.json` identical); ordinary PRs leave them alone.

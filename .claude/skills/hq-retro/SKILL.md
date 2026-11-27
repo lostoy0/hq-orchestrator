@@ -20,14 +20,14 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - 脚本：`hq` 技能目录下的 `scripts/metrics.py`（插件仓库里是 `skills/hq/scripts/metrics.py`；安装后先看 `~/.hq/skill-path` 下的 `scripts/metrics.py`，没有再用 shell 查找：`find ~/.claude/skills ~/.claude/plugins ~/.agents/skills ~/.dsh/skills ~/.config/opencode/skills ~/.cursor/skills ~/.gemini/skills ~/.gemini/extensions/hq-orchestrator/skills .claude/skills .agents/skills .dsh/skills .opencode/skills .cursor/skills .gemini/skills -path '*hq/scripts/metrics.py' 2>/dev/null | head -1`）；难度分档：同目录的 `calibration.md`；数据格式：`references/metrics-schema.md`。
 - 项目经验：`.hq/PLAYBOOK.md`（模板 `skills/hq/references/playbook-template.md`）。
 - 改动历史：插件仓库的 `CHANGELOG.md`。找不到就在报告里写明，当作“没有上次改动”。
-- 这些文件都只读，复盘本身不修改它们（PLAYBOOK 除外，见第 7 步）。
+- 这些文件都只读，复盘本身不修改它们（PLAYBOOK 除外，见第 7、8 步）。
 
 ## 流程
 
 ### 1. 收集数据
 
 1. 先运行 `bash <scripts 目录>/runs-persist.sh fetch`（退出码 4 表示没有 `hq/runs` 分支，跳过即可），再运行 `python3 <metrics.py 路径> .hq/runs .hq/runs-archive ~/.claude/hq/runs --last 10`（目录不存在就省略；几处都有的同一次运行只算一次）。用户指定了项目或次数，就加 `--project NAME` 或改 `--last`。
-2. 读 `CHANGELOG.md` 最近几条改动和当时的假设。
+2. 读 `CHANGELOG.md` 最近几条改动和当时的假设，并运行 `python3 <metrics.py 路径> <同样的目录> --check-changelog <CHANGELOG.md 路径>`，得到每条“待验证”改动的机器判定（按 `since` 版本切分数据，带质量护栏）。
 3. 读 `calibration.md` 和目标项目的 `.hq/PLAYBOOK.md`。
 4. 原始 jsonl **只在需要查证某条信号时**才读，读哪条记哪条。
 5. 运行数不足 3 次或总任务数不足 10 个：直接告诉用户“数据太少”，只出数据概览和观察，不出建议。
@@ -42,7 +42,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ### 3. 先验证上次的改动
 
-对 CHANGELOG 里每条状态为“待验证”的改动，按它的验收指标逐条判断：
+对 CHANGELOG 里每条状态为“待验证”的改动：有“验收判定”行的，**直接采用 `--check-changelog` 的判定**，不要自己重新解读；没有的，按自由文本的验收指标判断，用 `--since-version <改动所在版本>` 和 `--before-version` 分别出改动前后的报告对比（报告 3f 节按版本列出），并在报告里注明“人工判定”。判定规则：
 
 | 结果 | 条件 | 动作 |
 |---|---|---|
@@ -63,6 +63,11 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 9. **跨宿主、跨厂商对比**：用 metrics 报告“3c 按宿主/通道”（含 W、`main`）和“3b 按模型”（model 前缀 `<cli>:`）分组比较一次通过率、返工率、cost_usd。每组至少 3 个任务才比较，不足就写“样本不足”；结论按第 7 步分层。
 10. **辅助执行者分工**（有 `assist` 数据时）：看 metrics 报告“3d 辅助执行者 vs 主宿主”，同一档位比较一次通过率、交接率（≈ 被主宿主收回的比例）、审核发现的问题数；再看主宿主在审核和接手上花的 tokens 是否吃掉了省下的额度。按 `calibration.md` 规则 10 的阈值（每组至少 5 个任务）决定是否建议下调某个 profile 的 `max_tier` 或停用它；表现稳定时可以建议放宽模糊度条件，但不建议把 `max_tier` 提到 T3。
 11. **计划预估档位**（有 `plan_tier` 数据时）：看 metrics 报告“3e 计划预估档位 vs 实际”。预估偏低或偏高超过 30%（至少 5 个任务）时，建议改 `hq-plan/SKILL.md` 第 3 节的打分说明，**不改 `calibration.md`**：执行时的档位以重新打分为准，偏差说明的是计划阶段信息不足或打分口径不一致。
+12. **分片、校验与监控**（有 v0.11.0 字段时，看 metrics 报告 4b、4c 节）：并行效率、掉队比、并发利用率、单元耗时估算误差；全量测试总次数、总耗时和每次覆盖几片；合入组数和每组片数；监控触发次数、各级处置次数、限频跳过次数、分析总花费，以及每个阈值的有效率、误报率和漏报数。并发利用率低、掉队比高或全量测试偏多时，按报告“信号”给出具体建议（“同类任务下次切成 N 片”“全量测试改成每 N 片合入后跑一次”），属于本项目的写进 PLAYBOOK `scale_out`。阈值本身不在这里手调：按第 8 步运行 `scale.py calibrate`。
+13. **按版本对比**：看报告 3f 节，最近两个版本的一次通过率、返工率、漏网问题/任务、成本有没有明显变化；样本不足的版本不比较。变化要能对应到 CHANGELOG 的某条改动，对应不上的只记为观察。
+14. **验证分级**：看报告 3g 节，哪一级漏到合并或用户环节的问题多、有没有漏网 major；据此建议加严那一级子会话的验证（改 `SKILL.md` 第 8 步分级表或说明模板），不要建议所有任务都跑全量。
+15. **规则标记**：看报告 3h 节，规则 9 上调（`bias:+1(…)`）、规则 11 授权降档（`downgrade:…`）与“(无标记)”基线在同类任务上的一次通过率、返工率、成本；`rate_limited`、`assist_unavailable:*` 的次数和原因。
+16. **常驻推荐**（有常驻数据时）：看报告 6c 节的采纳率和完工声明数；采纳率低说明推荐的来源或排序不贴合用户。
 
 ### 5. 证据门槛
 
@@ -84,6 +89,12 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - **只与该项目有关**（测试命令、项目特有的坑、该项目适合的档位）：直接写进目标项目的 `.hq/PLAYBOOK.md`，不需要用户把关。遵守模板里“最多 30 条，新的替换旧的”，每条带证据和日期。
 - **涉及插件本身**（`calibration.md`、流程、模板、脚本、SKILL.md）：形成插件改进建议，**必须由用户把关**，不得直接改。
 - 拿不准归哪层：当作插件建议。
+
+### 8. 校准监控阈值（有 monitor 记录时）
+
+1. 回看本次范围内每条 `type:"monitor"` 触发记录，没标 `label` 的按结果补标：确实发现了问题或处置带来了收益标 `effective`，最终正常完成、处置无收益标 `false_positive`；复盘发现有问题、当时却没触发的，追加一条 `{"type":"monitor","event":"missed","metric":…,"task_type":…}`。只标有证据的，拿不准就不标。
+2. 运行 `python3 <scripts 目录>/scale.py calibrate --playbook .hq/PLAYBOOK.md --write`，stdin 给 `{"history": [这些记录], "ratios": {<task_type>: [各分片 actual_min/est_min]}}`。规则（误报 >30% 放宽、漏报 >20% 收紧、每次 ≤20%、有上下限、样本 <5 用全局或默认、用户手动值不覆盖）由脚本执行，不要手算。
+3. 报告第 5 节列出每项阈值调整前后的数值和依据，并告诉用户可以用 `scale.py thresholds --playbook .hq/PLAYBOOK.md --rollback` 回退。阈值属于项目数据，不需要用户把关；校准规则本身的改动才是插件建议。
 
 ## 输出
 
@@ -137,7 +148,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - 修改后运行并贴出输出，必须全部通过：
   bash tests/test_resources.sh
   python3 -m unittest discover tests
-- 在 CHANGELOG.md 对应版本下新增一条记录：改动内容、原因/假设、验收指标、状态“待验证”、对应的复盘报告（.hq/retro/<日期>.md）。被撤回的旧条目状态改为“已撤回”，已达标的改为“已验证”。
+- 在 CHANGELOG.md 对应版本下新增一条记录：改动内容、原因/假设、验收指标、验收判定（`metrics.py --check-changelog` 能解析的表达式，写明 since 版本，语法见 skills/hq/references/metrics-schema.md）、状态“待验证”、对应的复盘报告（.hq/retro/<日期>.md）。被撤回的旧条目状态改为“已撤回”，已达标的改为“已验证”。
 - 在 .claude-plugin/plugin.json 里把补丁版本号加 1。
 - 不要开 PR，不要推送到 main；在新分支提交，提交信息说明改了什么、依据是什么。
 

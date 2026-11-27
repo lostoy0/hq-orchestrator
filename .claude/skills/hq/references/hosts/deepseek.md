@@ -20,7 +20,7 @@ DeepSeek 是模型，不是宿主。使用方式有三条路径：
 | monitor | 同所选宿主（claude-code.md / codex.md） | 同宿主文档 |
 | message_worker | 同所选宿主 | 同宿主文档 |
 | stop_worker | 同所选宿主 | 同宿主文档 |
-| worker_usage | cost_usd 优先；tokens = input + output + cache_write，不含 cache_read；拿不到填 null。DeepSeek 后端下 Claude Code 的 cost_usd 按 Claude 价格算，不可信：以 DeepSeek 控制台账单为准，task 记录 notes 标注 `billing:deepseek` | cost_usd 填 null，tokens 照常 |
+| worker_usage | cost_usd 优先；tokens = input + output + cache_write，不含 cache_read；拿不到填 null。DeepSeek 后端下 Claude Code 的 cost_usd 按 Claude 价格算，不可信：以 DeepSeek 控制台账单为准，task 记录 `flags` 记 `billing:deepseek` | cost_usd 填 null，tokens 照常 |
 | schedule_checkin | 同所选宿主 | 同宿主文档 |
 | remote_workers | 路径二：仅 B 通道，且该通道是 Claude 后端；路径三：见 codex.md | 无云端时只用本地 A/W |
 | local_machine | 同所选宿主（C 通道依赖云端会话，仅路径二的云端主会话可用） | 主会话直接在本机运行 |
@@ -28,7 +28,7 @@ DeepSeek 是模型，不是宿主。使用方式有三条路径：
 
 ## 3. 档位映射 T0–T4 →（模型, 思考深度）
 
-**额度成本偏好**：DeepSeek 计费的三条路径都按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 notes 记 `bias:+1(tier)`；但经 Claude Code 派到 claude.ai 云端子会话（B 通道）的任务按 Claude 额度计，仍算 high（拿不准时默认只上调思考深度一级）。
+**额度成本偏好**：DeepSeek 计费的三条路径都按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 `flags` 记 `bias:+1(tier)`；但经 Claude Code 派到 claude.ai 云端子会话（B 通道）的任务按 Claude 额度计，仍算 high（拿不准时默认只上调思考深度一级）。
 
 ### 路径二：Claude Code
 
@@ -68,7 +68,7 @@ export CLAUDE_CODE_EFFORT_LEVEL="max"                   # 官方建议；可能�
 
 变量名 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 为 Claude Code 通用写法，DeepSeek 页具体用哪个待核实。
 
-**`CLAUDE_CODE_EFFORT_LEVEL` 与档位的关系（未下结论）**：若它覆盖 A 通道的 `effort` 参数和 W 通道的 `--effort`，第 3 节的思考深度列就不生效，所有档位都按 max 跑（T0–T2 成本上升、用时变长）。设了该变量时，task 记录 notes 标注 `effort_env:max`；想让档位生效可不设它，再用小任务对比两种设置（见 README 验证清单）。`claude-code.md`、`calibration.md` 已同步标注此风险。
+**`CLAUDE_CODE_EFFORT_LEVEL` 与档位的关系（未下结论）**：若它覆盖 A 通道的 `effort` 参数和 W 通道的 `--effort`，第 3 节的思考深度列就不生效，所有档位都按 max 跑（T0–T2 成本上升、用时变长）。设了该变量时，task 记录 `flags` 记 `effort_env:max`；想让档位生效可不设它，再用小任务对比两种设置（见 README 验证清单）。`claude-code.md`、`calibration.md` 已同步标注此风险。
 
 ### 路径三配置示例（`~/.codex/config.toml`，依官方“Integrate with Codex”摘要，字段细节待核实）
 
@@ -89,7 +89,7 @@ experimental_bearer_token = "<YOUR_DEEPSEEK_API_KEY>"   # 官方示例明文写�
 ## 5. 已知限制与待核实项
 
 - 思考深度在 DeepSeek 上的实际效果：待验证。
-- cost_usd 在 DeepSeek 后端下可能不准（Claude Code 按 Claude 价格计算）：以 DeepSeek 控制台账单为准，notes 标注 `billing:deepseek`。
+- cost_usd 在 DeepSeek 后端下可能不准（Claude Code 按 Claude 价格计算）：以 DeepSeek 控制台账单为准，`flags` 记 `billing:deepseek`。
 - B 通道不可用或不走 DeepSeek：用 Claude 模型和 Claude 套餐额度，混用时账单要分开记。
 - flash 对 T3/T4 的质量风险：复盘看这两档的一次通过率。
 - 待核实：Claude Code 与 Codex 的适用版本；opus 变量设为 deepseek-v4-pro 是否被官方认可；DeepSeek 并发/速率限制；`CLAUDE_CODE_EFFORT_LEVEL` 与 hq 按档位 effort 的关系；Codex 配置字段是否随版本变化；官方示例里 `deepseek-flash` 与 `deepseek-v4-flash` 两个名字是否等价。

@@ -24,7 +24,7 @@
 
 ## 3. 档位映射
 
-**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 notes 记 `bias:+1(tier)`。
+**额度成本偏好**：本宿主按 `calibration.md` 规则 9 属于低成本（`cost_weight: low`），难度拿不准时上调一整档；关键路径上的小任务不上调，遇到限流先降并发、不撤销上调（规则 11），上调的任务在 `flags` 记 `bias:+1(tier)`。
 
 具体型号以 `codex` 可用模型为准，不要凭记忆填：运行 hq 技能目录下的 `scripts/assist-config.py models` 看本机模型目录（读 `codex debug models`，失败时读 `~/.codex/models_cache.json`；含每个模型支持的思考深度、是否即将下线），`assist-config.py suggest` 按模型说明给出 T0–T4 推荐。首次运行时把实际映射写进 PLAYBOOK。
 

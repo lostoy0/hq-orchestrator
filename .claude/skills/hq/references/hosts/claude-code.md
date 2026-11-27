@@ -14,7 +14,7 @@
 | 能力 | 怎么做 | 不支持时的降级 |
 |---|---|---|
 | spawn_worker | A：`Agent(description, subagent_type="general-purpose"（只读调研用 "Explore"）, model, effort, isolation="worktree"（改代码必加）, run_in_background=True, prompt=<说明>)`。B：`mcp__claude-code-remote__create_session(title, prompt, source_url, source_revision, outcome_branch="hq/<id>", model, effort, tags=["hq:<项目>"])`，不要传 `permission_mode="plan"`。W：`bash <cli-worker.sh> start --id <id> --cli claude\|codex --model <m> [--effort <e>] --brief <文件>` | 没有 Agent 也没有 B：用 W；没有 shell：降级模式（主会话串行亲自做，channel 记 `main`） |
-| monitor | A：后台子代理完成自动通知，不要轮询；`TaskList` 看正在运行的。B：`list_sessions(children=true)` 看全局，`get_session(id)` 看 `status_bucket`（working / blocked / review_ready / completed / failed），`list_events(session_id, kinds=["result","assistant"], limit=100)` 看结果。W：`cli-worker.sh status --id <id>` / `list` | 等分支推送后 `git fetch` 审核 |
+| monitor | A：后台子代理完成自动通知，不要轮询；`TaskList` 看正在运行的。B：`list_sessions(children=true)` 看全局，`get_session(id)` 看 `status_bucket`（working / blocked / review_ready / completed / failed），`list_events(session_id, kinds=["result","assistant"], limit=100)` 看结果；分片任务的进度行（`HQ-PROGRESS`）和空转判断也从这里取，**空转以最新一条事件的时间为准**，`list_sessions` 的更新时间可能几小时不刷新（实测一个仍在运行的会话停在两小时前）。W：`cli-worker.sh status --id <id>` / `list` | 等分支推送后 `git fetch` 审核 |
 | message_worker | A：`SendMessage` 发给子代理 id。B：`send_message(session_id, ...)`，子会话创建后、运行中、空闲或阻塞时都能发（实测返回 `delivered`，消息以 `<cross-session-message from-session=…>` 的形式排进对方队列）；`priority` 取 `now`（打断当前轮）、`next`（并入运行中的轮）、`later`（等本轮结束）。子会话回报主会话也用它，说明里写上主会话 session_id（`get_session()` 不带参数可查自己的 id），或让子会话用 `@parent`。**auto 模式下子会话的 `send_message` 会卡在人工批准上，见 §5。** W：无回信通道 | 没有回信通道：worker 提前返回或写在交付格式里，主会话通过 monitor 读取 |
 | stop_worker | A：`TaskStop`。B：`interrupt_session`，收尾用 `archive_session`。W：`cli-worker.sh stop --id <id>` | 请用户手动停止 |
 | worker_usage | B：`get_session(id).usage`：`cost_usd` 直接用；tokens = input + output + cache_write，不加 cache_read。B 的 `actual_min`：从 `created_at` 到交付那一轮结束（`external_metadata.turn.ended_at`，毫秒时间戳）的分钟数，不含之后等审核、合并的时间。A：返回结果的 duration 写 `actual_min`；`subagent_tokens` 分不出缓存读取时 tokens 填 null，原值记进 notes。W：`cli-worker.sh usage --id <id>`（JSON） | 拿不到填 null，不估算 |
@@ -71,5 +71,5 @@
 - 运行中的子会话改不了模型和思考深度。
 - A 的 `subagent_tokens` 不分缓存读取，tokens 常为 null。
 - 接 DeepSeek 后端时的模型名、档位映射、用量口径：见 `deepseek.md`。
-- **effort 风险（未下结论）**：DeepSeek 官方建议设 `CLAUDE_CODE_EFFORT_LEVEL=max`，它可能覆盖 hq 按档位传的 effort（A 通道的 `effort` 参数、W 通道的 `--effort`），使上表的思考深度列不生效，T0–T2 成本上升。是否覆盖待实测；设了该变量时，task 记录 notes 标注 `effort_env:max`，复盘时按此分组。
+- **effort 风险（未下结论）**：DeepSeek 官方建议设 `CLAUDE_CODE_EFFORT_LEVEL=max`，它可能覆盖 hq 按档位传的 effort（A 通道的 `effort` 参数、W 通道的 `--effort`），使上表的思考深度列不生效，T0–T2 成本上升。是否覆盖待实测；设了该变量时，task 记录 `flags` 记 `effort_env:max`，复盘时按此分组。
 - 待核实：D 通道 CLI 参数名；插件市场安装命令在各版本中的写法。

@@ -124,6 +124,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 - **并行以缩短总用时为准**：总用时最短只能压到关键路径的长度，所以优先缩短关键路径，而不是增加并行数。
 - **打包优先**：几个小而相关的任务打包给一个子会话。只有任务够大（约 15 分钟以上）、改的文件不重叠，才拆开并行。
+- **分片任务**（同一种工作单元做很多遍：页面巡检、路由回归、批量改文件、跑用例）：按工作量算片数，不按模块数（`scripts/scale.py shards`，单元耗时拿不准先跑小样本）；切分按单元清单均匀切；各片共用的工具先派前置会话改好，跨片共享文件指定唯一归属，其他片只登记不改。规则见 `references/scale-out.md` 第 1–3 节。派发前一两句话告诉用户总工作量、片数、每片和整批预计用时、为什么是这个片数。
 - **难度单一**：每个任务内部难度要一致，不要把“机械改名”和“找根因”塞进同一个任务，否则档位要么浪费要么不够，后面还得调档。
 - **文件归属**：并行任务不能改同一个文件。共享接口、类型、配置先单独拆成前置任务。
 - 每个任务记录：id、标题、依赖、归属文件、验收标准、验证级别和命令、重任务还是轻任务、预计时长。
@@ -135,8 +136,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 按 `calibration.md` 的 5 维打分表和 T0–T4 抽象档位选档，再按宿主映射（宿主文档第 3 节；PLAYBOOK“选档偏好”里有本宿主的映射时优先）换成具体模型和思考深度，并应用修正规则。首次在新宿主上运行时，把实际用的映射写进 PLAYBOOK“选档偏好”。跨厂商 worker 只在 `worker_clis` 开启时使用。要点：
 - 选档算上失败重来的成本：需求明确的选最低能胜任的档位；模糊或高风险的直接用够强的档位，争取一次做对。
-- **拿不准就往上选**（所有宿主，`calibration.md` 规则 9）：低成本宿主上调一整档；Claude Code 这类高成本宿主默认只把思考深度上调一级，模糊度 ≥1 或风险 2 时上调一整档。上调的在 notes 记 `bias:+1(tier|effort)`。
-- **并发要求不改档位**（`calibration.md` 规则 11）：“尽量多开”、任务多、槽位或预算紧张、限流，都只调并发和排队，不降模型或思考深度；用户明确授权“为多开可以用低档”时才按规则 11 降，notes 记 `downgrade:user_allowed(-N)`。
+- **拿不准就往上选**（所有宿主，`calibration.md` 规则 9）：低成本宿主上调一整档；Claude Code 这类高成本宿主默认只把思考深度上调一级，模糊度 ≥1 或风险 2 时上调一整档。上调的在 task 的 `flags` 记 `bias:+1(tier|effort)`。
+- **并发要求不改档位**（`calibration.md` 规则 11）：“尽量多开”、任务多、槽位或预算紧张、限流，都只调并发和排队，不降模型或思考深度；用户明确授权“为多开可以用低档”时才按规则 11 降，`flags` 记 `downgrade:user_allowed(-N)`。
 - 难度看不准（模糊度 2 分）时，先派短小的调研子会话消除不确定性，再按实际难度派实现任务。
 - 选档理由在台账备注里写一句，方便用户纠正。
 - **辅助执行者开启时**：打完分、选好档后，按 `calibration.md` 规则 10 决定这个任务给主宿主还是给辅助；给辅助的，模型取该 profile 对应档位的模型，台账“模型/深度”列写 `<profile>:<模型>`。
@@ -182,6 +183,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
   - **巡检间隔按预计时长定**：约为预计时长的 1 到 1.5 倍，最短 3 分钟，最长 30 分钟。还在正常运行时，下次间隔取剩余预计时长。
   - 回报一到就进入审核，并取消未触发的巡检。
   - 巡检时除了看是否完成，也看是否卡住：状态是 `blocked` 且 `need_input` 时，worker 多半在等权限批准（如发回报），不是在干活。读 `needs_action` 确认等的是什么，再决定是告诉用户去批准，还是直接按交付文件和分支审核。
+- **分片任务的巡检**（`references/scale-out.md` 第 4、7 节）：从 `HQ-PROGRESS` 进度行算速率和剩余时间，掉队且剩余够多的提出再拆（`scale.py straggler`），快完成的不拆；顺带跑主动监控（`scale.py monitor`，含拆分合理性：单元耗时估错、预计完成不均、槽位闲置、边界冲突，每批各处置一次）：连续 2 次超阈值才触发、严重级别立即触发，第一级当场处置，第二级分析限频且放在合入校验之后。空转以事件流最新事件的时间为准，不看会话列表的更新时间。监控只读，不做第一级处置以外的外部操作。
 - worker 来提问：能用已有信息回答的用 message_worker 回复；需要用户的按“停止条件”攒起来一次问。
 - 跑偏（越出归属文件、陷入循环）：先用 message_worker 纠正；无效就 stop_worker，改说明后重派。
 - 用户问进度时，从台账给一张简表。不要编造还没返回的结果。
@@ -214,10 +216,10 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 | e2e | 需要本地环境的端到端 | 不跑 | 合并后统一跑一次 |
 
 步骤：
-1. **看报告**：必须按模板交付，缺验证证据的视为没完成。
+1. **看报告**：必须按模板交付，缺验证证据的视为没完成。完成判定看 `## 交付` 小节标题、其中的 `STATUS: DONE` 和有结果的 `VERIFY:`（或约定的完成文件），用 `scale.py delivered`；正文里出现“交付”两个字（如“交付段待补记”）不算。
 2. **查漂移**：`git fetch origin hq/<id>`，`git diff --stat`，确认没越出归属文件。只有 high 级任务才由主会话逐个复跑验收命令。
 3. **独立审核**（high 级，或 T3 及以上，或改动超过约 300 行；辅助执行者的产出超过约 150 行）：另派只读审核子代理，只给代码和验收标准，不给实现者的结论。
-4. **归并**：按 DAG 拓扑顺序合进 `hq/integration`，然后主会话统一跑一次全量测试（有 e2e 的也在这时跑）。小冲突自己解决，大冲突派子任务。
+4. **归并**：每次巡检把这一轮所有已交付的任务作为一组（`scale.py merge-group`：推迟文件重叠、依赖未完成、改了别人归属文件的），按 DAG 拓扑顺序合进 `hq/integration`，然后一次校验（类型检查 + 各片改动并集的关联测试）。全量测试只在检查点跑（一批全部合入、累计合入达到阈值、推主干前、CI 要求的节点，`scale.py full-gate`），有 e2e 的也在这时跑；一起校验失败时用 `scale.py locate` 定位到具体任务，只回退或修复那一个。汇报写清这组合入了哪些、跑了哪些校验、为什么跑或没跑全量。小冲突自己解决，大冲突派子任务。规则见 `references/scale-out.md` 第 5、6 节。
 5. **收尾**：通过的标 `DONE`，按宿主文档归档或停止 worker（B 归档会话，W 用 `cli-worker.sh stop`），worktree 按第 6 步清理。不通过的按 `calibration.md` 的失败规则处理。
    - **远程 `hq/*` 分支**：确认已完全合入（`git merge-base --is-ancestor origin/hq/<id> <目标分支>`）后再删。有的宿主可能不允许删除远程分支（如云端会话报 `unexpected disconnect` 或 `remote end hung up`），试一次就停，不要反复重试或绕路，把没删掉的分支列进汇报，交给用户删除。
 6. 合入默认分支、开 PR：按 PLAYBOOK“授权”区的 `merge_default`、`open_pr`，默认 `ask`。
@@ -229,6 +231,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
   - run：host、wall_min、critical_path_min、tasks、max_concurrency、throttle_events、autonomy_stops、decisions、integration_pass、plugin_version。
   - 用量：用 worker_usage 读取（具体见宿主文档）。`cost_usd` 是主要成本指标；`tokens` = input + output + cache_write，不含 cache_read（口径见 schema“用量口径”）。分不出缓存读取时 tokens 填 `null`、原值记进 notes。拿不到就填 `null`，不要猜。降级模式的 channel 记 `main`。
   - 跨厂商：用到非宿主自带的模型时，model 写成 `<cli>:<模型名>`。
+  - 规则标记（`bias:+1(…)`、`downgrade:user_allowed(-N)`、`rate_limited`、`assist_unavailable:<原因>`、`billing:<计费方>`、`effort_env:<值>`、`tier:not-applied`）一律写进 task 的 `flags` 数组，不再只写在 notes 里，`metrics.py` 按标记分组对比。
+  - 分片任务：task 另记 `shard_group`、`task_type`、`units_planned`/`units_actual`、`unit_min_est`、`overhead_min`、`resplit`、`test_scope`、`test_min`、`rework_rounds`；每组合入记一条 `type:"merge"`，`scale.py monitor` 输出的 `records` 原样追加（`type:"monitor"`）。批次结束时给触发标 `effective`/`false_positive`、补记漏报，运行 `scale.py calibrate --playbook .hq/PLAYBOOK.md --write` 校准阈值，变化在下一次派发时告诉用户。
   - 辅助执行者：task 记录写 `assist: <profile>`（主宿主自己做的写 null），model 写成 `<profile>:<模型名>`；辅助失败被主宿主接手时，这条 task 的 `handoffs` 加 1、`tier_changes` 记一次，`assist` 仍写原来的 profile。
 - 本地运行时，同时追加一份到 `~/.claude/hq/runs/`（非 Claude Code 宿主也用这个目录，便于统一复盘），用于跨项目累积。
 - **保存进仓库**（PLAYBOOK `runs_persist`）：`branch` 时整批结束后运行同目录的 `scripts/runs-persist.sh save branch`（写进专用分支 `hq/runs` 并推送，不碰工作区）；退出码 3（推不上去）就改用 `save commit`，并把 PLAYBOOK 改成 `runs_persist: commit`。`commit` 时直接 `save commit`（提交到当前分支，随本批改动一起推）。云端运行且 PLAYBOOK 没写这项时，第一次汇报里问用户一次（推荐 `branch`），答案写进 PLAYBOOK，不再问；本地没写就是 `off`。
@@ -262,6 +266,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 - `max_subtasks: <数>`（默认 12）：单批最多派多少个子任务。按计划清单整版推进（`--backlog`）时可以设成该版本的任务数。
 - `autonomy: auto | confirm-plan`（默认 `auto`）：`confirm-plan` 时第 2 步的计划要等用户确认再派发。
 - `worker_clis: [codex, claude, opencode, gemini, cursor]` 中的若干项（默认空，即关闭）：允许 W 通道使用哪些 CLI 做跨厂商 worker；宿主自己的 CLI 不需要列。
+- `scale_out`、`monitor`：分片目标时长、全量测试节点、攒批等待上限、共享基础文件，以及监控阈值、限频上限，见 `references/playbook-template.md` 和 `references/scale-out.md`。
 - `runs_persist: off | branch | commit`（本地默认 `off`，云端没写时问一次）：运行记录是否保存进仓库，见第 9 步。
 - `assist`（默认关闭）：辅助执行者的名单、最高档位和各自的 CLI、模型、`env_file`，见上文“辅助执行者”和 `calibration.md` 规则 10。也可以写在用户级 `~/.hq/config.yaml`（所有项目共用），项目里写了的项优先；用 `scripts/assist-config.py set` 或 `/hq --assist … --save` 写入。`assist.use` 里的 profile 视为已授权，它用的 CLI 不必再列进 `worker_clis`。
 
