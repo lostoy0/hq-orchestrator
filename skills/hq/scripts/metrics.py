@@ -4,11 +4,11 @@
 Usage: metrics.py <file|dir...> [--format md|json] [--last N] [--project NAME]
                   [--since-version V] [--before-version V]
        metrics.py <file|dir...> --check-changelog CHANGELOG.md [--format md|json]
-       metrics.py --changelog-stats CHANGELOG.md [--format md|json]
        metrics.py <file|dir...> --export-anon [--raw] [--last N] [--project NAME]
 --export-anon prints an anonymized JSON for sharing: records are first reduced to a
 whitelist of enum/number/boolean fields (all free text, project and goal dropped, run ids
 hashed, timestamps cut to dates), then summarized; --raw also includes those records.
+Records of type "monitor" (written by older versions) are ignored.
 """
 import argparse
 import hashlib
@@ -66,10 +66,13 @@ def collect_files(paths):
 def load(files):
     """Return (runs, corrupt). runs: ordered dict run_id -> {'run': dict|None, 'tasks': [..]}
 
-    A task with the same (run_id, task_id) seen again (e.g. the same run read from both
-    .hq/runs and ~/.claude/hq/runs) replaces the earlier record instead of being counted twice.
+    The same run is often read from two places (.hq/runs and ~/.claude/hq/runs), so records are
+    de-duplicated: a task with the same (run_id, task_id), or a merge with the same
+    (run_id, batch_id, group_seq), replaces the earlier record; a merge without group_seq is dropped when
+    an identical record (same content) was already read. Tasks without task_id are all kept.
+    Records of type "monitor" (older versions) and other types are ignored.
     """
-    runs, corrupt, seen = {}, 0, {}
+    runs, corrupt, seen, same = {}, 0, {}, set()
     for f in files:
         stem = os.path.splitext(os.path.basename(f))[0]
         with open(f, encoding="utf-8", errors="replace") as fh:
@@ -85,25 +88,34 @@ def load(files):
                     corrupt += 1
                     continue
                 t = rec.get("type")
-                if t not in ("task", "run", "merge", "monitor"):
+                if t not in ("task", "run", "merge"):
                     continue
                 rid = rec.get("run_id")
                 rid = rid if isinstance(rid, str) and rid else stem
-                r = runs.setdefault(rid, {"run": None, "tasks": [], "merges": [], "monitors": []})
-                if t in ("merge", "monitor"):  # v0.11.0: group merges and monitor triggers
-                    r[t + "s"].append(rec)
-                    continue
+                r = runs.setdefault(rid, {"run": None, "tasks": [], "merges": []})
                 if t == "run":
                     r["run"] = rec
                     continue
-                tid = rec.get("task_id")
-                key = (rid, tid) if isinstance(tid, str) and tid else None
-                if key in seen:
-                    r["tasks"][seen[key]] = rec
+                lst = r["tasks"] if t == "task" else r["merges"]
+                if t == "task":
+                    tid = rec.get("task_id")
+                    key = ("task", rid, tid) if isinstance(tid, str) and tid else None
+                else:  # v0.11.0: group merges
+                    gs, bid = num(rec.get("group_seq")), rec.get("batch_id")
+                    key = ("merge", rid, bid if isinstance(bid, str) else None, gs) if gs is not None else None
+                if key is None and t == "task":
+                    lst.append(rec)
+                elif key is None:
+                    ck = (t, rid, json.dumps(rec, sort_keys=True, ensure_ascii=False))
+                    if ck in same:
+                        continue
+                    same.add(ck)
+                    lst.append(rec)
+                elif key in seen:
+                    lst[seen[key]] = rec
                 else:
-                    if key:
-                        seen[key] = len(r["tasks"])
-                    r["tasks"].append(rec)
+                    seen[key] = len(lst)
+                    lst.append(rec)
     return runs, corrupt
 
 
@@ -434,31 +446,43 @@ def plan_accuracy(tasks):
     }
 
 
-# ---------- scale-out (v0.11.0): shards, layered verification, group merges, monitoring ----------
+# ---------- scale-out (v0.11.0): shards, layered verification, group merges ----------
 DEFAULT_TARGET_MIN = 40
 DEFAULT_OVERHEAD_MIN = 8
+DEFAULT_MAX_OVERHEAD_RATIO = 0.3
+EPS = 1e-9  # tolerance for "exactly at the threshold" float comparisons
 
 
 def is_shard(t):
     return isinstance(t.get("shard_group"), str) or num(t.get("units_planned")) is not None
 
 
-def suggest_shards(units, unit_min, overhead, target, limit):
-    """Same rule as scale.py shards (kept in sync; see references/scale-out.md)."""
-    usable = max(1, limit - int(math.floor(limit * 0.2)))
+def suggest_shards(units, unit_min, overhead_min, target_min, limit, reserve=0,
+                   max_overhead_ratio=DEFAULT_MAX_OVERHEAD_RATIO):
+    """Same formula as scale.py shard_plan (tests/test_metrics_scaleout.py checks they agree):
+    n = min(limit - reserve, ceil(work / target), units), then fewer shards while the fixed overhead
+    exceeds max_overhead_ratio of a shard. None when the inputs can't give a plan."""
+    if not units or units <= 0 or unit_min is None or unit_min <= 0 or not target_min or target_min <= 0 or not limit:
+        return None
     work = units * unit_min
-    n = max(1, min(usable, int(math.ceil(work / target)), int(units)))
-    while n > 1 and overhead / (work / n + overhead) > 0.3:
+    by_target = max(1, int(math.ceil(round(work / target_min, 9))))
+    usable = max(1, int(limit) - int(reserve))
+    n = max(1, min(usable, by_target, int(units)))
+    while n > 1 and overhead_min / (work / n + overhead_min) > max_overhead_ratio + EPS:
         n -= 1
     return n
+
+
+def shard_units(t):
+    u = num(t.get("units_actual"))
+    return u if u else num(t.get("units_planned"))
 
 
 def scale_out(rid, r):
     run, ts = r["run"] or {}, r["tasks"]
     sh = [t for t in ts if is_shard(t)]
     merges = r.get("merges") or []
-    mons = r.get("monitors") or []
-    if not sh and not merges and not mons:
+    if not sh and not merges:
         return None
     acts = [num(t.get("actual_min")) for t in sh if num(t.get("actual_min")) is not None]
     longest = max(acts) if acts else None
@@ -466,12 +490,12 @@ def scale_out(rid, r):
     limit, peak = num(run.get("concurrency_limit")), num(run.get("max_concurrency"))
     errs, unit_actual = [], []
     for t in sh:
-        a, u, e = num(t.get("actual_min")), num(t.get("units_actual")) or num(t.get("units_planned")), num(t.get("unit_min_est"))
-        if a is None or not u:
+        a, u, e = num(t.get("actual_min")), shard_units(t), num(t.get("unit_min_est"))
+        if a is None or not u or u <= 0:
             continue
         ua = max(0.0, a - (num(t.get("overhead_min")) or 0)) / u
         unit_actual.append(ua)
-        if e:
+        if e and e > 0:
             errs.append(ua / e - 1)
     # full test runs: hq-side (merge records) + worker-side (test_scope == full)
     full, acc, covered = [], 0, []
@@ -486,34 +510,14 @@ def scale_out(rid, r):
     full_n = len(full) + len(worker_full)
     full_min = [x for x in full if x is not None] + [num(t.get("test_min")) for t in worker_full if num(t.get("test_min")) is not None]
     groups = [len(m["shards"]) if isinstance(m.get("shards"), list) else cnt(m.get("shards_n")) for m in merges]
-    trig = [m for m in mons if m.get("event", "trigger") == "trigger"]
-    missed = [m for m in mons if m.get("event") == "missed"]
-    by_metric = {}
-    for m in trig + missed:
-        k = m.get("metric") if isinstance(m.get("metric"), str) else "unknown"
-        g = by_metric.setdefault(k, {"triggers": 0, "effective": 0, "false_positive": 0, "missed": 0})
-        if m.get("event") == "missed":
-            g["missed"] += 1
-            continue
-        g["triggers"] += 1
-        if m.get("label") in ("effective", "false_positive"):
-            g[m["label"]] += 1
-    # who labelled the triggers: rule (scale.py label), reviewer (independent), user, or nobody yet
-    sources = {"rule": 0, "reviewer": 0, "user": 0, "other": 0, "unlabeled": 0}
-    for m in trig:
-        if m.get("label") not in ("effective", "false_positive"):
-            sources["unlabeled"] += 1
-        else:
-            src = m.get("label_source")
-            sources[src if src in ("rule", "reviewer", "user") else "other"] += 1
-    labelled = len(trig) - sources["unlabeled"]
-    for g in by_metric.values():
-        lab = g["effective"] + g["false_positive"]
-        g["effective_rate"] = rate(g["effective"], lab)
-        g["false_positive_rate"] = rate(g["false_positive"], lab)
-    units_total = sum(cnt(t.get("units_actual")) or cnt(t.get("units_planned")) for t in sh)
+    units_total = sum(cnt(shard_units(t)) for t in sh)
     target = num(run.get("target_shard_min")) or DEFAULT_TARGET_MIN
-    ov = med([num(t.get("overhead_min")) for t in sh if num(t.get("overhead_min")) is not None]) or DEFAULT_OVERHEAD_MIN
+    ov = med([num(t.get("overhead_min")) for t in sh if num(t.get("overhead_min")) is not None])
+    ov = ov if ov is not None else DEFAULT_OVERHEAD_MIN  # a measured 0 stays 0
+    reserve = num(run.get("reserved_slots"))
+    reserve = max(0, int(reserve)) if reserve is not None else 0
+    mor = num(run.get("max_overhead_ratio"))
+    mor = mor if mor is not None and mor > 0 else DEFAULT_MAX_OVERHEAD_RATIO
     return {
         "run_id": rid, "shards": len(sh),
         "parallel_efficiency": sum(acts) / (len(acts) * longest) if acts and longest else None,
@@ -527,18 +531,9 @@ def scale_out(rid, r):
         "shards_per_full_test": mean(covered) if covered else None,
         "merge_groups": len(merges), "shards_per_group": mean(groups) if groups else None,
         "verify_runs": sum(cnt(m.get("verify_runs")) for m in merges),
-        "monitor_triggers": len(trig),
-        "monitor_level1": sum(1 for m in trig if m.get("level") == 1),
-        "monitor_level2": sum(1 for m in trig if m.get("level") == 2),
-        "monitor_rate_limited": sum(1 for m in trig if m.get("rate_limited") is True),
-        "analysis_cost_usd": sum(cnt(m.get("analysis_cost_usd")) for m in mons) if mons else None,
-        "monitor_missed": len(missed),
-        "monitor_by_metric": by_metric,
-        "label_sources": sources,
-        "rule_label_share": rate(sources["rule"], labelled),
-        "concurrency_limit": limit,
-        "suggest_shards": suggest_shards(units_total, med(unit_actual), ov, target, int(limit))
-                          if units_total and unit_actual and limit else None,
+        "concurrency_limit": limit, "reserved_slots": reserve, "max_overhead_ratio": mor,
+        "suggest_shards": suggest_shards(units_total, med(unit_actual), ov, target, int(limit), reserve, mor)
+                          if units_total and unit_actual and limit and limit >= 1 else None,
     }
 
 
@@ -549,25 +544,18 @@ def scale_signals(sc, add):
         if n < 2:
             continue
         u = x["concurrency_utilization"]
-        if u is not None and u < 0.5 and x["concurrency_limit"] and x["concurrency_limit"] > n:
+        if u is not None and u < 0.5 - EPS and x["concurrency_limit"] and x["concurrency_limit"] > n:
             msg = "并发利用率 %.0f%% (<50%%)" % (u * 100)
             if x["suggest_shards"] and x["suggest_shards"] > n:
                 msg += "，同类任务下次切成 %d 片（按实测单元耗时和上限 %d 计算）" % (x["suggest_shards"], x["concurrency_limit"])
             add(scope, msg, n)
-        if x["straggler_ratio"] is not None and x["straggler_ratio"] > 2:
+        if x["straggler_ratio"] is not None and x["straggler_ratio"] > 2 + EPS:
             add(scope, "掉队比 %.2f (>2)：按工作单元清单均匀切，并在巡检时对掉队片再拆" % x["straggler_ratio"], n)
-        if x["full_tests"] >= 2 and x["full_tests"] > n * 0.5:
+        if x["full_tests"] >= 2 and x["full_tests"] > n * 0.5 + EPS:
             add(scope, "全量测试 %d 次 / %d 片（>0.5 次每片）：子会话只跑关联测试，全量测试改成每 %d 片合入后跑一次"
                 % (x["full_tests"], n, max(2, min(n, 4))), n)
-        if x["unit_est_error_median"] is not None and x["unit_est_n"] >= 3 and x["unit_est_error_median"] > 0.5:
+        if x["unit_est_error_median"] is not None and x["unit_est_n"] >= 3 and x["unit_est_error_median"] > 0.5 + EPS:
             add(scope, "单元耗时估算误差中位数 %.0f%% (>50%%)：开工前先跑小样本测单元耗时" % (x["unit_est_error_median"] * 100), x["unit_est_n"])
-        for k, g in sorted(x["monitor_by_metric"].items()):
-            lab = g["effective"] + g["false_positive"]
-            if lab >= 5 and g["false_positive_rate"] > 0.3:
-                add(scope, "监控阈值 %s 误报率 %.0f%% (>30%%)，校准时放宽" % (k, g["false_positive_rate"] * 100), lab,
-                    prop=(g["false_positive"], lab, 0.3, "above"))
-            if g["missed"] >= 2 and g["missed"] > g["effective"] * 0.25:
-                add(scope, "监控阈值 %s 漏报 %d 次，校准时收紧" % (k, g["missed"]), g["missed"] + g["effective"])
 
 
 FULL_PASS_FLOOR = 0.8  # "一次通过率 100%" counts as strong only when the interval's lower bound is above this
@@ -639,7 +627,7 @@ def signals(tiers, models, overall_ratio, effs, plan=None, scale=None, cov=None)
 
 
 # ---------- v0.11.0: plugin versions, rule flags, verify-level escapes, recommendations ----------
-VER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+VER_RE = re.compile(r"^\[?v?(\d+)\.(\d+)\.(\d+)", re.I)
 
 
 def vtuple(v):
@@ -647,22 +635,33 @@ def vtuple(v):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+def vnorm(v):
+    """'v0.11.0' / '0.11.0' / '[0.11.0]' -> '0.11.0'; None when unparseable."""
+    t = vtuple(v)
+    return ".".join(str(x) for x in t) if t else None
+
+
 def run_version(r):
-    """The plugin version the run was executed under: plugin_version_at_start (v0.3.3) when present,
-    else plugin_version (older records only have this one, and it meant the version in effect)."""
+    """The plugin version the run was executed under: plugin_version_at_start (v0.3.3) when it parses,
+    else plugin_version (older records only have this one, and it meant the version in effect).
+    When neither parses, the first non-empty string of the two (e.g. "dev"), else None."""
     run = r["run"] or {}
-    for k in ("plugin_version_at_start", "plugin_version"):
-        if isinstance(run.get(k), str) and run[k].strip():
-            return run[k]
-    return None
+    vals = [run[k] for k in ("plugin_version_at_start", "plugin_version") if isinstance(run.get(k), str) and run[k].strip()]
+    for v in vals:
+        if vtuple(v):
+            return v
+    return vals[0] if vals else None
 
 
 def filter_versions(runs, since=None, before=None):
     """since: keep runs whose version in effect (run_version) >= since; before: < before. Runs without a
-    parseable version are dropped when either bound is given (they can't be placed before/after)."""
+    parseable version are dropped when either bound is given (they can't be placed before/after).
+    An unparseable bound raises ValueError (callers report it instead of silently ignoring it)."""
     if not since and not before:
         return runs
     lo, hi = vtuple(since) if since else None, vtuple(before) if before else None
+    if (since and lo is None) or (before and hi is None):
+        raise ValueError("cannot parse version: %s" % (since if since and lo is None else before))
     out = {}
     for k, r in runs.items():
         v = vtuple(run_version(r))
@@ -672,31 +671,54 @@ def filter_versions(runs, since=None, before=None):
     return out
 
 
-def by_version(runs, extra=None):
+def by_version(runs, extra=None, skip=frozenset()):
+    """Rows per version in effect, normalized ('v0.11.0' and '0.11.0' are one row); skip: tasks of runs
+    with contradictory time data, left out of ratio_median as in by_tier."""
     g = {}
     for rid, r in runs.items():
-        g.setdefault(run_version(r) or "unknown", []).append(r)
+        v = run_version(r)
+        g.setdefault(vnorm(v) or v or "unknown", []).append(r)
     rows = []
     for v in sorted(g, key=lambda x: (vtuple(x) is None, vtuple(x) or (0,), x)):
         rs = g[v]
         ts = [t for r in rs for t in r["tasks"]]
         q = quality(ts, [r["run"] or {} for r in rs], extra)
-        rr = [ratio(t) for t in ts if ratio(t) is not None]
+        rr = [ratio(t) for t in ts if id(t) not in skip and ratio(t) is not None]
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
         rows.append({"key": v, "runs": len(rs), "n": len(ts), "insufficient": len(ts) < MIN_N,
                      "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), len(ts)),
                      "rework_rate": q["rework_rate"], "drift_rate": q["drift_rate"], "verify_rate": q["verify_rate"],
                      "verify_partial": q["verify_partial"],
                      "escaped_per_task": rate(sum(integ(t, extra) + issue(t, "user") for t in ts), len(ts)),
-                     "ratio_median": med(rr), "avg_cost_usd": mean(cost)})
+                     "ratio_median": med(rr), "ratio_n": len(rr), "avg_cost_usd": mean(cost), "cost_n": len(cost)})
     return rows
 
 
-# rule markers used to live only in notes; structured `flags` (v0.11.0) wins, notes are a fallback for old data
-NOTE_FLAG_RE = re.compile(r"(bias:\+1\((?:tier|effort|cost_low)\)|downgrade:user_allowed\(-\d+\)|rate_limited"
-                          r"|assist_unavailable:[A-Za-z0-9_.-]+|assist_auto_models|effort_env:[A-Za-z0-9_-]+"
-                          r"|billing:[A-Za-z0-9_-]+|tier:not-applied)")
+# rule markers used to live only in notes; structured `flags` (v0.11.0) wins, notes are a fallback for old data.
+# ASCII boundaries: "not rate_limited_at_all" or "x:billing:y" is not a marker (CJK neighbours are fine).
+NOTE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_:])(bias:\+1\((?:tier|effort|cost_low)\)|downgrade:user_allowed\(-\d{1,2}\)"
+                          r"|rate_limited|assist_unavailable:[A-Za-z0-9_.-]+|assist_auto_models|effort_env:[A-Za-z0-9_-]+"
+                          r"|billing:[A-Za-z0-9_-]+|tier:not-applied)(?![A-Za-z0-9_])")
 FLAG_RE = re.compile(r"^[A-Za-z0-9_.:()+-]{1,48}$")
+# --export-anon keeps only these flags; a prefixed marker whose suffix is not listed becomes "<prefix>:other"
+EXPORT_FLAGS = {"bias:+1(tier)", "bias:+1(effort)", "rate_limited", "assist_auto_models", "tier:not-applied"}
+EXPORT_FLAG_SUFFIXES = {
+    "billing": {"deepseek", "kimi", "moonshot", "codex", "openai", "anthropic", "claude", "gemini", "other"},
+    "effort_env": {"minimal", "low", "medium", "high", "xhigh", "max"},
+    "assist_unavailable": {"rate_limited", "cli_missing", "cli_unavailable", "no_key", "missing_key", "auth",
+                           "quota", "timeout", "network", "same_as_host", "other"},
+}
+DOWNGRADE_RE = re.compile(r"^downgrade:user_allowed\(-\d{1,2}\)$")
+
+
+def export_flag(x):
+    """The exported form of one rule marker, or None to drop it (no free text survives)."""
+    if x in EXPORT_FLAGS or DOWNGRADE_RE.match(x):
+        return x
+    pre, sep, suf = x.partition(":")
+    if sep and pre in EXPORT_FLAG_SUFFIXES:
+        return "%s:%s" % (pre, suf if suf in EXPORT_FLAG_SUFFIXES[pre] else "other")
+    return None
 
 
 def task_flags(t):
@@ -762,7 +784,9 @@ def by_verify_level(tasks, extra=None):
 
 def recommendations(runs):
     """Standing mode: was the next batch taken from the previous batch's recommendations?
-    Consecutive batches of one standing session = same project, standing_seq k then k+1, in time order."""
+    Consecutive batches of one standing session = same project, standing_seq k then k+1, ordered by
+    (project, started_at, standing_seq): equal or missing started_at falls back to seq order, so file order
+    doesn't matter."""
     rs = []
     for rid, r in runs.items():
         run = r["run"] or {}
@@ -770,7 +794,7 @@ def recommendations(runs):
             continue
         rs.append((run_project(r) or "", parse_ts(run.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
                    run["standing_seq"], run))
-    rs.sort(key=lambda x: (x[0], x[1]))
+    rs.sort(key=lambda x: (x[0], x[1], x[2]))
     offered = accepted = done_claims = 0
     for a, b in zip(rs, rs[1:]):
         if a[0] != b[0] or b[2] != a[2] + 1:
@@ -780,7 +804,7 @@ def recommendations(runs):
             if b[3].get("from_recommendation") is True:
                 accepted += 1
     for x in rs:
-        if x[3].get("recommended_next") == 0:
+        if num(x[3].get("recommended_next")) == 0:  # False is not a completion claim
             done_claims += 1
     return {"standing_runs": len(rs), "offered": offered, "accepted": accepted,
             "acceptance_rate": rate(accepted, offered), "completion_claims": done_claims,
@@ -811,22 +835,31 @@ def extra_signals(add, flags, levels, rec):
 
 
 # ---------- structured acceptance criteria in CHANGELOG (`- **验收判定**：` lines) ----------
-OPS = {"<=": lambda a, b: a <= b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
-       "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
+# EPS tolerance: sum/mean/median are not exact, a value that equals the threshold on paper must compare equal
+OPS = {"<=": lambda a, b: a <= b + EPS, ">=": lambda a, b: a >= b - EPS, "<": lambda a, b: a < b - EPS,
+       ">": lambda a, b: a > b + EPS, "==": lambda a, b: abs(a - b) <= EPS, "!=": lambda a, b: abs(a - b) > EPS}
 EXPR_RE = re.compile(r"^\s*(?P<path>\S+)\s*(?P<op><=|>=|==|!=|<|>)\s*(?P<val>-?\d+(?:\.\d+)?)"
                      r"(?P<opts>(?:\s+(?:n>=\d+|since=\S+|before=\S+))*)\s*$")
 AGG = {"median": med, "mean": mean, "max": lambda xs: max(xs) if xs else None,
        "min": lambda xs: min(xs) if xs else None, "sum": lambda xs: sum(xs) if xs else None}
 SEG_RE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[(?P<sel>[^\]]+)\])?$")
+# sample size of a selected value: the count that value was computed from, else the row's own size
+N_FIELD = {"ratio_median": "ratio_n", "avg_cost_usd": "cost_n", "avg_tokens": "tokens_n", "cost_per_est_min": "cost_n",
+           "low_norm_ratio_median": "low_norm_ratio_n", "low_first_pass_rate": "low_n",
+           "unit_est_error_median": "unit_est_n", "unit_est_bias_median": "unit_est_n",
+           "wait_median": "wait_n", "wait_max": "wait_n", "acceptance_rate": "offered"}
+N_KEYS = ("n", "tasks", "shards", "offered")
 
 
 def _walk(node, segs):
     """Returns (values, n). A [*] segment fans out; [key=val] picks the element whose key (or run_id) matches."""
     cur = [(node, None)]
+    leaf = None
     for seg in segs:
         m = SEG_RE.match(seg)
         if not m:
             raise ValueError("bad path segment: %s" % seg)
+        leaf = m.group("name")
         nxt = []
         for x, _ in cur:
             if not isinstance(x, dict) or m.group("name") not in x:
@@ -846,7 +879,8 @@ def _walk(node, segs):
     n = None
     if len(cur) == 1 and parents:
         p = parents[0]
-        n = next((p[k] for k in ("n", "ratio_n", "tasks", "shards", "offered") if num(p.get(k)) is not None), None)
+        keys = ((N_FIELD[leaf],) if leaf in N_FIELD else ()) + N_KEYS
+        n = next((p[k] for k in keys if num(p.get(k)) is not None), None)
     return vals, n
 
 
@@ -883,72 +917,134 @@ def eval_expr(expr, rep):
         value, n = AGG[agg](vals), len(vals)
     else:
         value = vals[0] if len(vals) == 1 else None
+        if n is None:  # the value's object has no size of its own: fall back to the task count
+            n = num((rep.get("overview") or {}).get("tasks"))
     need = re.search(r"n>=(\d+)", m.group("opts"))
     need = int(need.group(1)) if need else MIN_N
     res = {"expr": expr, "value": value, "n": n, "need_n": need}
-    if value is None:
-        return dict(res, verdict="样本不足")
-    if n is not None and n < need:
+    if value is None or n is None or n < need:
         return dict(res, verdict="样本不足")
     return dict(res, verdict="达到" if OPS[op](value, want) else "未达到")
 
 
+STATUS_RE = re.compile(r"^(待验证|已验证|已撤回)(?:$|[（(\s，；,;:：])")
+OP_CHARS = re.compile(r"<|>|==|!=")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def judge_exprs(text):
+    """Backtick fragments of a 验收判定 text that are meant as expressions. A "不适用…" text has none;
+    otherwise fragments that parse or contain a comparison are kept (a mention like `scale.py shards`
+    is not); when no fragment qualifies they are all kept, so they come out as 无法解析."""
+    if re.sub(r"^[\s:：*]+", "", text).startswith("不适用"):
+        return []
+    frags = re.findall(r"`([^`]+)`", text)
+    keep = [x for x in frags if EXPR_RE.match(x) or OP_CHARS.search(x)]
+    return keep or frags
+
+
 def parse_changelog(text):
-    """Entries under `### ` headings with their version (`## vX.Y.Z` or 未发布), status and 验收判定 expressions."""
-    entries, ver, label, cur = [], None, "未发布", None
+    """Entries under `### ` headings with their version (`## vX.Y.Z` or `## [X.Y.Z]`; None under 未发布 or an
+    unparseable heading), status and 验收判定 expressions (a 验收判定 may continue on following lines up to
+    the next `- **`, heading or blank line). Lines inside ``` / ~~~ fences are ignored."""
+    entries, ver, cur, fence, judge = [], None, None, None, None
+
+    def flush(cur, judge):
+        if cur is not None and judge is not None:
+            cur["exprs"] += judge_exprs(judge)
+
     for line in text.splitlines():
+        fm = FENCE_RE.match(line)
+        if fm:
+            mark = fm.group(1)[0]
+            fence = None if fence == mark else (fence or mark)
+            continue
+        if fence:
+            continue
+        if line.startswith("## ") or line.startswith("### ") or line.startswith("- **") or not line.strip():
+            flush(cur, judge)
+            judge = None
         if line.startswith("## "):
-            head = line[3:].strip()
-            m = VER_RE.match(head)
+            m = VER_RE.match(line[3:].strip())
             ver = ".".join(m.groups()) if m else None
-            if m:
-                label = ver
-            elif head.startswith("未发布"):
-                label = "未发布"
-            else:  # unparseable version heading (e.g. `v0.1.x（…）`): keep its own label, never split by version
-                vm = re.match(r"^v?\d+(?:\.[0-9A-Za-z]+)*", head)
-                label = vm.group(0) if vm else head
+            ver = vnorm(ver) if ver else None
             cur = None
         elif line.startswith("### "):
-            cur = {"title": line[4:].strip(), "version": ver, "label": label, "status": None, "exprs": []}
+            cur = {"title": line[4:].strip(), "version": ver, "status": None, "exprs": []}
             entries.append(cur)
         elif cur is not None:
-            st = re.match(r"^- \*\*状态\*\*[:：]\s*(\S+?)(?:[（(\s]|$)", line)
+            st = re.match(r"^- \*\*状态\*\*[:：]\s*(.*)$", line)
             if st:
-                cur["status"] = st.group(1)
-            if line.startswith("- **验收判定**"):
-                cur["has_judge"] = True
-                cur["exprs"] += re.findall(r"`([^`]+)`", line)
+                v = st.group(1).replace("*", "").strip()
+                sm = STATUS_RE.match(v)
+                cur["status"] = sm.group(1) if sm else (v.split()[0] if v.split() else None)
+            jm = re.match(r"^- \*\*验收判定\*\*(.*)$", line)
+            if jm:
+                judge = jm.group(1)
+            elif judge is not None:  # continuation line of a multi-line 验收判定
+                judge += " " + line
+    flush(cur, judge)
     return entries
 
 
+def rework_k(runs):
+    ts = [t for r in runs.values() for t in r["tasks"]]
+    return sum(1 for t in ts if t.get("review_outcome") in ("rework", "failed")), len(ts)
+
+
+def quality_guard(runs, since, before):
+    """Rework rate of runs in [since, before) vs runs < since. Fires when both sides have >= 5 tasks and the
+    rate rose by MORE than 5 percentage points (exactly +5pp does not fire); compared in integers."""
+    pk, pn = rework_k(filter_versions(runs, None, since))
+    qk, qn = rework_k(filter_versions(runs, since, before))
+    if pn >= 5 and qn >= 5 and (qk * pn - pk * qn) * 100 > 5 * pn * qn:
+        return "返工率 %.0f%% → %.0f%%" % (pk / pn * 100, qk / qn * 100)
+    return None
+
+
 def check_changelog(path, runs, corrupt):
-    entries = parse_changelog(open(path, encoding="utf-8").read())
+    try:
+        with open(path, encoding="utf-8") as fh:
+            entries = parse_changelog(fh.read())
+    except OSError as e:
+        sys.exit("metrics.py: cannot read %s: %s" % (path, e))
     out = []
     for e in entries:
         if e["status"] != "待验证" or not e["exprs"]:
             continue
-        rows = []
+        rows, bounds = [], []
         for x in e["exprs"]:
             m = EXPR_RE.match(x)
             opts = m.group("opts") if m else ""
             since = re.search(r"since=(\S+)", opts)
             before = re.search(r"before=(\S+)", opts)
             since = since.group(1) if since else e["version"]
-            sub = filter_versions(runs, since, before.group(1) if before else None) if since or before else runs
+            before = before.group(1) if before else None
+            if m and not since:
+                rows.append({"expr": x, "verdict": "无法解析", "since": None,
+                             "error": "no since= and the entry is not under a version heading"})
+                continue
+            try:
+                sub = filter_versions(runs, since, before) if m else runs
+            except ValueError as err:
+                rows.append({"expr": x, "verdict": "无法解析", "since": since, "error": str(err)})
+                continue
             r = eval_expr(x, build(sub, corrupt))
             r["since"] = since
             rows.append(r)
-        # quality guard: rework rate after the change must not rise against the runs before it
-        guard = None
-        since = rows[0]["since"] if rows else None
-        if since:
-            pre = quality([t for r in filter_versions(runs, None, since).values() for t in r["tasks"]], [])
-            post = quality([t for r in filter_versions(runs, since, None).values() for t in r["tasks"]], [])
-            if pre["n"] >= 5 and post["n"] >= 5 and post["rework_rate"] > pre["rework_rate"] + 0.05:
-                guard = "返工率 %.0f%% → %.0f%%" % (pre["rework_rate"] * 100, post["rework_rate"] * 100)
+            if m and (since, before) not in bounds:
+                bounds.append((since, before))
+        # quality guard: rework rate after the change must not rise against the runs before it,
+        # checked for every distinct since/before pair of the entry's criteria
+        guards = []
+        for sb in bounds:
+            g = quality_guard(runs, *sb)
+            if g:
+                guards.append(g if len(bounds) == 1 else "%s（since %s）" % (g, sb[0]))
+        guard = "；".join(guards) or None
         vs = [r["verdict"] for r in rows]
-        verdict = ("未达到" if guard or "未达到" in vs else "样本不足" if any(v != "达到" for v in vs) else "达到")
+        verdict = ("未达到" if guard or "未达到" in vs else "无法解析" if "无法解析" in vs
+                   else "达到" if all(v == "达到" for v in vs) else "样本不足")
         out.append({"title": e["title"], "version": e["version"], "verdict": verdict, "quality_guard": guard,
                     "criteria": rows})
     return out
@@ -1037,49 +1133,6 @@ def quality_signals(add, score, ir, effs, cov):
                 % (e["wait_median"], e["wait_max"]), e["wait_n"], deps=[("review_wait_min", fields["review_wait_min"]["rate"])])
 
 
-# ---------- CHANGELOG status statistics (`--changelog-stats`) ----------
-def changelog_stats(text):
-    entries = parse_changelog(text)
-    order, g = [], {}
-    for e in entries:
-        v = e["label"]
-        if v not in g:
-            g[v] = {"version": v, "entries": 0, "pending": 0, "verified": 0, "withdrawn": 0, "other": 0, "judged": 0,
-                    "checkable": 0, "not_applicable": 0}
-            order.append(v)
-        x = g[v]
-        x["entries"] += 1
-        x[{"待验证": "pending", "已验证": "verified", "已撤回": "withdrawn"}.get(e["status"], "other")] += 1
-        x["judged"] += 1 if e.get("has_judge") else 0
-        # a 验收判定 line with expressions can be machine-checked; one without (e.g. "不适用") cannot
-        x["checkable"] += 1 if e.get("exprs") else 0
-        x["not_applicable"] += 1 if e.get("has_judge") and not e.get("exprs") else 0
-    rows = [g[v] for v in order]
-    tot = {k: sum(r[k] for r in rows) for k in ("entries", "pending", "verified", "withdrawn", "other", "judged",
-                                                "checkable", "not_applicable")}
-    closed = tot["verified"] + tot["withdrawn"]
-    tot.update(verified_rate=rate(tot["verified"], closed), withdrawn_rate=rate(tot["withdrawn"], closed),
-               judged_rate=rate(tot["judged"], tot["entries"]), checkable_rate=rate(tot["checkable"], tot["entries"]))
-    return {"versions": rows, "total": tot}
-
-
-def render_changelog_stats(st):
-    def row(name, r):
-        c = r["verified"] + r["withdrawn"]
-        return [name, r["entries"], r["pending"], r["verified"], r["withdrawn"], r["other"],
-                f(rate(r["verified"], c), "p"), f(rate(r["withdrawn"], c), "p"),
-                "%d (%s)" % (r["checkable"], f(rate(r["checkable"], r["entries"]), "p")), r["not_applicable"]]
-    L = ["# CHANGELOG 状态统计", ""]
-    L += table(["版本", "条目数", "待验证", "已验证", "已撤回", "其他", "已验证率", "撤回率", "可机器判定", "判定写了不适用"],
-               [row(r["version"], r) for r in st["versions"]] + [row("合计", st["total"])])
-    t = st["total"]
-    L += ["", "已验证率 = 已验证 / (已验证 + 已撤回)，撤回率同分母；%s；可机器判定（验收判定行里有表达式）的条目占 %s，"
-          "另有 %d 条写了“不适用”。"
-          % ("暂无已结案条目" if not (t["verified"] + t["withdrawn"]) else "已结案 %d 条" % (t["verified"] + t["withdrawn"]),
-             f(t["checkable_rate"], "p"), t["not_applicable"])]
-    return "\n".join(L) + "\n"
-
-
 def build(runs, corrupt):
     ids = list(runs)
     tasks = [t for i in ids for t in runs[i]["tasks"]]
@@ -1132,7 +1185,7 @@ def build(runs, corrupt):
         "plan": plan,
         "scale_out": sc,
         "coverage": cov, "by_score": bs, "independent_review": ir,
-        "by_version": by_version(runs, extra), "by_flag": flags, "by_verify_level": levels, "recommendations": rec,
+        "by_version": by_version(runs, extra, skip), "by_flag": flags, "by_verify_level": levels, "recommendations": rec,
         "signals": sig,
     }
 
@@ -1227,16 +1280,18 @@ def render_md(rep):
             ["n", "一致", "预估偏低", "预估偏高", "一次通过率", "备注"],
             [[p["n"], f(p["same_rate"], "p"), f(p["under_rate"], "p"), f(p["over_rate"], "p"),
               f(p["first_pass_rate"], "p"), "样本不足" if p["insufficient"] else ""]])
-    vh = ["版本", "run 数", "task 数", "一次通过率", "返工率", "漂移率", "验证到位率", "漏网问题/任务", "actual/est 中位数", "平均 cost_usd", "备注"]
-    L += ["", "## 3f. 按插件版本（运行时生效的版本：plugin_version_at_start，没有时用 plugin_version；"
-          "--since-version / --before-version 可只看一段）", ""] + table(vh, [
-        [g["key"], g["runs"], g["n"], f(g["first_pass_rate"], "p"), f(g["rework_rate"], "p"), f(g["drift_rate"], "p"),
-         f(g["verify_rate"], "p"), f(g["escaped_per_task"]), f(g["ratio_median"]), f(g["avg_cost_usd"]),
-         "样本不足" if g["insufficient"] else ""] for g in rep["by_version"]])
-    L += ["", "## 3g. 按验证级别（漏网 = 合并或用户环节才发现的问题）", ""] + table(
-        ["级别", "n", "验证到位率", "漏到合并/任务", "漏到用户/任务", "漏网 major", "返工率", "备注"],
-        [[g["key"], g["n"], f(g["verify_rate"], "p"), f(g["escaped_integration"]), f(g["escaped_user"]),
-          g["escaped_major"], f(g["rework_rate"], "p"), "样本不足" if g["insufficient"] else ""] for g in rep["by_verify_level"]])
+    if any(g["key"] != "unknown" for g in rep["by_version"]):
+        vh = ["版本", "run 数", "task 数", "一次通过率", "返工率", "漂移率", "验证到位率", "漏网问题/任务", "actual/est 中位数", "平均 cost_usd", "备注"]
+        L += ["", "## 3f. 按插件版本（运行时生效的版本：plugin_version_at_start，解析不出时用 plugin_version；"
+              "--since-version / --before-version 可只看一段）", ""] + table(vh, [
+            [g["key"], g["runs"], g["n"], f(g["first_pass_rate"], "p"), f(g["rework_rate"], "p"), f(g["drift_rate"], "p"),
+             f(g["verify_rate"], "p"), f(g["escaped_per_task"]), f(g["ratio_median"]), f(g["avg_cost_usd"]),
+             "样本不足" if g["insufficient"] else ""] for g in rep["by_version"]])
+    if any(g["key"] != "unknown" for g in rep["by_verify_level"]):
+        L += ["", "## 3g. 按验证级别（漏网 = 合并或用户环节才发现的问题）", ""] + table(
+            ["级别", "n", "验证到位率", "漏到合并/任务", "漏到用户/任务", "漏网 major", "返工率", "备注"],
+            [[g["key"], g["n"], f(g["verify_rate"], "p"), f(g["escaped_integration"]), f(g["escaped_user"]),
+              g["escaped_major"], f(g["rework_rate"], "p"), "样本不足" if g["insufficient"] else ""] for g in rep["by_verify_level"]])
     if rep["by_flag"]:
         L += ["", "## 3h. 按规则标记（flags；旧数据从 notes 识别）", ""] + table(
             ["标记", "n", "一次通过率", "返工率", "升档率", "平均 cost_usd", "备注"],
@@ -1248,12 +1303,6 @@ def render_md(rep):
                    [[d, r["value"], r["n"], f(r["first_pass_rate"], "p"), ci_s(r["first_pass_ci"]), f(r["escalation_rate"], "p"),
                      ci_s(r["escalation_ci"]), "样本不足" if r["insufficient"] else ""]
                     for d, rows in rep["by_score"].items() for r in rows])
-    rc = rep["recommendations"]
-    if rc["standing_runs"]:
-        L += ["", "## 6c. 常驻模式推荐", ""] + table(
-            ["常驻批次", "推荐过的批次", "下一批采纳推荐", "采纳率", "推荐总条数", "完工声明"],
-            [[rc["standing_runs"], rc["offered"], rc["accepted"], f(rc["acceptance_rate"], "p"),
-              rc["recommended_total"], rc["completion_claims"]]])
     L += ["", "## 4. 效率", ""]
     has_wait = any(e.get("wait_n") for e in rep["efficiency"])
     L += table(["run", "任务数", "wall/关键路径", "并行加速比", "加速比上限", "max_concurrency", "throttle_events"]
@@ -1262,6 +1311,15 @@ def render_md(rep):
                  f(e["max_concurrency"], "d"), f(e["throttle_events"], "d")]
                 + ([f(e["wait_median"], "d"), f(e["wait_max"], "d")] if has_wait else [])
                 + ["数据矛盾：" + ", ".join(e["inconsistent"]) if e["inconsistent"] else ""] for e in rep["efficiency"]])
+    if rep.get("scale_out"):
+        L += ["", "## 4b. 分片、分层校验与合入（v0.11.0 起的字段；旧数据没有就不出）", ""]
+        L += table(["run", "片数", "并行效率", "掉队比", "并发利用率", "单元耗时误差", "再拆", "关联/全量(片内)",
+                    "全量测试次数", "全量耗时(分)", "每次全量覆盖片数", "合入组数", "每组片数", "校验次数"],
+                   [[x["run_id"], x["shards"], f(x["parallel_efficiency"], "p"), f(x["straggler_ratio"]),
+                     f(x["concurrency_utilization"], "p"), f(x["unit_est_error_median"], "p"), x["resplit"],
+                     "%d/%d" % (x["test_related"], x["full_tests_worker"]), x["full_tests"], f(x["full_test_min"], "d"),
+                     f(x["shards_per_full_test"]), x["merge_groups"], f(x["shards_per_group"]), x["verify_runs"]]
+                    for x in rep["scale_out"]])
     L += ["", "## 5. 开销（按 kind）", ""]
     L += table(["kind", "n", "有值数 tokens/cost", "平均 tokens", "每预计分钟成本 (USD)", "备注"],
                [[c["key"], c["n"], "%d/%d" % (c["tokens_n"], c["cost_n"]), f(c["avg_tokens"], "d"),
@@ -1274,37 +1332,24 @@ def render_md(rep):
         ["升档任务数", "其中有检查点的比例", "checkpoints", "handoffs", "derived_tasks", "user_manual_adjust"],
         [[d["escalated"], f(d["escalated_after_checkpoint_rate"], "p"), d["checkpoints"], d["handoffs"],
           d["derived_tasks"], d["user_manual_adjust"]]])
-    fu = rep.get("followups") or {}
-    if fu.get("total"):
-        L += ["", "## 6e. 待修追踪（task 的 followups；fixed_in 为空算未修）", ""]
-        L += table(["待修项总数", "未修", "已修"], [[fu["total"], fu["open"], fu["fixed"]]])
-        if fu["open_items"]:
-            L += [""] + ["- [%s/%s] %s" % (x["run_id"] or "-", x["task_id"] or "-", x["desc"] or "-") for x in fu["open_items"]]
-    if rep.get("scale_out"):
-        L += ["", "## 4b. 分片、分层校验与合入（v0.11.0 起的字段；旧数据没有就不出）", ""]
-        L += table(["run", "片数", "并行效率", "掉队比", "并发利用率", "单元耗时误差", "再拆", "关联/全量(片内)",
-                    "全量测试次数", "全量耗时(分)", "每次全量覆盖片数", "合入组数", "每组片数", "校验次数"],
-                   [[x["run_id"], x["shards"], f(x["parallel_efficiency"], "p"), f(x["straggler_ratio"]),
-                     f(x["concurrency_utilization"], "p"), f(x["unit_est_error_median"], "p"), x["resplit"],
-                     "%d/%d" % (x["test_related"], x["full_tests_worker"]), x["full_tests"], f(x["full_test_min"], "d"),
-                     f(x["shards_per_full_test"]), x["merge_groups"], f(x["shards_per_group"]), x["verify_runs"]]
-                    for x in rep["scale_out"]])
-        L += ["", "## 4c. 主动监控", ""]
-        L += table(["run", "触发", "一级", "二级", "限频跳过", "漏报", "分析花费 (USD)",
-                    "标注来源 规则/审核/用户/其他/未标", "规则标注占比", "各阈值 触发/有效率/误报率/漏报"],
-                   [[x["run_id"], x["monitor_triggers"], x["monitor_level1"], x["monitor_level2"], x["monitor_rate_limited"],
-                     x["monitor_missed"], f(x["analysis_cost_usd"], "c"),
-                     "/".join(str(x["label_sources"][k]) for k in ("rule", "reviewer", "user", "other", "unlabeled")),
-                     f(x["rule_label_share"], "p"),
-                     "；".join("%s %d/%s/%s/%d" % (k, g["triggers"], f(g["effective_rate"], "p"), f(g["false_positive_rate"], "p"), g["missed"])
-                              for k, g in sorted(x["monitor_by_metric"].items())) or "-"]
-                    for x in rep["scale_out"]])
+    rc = rep["recommendations"]
+    if rc["standing_runs"]:
+        L += ["", "## 6c. 常驻模式推荐", ""] + table(
+            ["常驻批次", "推荐过的批次", "下一批采纳推荐", "采纳率", "推荐总条数", "完工声明"],
+            [[rc["standing_runs"], rc["offered"], rc["accepted"], f(rc["acceptance_rate"], "p"),
+              rc["recommended_total"], rc["completion_claims"]]])
     ir = rep.get("independent_review")
     if ir:
         L += ["", "## 6d. 独立审核（按触发条件；执行 %d 次，记录了但未执行 %d 次）" % (ir["ran"], ir["not_run"]), ""]
         L += table(["trigger", "触发次数", "有发现", "有发现比例", "有发现比例 95% 区间", "发现总数", "其中 major", "备注"],
                    [[r["trigger"], r["n"], r["found"], f(r["found_rate"], "p"), ci_s(r["found_ci"]), r["findings"], r["major"],
                      "样本不足" if r["insufficient"] else ""] for r in ir["by_trigger"]])
+    fu = rep.get("followups") or {}
+    if fu.get("total"):
+        L += ["", "## 6e. 待修追踪（task 的 followups；fixed_in 为空算未修）", ""]
+        L += table(["待修项总数", "未修", "已修"], [[fu["total"], fu["open"], fu["fixed"]]])
+        if fu["open_items"]:
+            L += [""] + ["- [%s/%s] %s" % (x["run_id"] or "-", x["task_id"] or "-", x["desc"] or "-") for x in fu["open_items"]]
     L += ["", "## 7. 信号", ""]
     L += ["- [%s] %s（n=%d）%s" % (s["scope"], s["message"], s["n"], sig_notes(s)) for s in rep["signals"]] or ["- 无"]
     return "\n".join(L) + "\n"
@@ -1321,8 +1366,8 @@ ENUMS = {
     "review_outcome": {"pass", "pass_with_fixes", "rework", "failed"},
 }
 SEVERITY = {"none", "minor", "major"}
+EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max", "none"}
 TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,64}$")  # model / effort names
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+[A-Za-z0-9.+-]{0,16}$")
 TASK_NUMS = ("tier_score", "est_min", "actual_min", "tokens", "cost_usd", "attempts", "handoffs",
              "derived_tasks", "checkpoints", "user_corrections",
              "units_planned", "units_actual", "unit_min_est", "overhead_min", "test_min", "rework_rounds",
@@ -1330,15 +1375,7 @@ TASK_NUMS = ("tier_score", "est_min", "actual_min", "tokens", "cost_usd", "attem
 TASK_BOOLS = ("user_manual_adjust", "scope_violation", "drift", "verify_pass", "resplit")
 RUN_NUMS = ("wall_min", "critical_path_min", "tasks", "max_concurrency", "throttle_events",
             "autonomy_stops", "decisions", "standing_seq", "recommended_next", "concurrency_limit",
-            "target_shard_min")
-MONITOR_ENUMS = {
-    "event": {"trigger", "missed"},
-    "metric": {"duration_ratio", "idle_min", "cost_ratio", "rework", "failure_rate", "straggler_ratio",
-               "split_unit_error", "split_uneven", "split_underused", "split_boundary"},
-    "severity": {"normal", "severe"},
-    "label": {"effective", "false_positive"},
-    "label_source": {"rule", "reviewer", "user"},
-}
+            "target_shard_min", "reserved_slots", "max_overhead_ratio")
 TASK_TYPES = {"patrol", "dev", "docs", "test", "research", "review", "config", "code", "*"}
 RUN_BOOLS = ("integration_pass", "from_recommendation")
 
@@ -1349,6 +1386,11 @@ def anon_id(rid):
 
 def a_enum(k, v):
     return None if v is None else (v if isinstance(v, str) and v in ENUMS[k] else "other")
+
+
+def a_set(v, allowed):
+    """Enum value from a closed set; anything else (incl. lists / dicts) becomes "other"."""
+    return None if v is None else (v if isinstance(v, str) and v in allowed else "other")
 
 
 def a_token(v):
@@ -1372,9 +1414,11 @@ def anon_task(t, rid, idx, idmap=None):
             o[k] = a_enum(k, t[k])
     if "plan_tier" in t:
         o["plan_tier"] = a_enum("tier", t["plan_tier"])
-    for k in ("model", "effort", "assist"):
+    for k in ("model", "assist"):
         if k in t:
             o[k] = a_token(t[k])
+    if "effort" in t:
+        o["effort"] = a_set(t["effort"], EFFORTS)
     for k in TASK_NUMS:
         if k in t:
             o[k] = num(t[k])
@@ -1384,8 +1428,7 @@ def anon_task(t, rid, idx, idmap=None):
     if t.get("verify_pass") == "partial":
         o["verify_pass"] = "partial"
     if isinstance(t.get("found_issues"), list):  # severity enum + origin mapped to this run's sequence ids
-        o["found_issues"] = [{"severity": x["severity"] if x.get("severity") in ("minor", "major") else
-                              ("other" if x.get("severity") is not None else None),
+        o["found_issues"] = [{"severity": a_set(x.get("severity"), ("minor", "major")),
                               "origin_task_id": (idmap or {}).get(x.get("origin_task_id"))
                               if isinstance(x.get("origin_task_id"), str) and x.get("origin_task_id") != t.get("task_id")
                               else None}  # self-reference → unattributed, as in attribute()
@@ -1397,9 +1440,14 @@ def anon_task(t, rid, idx, idmap=None):
     if isinstance(t.get("issues"), dict):
         i = t["issues"]
         o["issues"] = {k: num(i.get(k)) for k in ("review", "integration", "user")}
-        o["issues"]["severity_max"] = i["severity_max"] if i.get("severity_max") in SEVERITY else None
+        sm = i.get("severity_max")
+        o["issues"]["severity_max"] = sm if isinstance(sm, str) and sm in SEVERITY else None
     if "flags" in t or "notes" in t:
-        fl = [x for x in task_flags(t) if NOTE_FLAG_RE.fullmatch(x)]  # known rule markers only
+        fl = []
+        for x in task_flags(t):  # known rule markers only; unknown suffixes collapse to "<prefix>:other"
+            x = export_flag(x)
+            if x and x not in fl:
+                fl.append(x)
         if fl:
             o["flags"] = fl
     if isinstance(t.get("score"), dict):  # only the integers 0/1/2 per dimension survive
@@ -1407,12 +1455,12 @@ def anon_task(t, rid, idx, idmap=None):
     if isinstance(t.get("independent_review"), dict):
         r = t["independent_review"]
         o["independent_review"] = {"ran": a_bool(r.get("ran")),
-                                   "trigger": r["trigger"] if r.get("trigger") in IR_TRIGGERS else ("other" if r.get("trigger") is not None else None),
+                                   "trigger": a_set(r.get("trigger"), IR_TRIGGERS),
                                    "findings": num(r.get("findings")), "major": num(r.get("major"))}
     if "test_scope" in t:
-        o["test_scope"] = t["test_scope"] if t["test_scope"] in ("related", "full") else None
+        o["test_scope"] = t["test_scope"] if isinstance(t["test_scope"], str) and t["test_scope"] in ("related", "full") else None
     if "task_type" in t:
-        o["task_type"] = t["task_type"] if t["task_type"] in TASK_TYPES else "other"
+        o["task_type"] = a_set(t["task_type"], TASK_TYPES)
     if "shard_group" in t:
         o["shard_group"] = "g" if isinstance(t["shard_group"], str) else None
     if isinstance(t.get("tier_changes"), list):
@@ -1437,8 +1485,7 @@ def anon_run(r, rid):
     for k in ("plugin_version_at_start", "plugin_version"):
         v = r.get(k)
         if v is not None:  # empty string stays empty-ish (null) so run_version still falls back like on raw data
-            o[k] = None if isinstance(v, str) and not v.strip() else (
-                v if isinstance(v, str) and VERSION_RE.match(v) else "other")
+            o[k] = None if isinstance(v, str) and not v.strip() else (vnorm(v) or "other")
     return o
 
 
@@ -1454,21 +1501,6 @@ def anon_merge(m, rid):
     return o
 
 
-def anon_monitor(m, rid):
-    o = {"type": "monitor", "run_id": rid}
-    for k, vals in MONITOR_ENUMS.items():
-        if k in m:
-            o[k] = m[k] if m[k] in vals else ("other" if m[k] is not None else None)
-    if "task_type" in m:
-        o["task_type"] = m["task_type"] if m["task_type"] in TASK_TYPES else "other"
-    for k in ("value", "threshold", "level", "analysis_cost_usd"):
-        if k in m:
-            o[k] = num(m[k])
-    if "rate_limited" in m:
-        o["rate_limited"] = a_bool(m["rate_limited"])
-    return o
-
-
 def anonymize(runs):
     out = {}
     for rid, r in runs.items():
@@ -1479,8 +1511,7 @@ def anonymize(runs):
                 idmap.setdefault(t["task_id"], "t%d" % (i + 1))
         out[h] = {"run": anon_run(r["run"], h) if r["run"] else None,
                   "tasks": [anon_task(t, h, i + 1, idmap) for i, t in enumerate(r["tasks"])],
-                  "merges": [anon_merge(m, h) for m in r.get("merges") or []],
-                  "monitors": [anon_monitor(m, h) for m in r.get("monitors") or []]}
+                  "merges": [anon_merge(m, h) for m in r.get("merges") or []]}
     return out
 
 
@@ -1490,18 +1521,18 @@ def export_anon(runs, corrupt, raw):
                        for k in ("plugin_version", "plugin_version_at_start")} - {None})
     o = {"format": "hq-anon/v1", "schema": "v1", "plugin_versions": versions,
          "note": "Whitelisted enum/number/boolean fields only; free text, project and goal removed; "
-                 "run ids hashed; timestamps cut to dates.",
+                 "run ids hashed; timestamps cut to dates. Without project, standing batches of different "
+                 "projects may be paired in summary.recommendations.",
          "summary": build(ar, corrupt)}
     if raw:
         o["records"] = [x for r in ar.values() for x in ([r["run"]] if r["run"] else []) + r["tasks"]
-                        + r["merges"] + r["monitors"]]
+                        + r["merges"]]
     return o
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Summarize hq run records into a metrics report.")
     ap.add_argument("paths", nargs="*", help="jsonl files or directories")
-    ap.add_argument("--changelog-stats", metavar="CHANGELOG", help="count entries per version by 状态 (needs no run data)")
     ap.add_argument("--format", choices=["md", "json"], default="md")
     ap.add_argument("--last", type=int, metavar="N")
     ap.add_argument("--project", metavar="NAME")
@@ -1514,16 +1545,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.raw and not a.export_anon:
         ap.error("--raw requires --export-anon")
-    if a.changelog_stats:
-        try:
-            with open(a.changelog_stats, encoding="utf-8") as fh:
-                st = changelog_stats(fh.read())
-        except OSError as e:
-            sys.exit("metrics.py: cannot read %s: %s" % (a.changelog_stats, e))
-        sys.stdout.write(json.dumps(st, ensure_ascii=False, indent=2) + "\n" if a.format == "json" else render_changelog_stats(st))
-        return
+    for opt, v in (("--since-version", a.since_version), ("--before-version", a.before_version)):
+        if v is not None and vtuple(v) is None:
+            ap.error("%s: cannot parse version %r (expected X.Y.Z)" % (opt, v))
     if not a.paths:
-        ap.error("paths are required (unless --changelog-stats is given)")
+        ap.error("paths are required")
     runs, corrupt = load(collect_files(a.paths))
     if a.project:
         runs = {k: v for k, v in runs.items() if run_project(v) == a.project}

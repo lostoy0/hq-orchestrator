@@ -142,7 +142,7 @@ class ChangelogCheck(Base):
         text = "## 未发布\n\n### Y\n- **验收判定**：`rework 很低`\n- **状态**：待验证\n"
         r = self.check(two_versions(), text)["Y"]
         self.assertEqual(r["criteria"][0]["verdict"], "无法解析")
-        self.assertEqual(r["verdict"], "样本不足")
+        self.assertEqual(r["verdict"], "无法解析")  # an unparseable criterion makes the entry 无法解析, not 样本不足
         f = os.path.join(self.d, "CHANGELOG.md")
         md = self.run_m("--check-changelog", f, fmt=None)
         self.assertIn("CHANGELOG 验收判定", md)
