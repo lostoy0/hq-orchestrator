@@ -108,6 +108,29 @@ class DurationLike(unittest.TestCase):
         self.assertEqual(lab, "false_positive")
 
 
+    def test_exactly_1_2x_with_float_rounding(self):
+        # 1.2 * 3 = 3.5999999999999996 in floats; actual 3.6 must still count as on time
+        for est, actual in ((3, 3.6), (6, 7.2), (9, 10.8), (12, 14.4), (1.5, 1.8)):
+            lab, _ = one(rec("duration_ratio"), {"s1": {"action_taken": False, "est_min": est, "actual_min": actual}})
+            self.assertEqual(lab, "false_positive", (est, actual))
+
+    def test_saving_half_with_float_rounding(self):
+        lab, _ = one(rec("duration_ratio"), {"s1": {"action_taken": "replan", "expected_saving_min": 0.3,
+                                                     "actual_saving_min": 0.15}})
+        self.assertEqual(lab, "effective")
+
+    def test_only_true_resplit_replan_count_as_action(self):
+        for v in ("none", "false", "yes", 1, "0"):
+            lab, res = one(rec("duration_ratio"), {"s1": {"action_taken": v, "expected_saving_min": 60,
+                                                           "actual_saving_min": 60, "est_min": 40, "actual_min": 40}})
+            self.assertIsNone(lab, v)
+            self.assertIn("unknown", res["unlabeled"][0]["label_reason"])
+        for v in (True, "resplit", "replan"):
+            lab, _ = one(rec("duration_ratio"), {"s1": {"action_taken": v, "expected_saving_min": 60,
+                                                         "actual_saving_min": 60}})
+            self.assertEqual(lab, "effective", v)
+
+
 class Idle(unittest.TestCase):
     def prog(self, *pairs):
         return [{"ts": at(t), "done": d} for t, d in pairs]
@@ -146,6 +169,15 @@ class Failure(unittest.TestCase):
         self.assertEqual(one(rec("failure_rate", task_id="batch"), {"batch": {"located": False, "rerun_passed": True}})[0],
                          "false_positive")
 
+    def test_string_flags_are_not_true(self):
+        for v in ("false", "0", "no", 1):
+            self.assertIsNone(one(rec("failure_rate", task_id="batch"), {"batch": {"located": v}})[0], v)
+            self.assertIsNone(one(rec("failure_rate", task_id="batch"), {"batch": {"rerun_passed": v}})[0], v)
+
+    def test_non_empty_culprits_count_as_located(self):
+        self.assertEqual(one(rec("failure_rate", task_id="batch"), {"batch": {"culprits": ["s2"]}})[0], "effective")
+        self.assertIsNone(one(rec("failure_rate", task_id="batch"), {"batch": {"culprits": []}})[0])
+
     def test_neither_is_unlabeled(self):
         self.assertIsNone(one(rec("failure_rate", task_id="batch"), {"batch": {"located": False}})[0])
 
@@ -170,6 +202,13 @@ class Cost(unittest.TestCase):
         # boundary: final cost == 1.2 x budget counts as within (<=)
         self.assertEqual(one(rec("cost_ratio"), {"s1": {"user_decision": "continue", "final_cost_usd": 1.2,
                                                          "budget_usd": 1.0}})[0], "false_positive")
+
+    def test_continue_exactly_1_2x_with_float_rounding(self):
+        # 1.2 * 2.5 = 3.0000000000000004 is fine, but the comparison must not depend on rounding either way
+        self.assertEqual(one(rec("cost_ratio"), {"s1": {"user_decision": "continue", "final_cost_usd": 3.0,
+                                                         "budget_usd": 2.5}})[0], "false_positive")
+        self.assertEqual(one(rec("cost_ratio"), {"s1": {"user_decision": "continue", "final_cost_usd": 3.6,
+                                                         "budget_usd": 3}})[0], "false_positive")
 
     def test_continue_over_budget_is_unlabeled(self):
         self.assertIsNone(one(rec("cost_ratio"), {"s1": {"user_decision": "continue", "final_cost_usd": 1.3,
@@ -206,6 +245,28 @@ class Existing(unittest.TestCase):
         res = scale.label_records([m], {"s2": {"est_min": 40, "actual_min": 100}})
         self.assertEqual(res["records"], [m])
         self.assertEqual(res["missed"], [])
+
+
+class Input(unittest.TestCase):
+    def test_integer_task_id_matches_string_key(self):
+        r = rec("duration_ratio", task_id=7)
+        res = scale.label_records([r], {"7": {"action_taken": False, "est_min": 40, "actual_min": 40}})
+        self.assertEqual(res["records"][0]["label"], "false_positive")
+        # and the missed check sees the integer-id trigger
+        res = scale.label_records([r], {"7": {"est_min": 40, "actual_min": 100}})
+        self.assertEqual(res["missed"], [])
+
+    def test_bad_types_raise(self):
+        with self.assertRaises(ValueError):
+            scale.label_records([], [1])
+        with self.assertRaises(ValueError):
+            scale.label_records({"a": 1}, {})
+
+    def test_cli_bad_types_exit_2(self):
+        for d in ({"records": [], "outcomes": [1]}, {"records": [], "outcomes": "x"}, {"records": {}, "outcomes": {}}):
+            rc, _, err = cli("label", stdin=json.dumps(d))
+            self.assertEqual(rc, 2, d)
+            self.assertIn("scale.py:", err)
 
 
 class Missed(unittest.TestCase):

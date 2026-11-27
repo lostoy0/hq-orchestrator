@@ -986,12 +986,14 @@ LABEL_SAVING_MIN_SHARE = 0.5   # a re-split / re-plan counts as effective when i
 LABEL_ON_TIME_RATIO = 1.2      # "finished normally" = actual <= 1.2 x estimate (or cost <= 1.2 x budget)
 LABEL_IDLE_WINDOW = 2          # progress must rise within this many check-ins after the reminder
 MISSED_DURATION_RATIO = 2.0    # actual > 2 x estimate without a duration_ratio trigger = a miss
+LABEL_EPS = 1e-9               # float tolerance for the boundary comparisons (1.2 * 3 = 3.5999999999999996)
+LABEL_ACTIONS = ("resplit", "replan")
 DURATION_LIKE = ("duration_ratio", "straggler_ratio", "split_unit_error", "split_uneven", "split_underused")
 
 
 def _outcome_for(outcomes, rec):
     """Outcome of the record's subject, with an optional per-metric override in `by_metric`."""
-    base = outcomes.get(rec.get("task_id")) or {}
+    base = outcomes.get(str(rec.get("task_id"))) or {}
     if not isinstance(base, dict):
         return {}
     o = {k: v for k, v in base.items() if k != "by_metric"}
@@ -1003,27 +1005,39 @@ def _outcome_for(outcomes, rec):
 
 def _on_time(actual, planned):
     # exactly 1.2 x counts as on time (<=): the rule says "<= 1.2 x", so the boundary is a false positive
-    return actual is not None and planned is not None and planned > 0 and actual <= LABEL_ON_TIME_RATIO * planned
+    # with a small tolerance so that e.g. est 3 / actual 3.6 is not lost to float rounding
+    return (actual is not None and planned is not None and planned > 0
+            and actual <= LABEL_ON_TIME_RATIO * planned + LABEL_EPS)
+
+
+def _action_taken(v):
+    """True / "resplit" / "replan" -> taken; False -> not taken; anything else -> unknown (None)."""
+    if v is True or v in LABEL_ACTIONS:
+        return True
+    if v is False:
+        return False
+    return None
 
 
 def _label_duration_like(o):
     actual, est = num(o.get("actual_min")), num(o.get("est_min"))
-    taken = o.get("action_taken")
+    raw = o.get("action_taken")
+    taken = _action_taken(raw)
     if taken:
         exp, got = num(o.get("expected_saving_min")), num(o.get("actual_saving_min"))
         if exp is None or got is None or exp <= 0:
             return None, "action taken but expected_saving_min / actual_saving_min missing"
         # exactly 50% counts as effective (>=), as the rule says "saved >= 50% of the expected saving"
-        if got >= LABEL_SAVING_MIN_SHARE * exp:
+        if got >= LABEL_SAVING_MIN_SHARE * exp - LABEL_EPS:
             return "effective", "%s saved %.1f of expected %.1f min (>= %d%%)" % (
-                taken if isinstance(taken, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
+                raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
         return "false_positive", "%s saved %.1f of expected %.1f min (< %d%%)" % (
-            taken if isinstance(taken, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
+            raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
     if taken is False and _on_time(actual, est):
         return "false_positive", "no action; actual %.1f <= %.1f x estimate %.1f min" % (
             actual, LABEL_ON_TIME_RATIO, est)
     if taken is None:
-        return None, "action_taken unknown"
+        return None, "action_taken unknown (%r)" % (raw,)
     return None, "no action and actual time over %.1f x estimate (or unknown)" % LABEL_ON_TIME_RATIO
 
 
@@ -1060,7 +1074,9 @@ def _label_idle(o, rec):
 
 
 def _label_failure(o):
-    located, flaky = o.get("located"), o.get("rerun_passed")
+    culprits = o.get("culprits")
+    located = o.get("located") is True or (isinstance(culprits, list) and len(culprits) > 0)
+    flaky = o.get("rerun_passed") is True
     if located and flaky:
         return None, "conflicting: located to a shard but the rerun also passed"
     if located:
@@ -1123,7 +1139,15 @@ def label_records(records, outcomes):
     """Label monitor triggers by fixed rules and add rule-detected misses.
     Returns {"records", "unlabeled", "missed", "history"}; history = records + missed, the input
     `scale.py calibrate` expects. Records that already carry a label are kept untouched."""
-    outcomes = outcomes or {}
+    if outcomes is None:
+        outcomes = {}
+    if not isinstance(outcomes, dict):
+        raise ValueError("outcomes must be an object keyed by task_id or \"batch\"")
+    if records is None:
+        records = []
+    if not isinstance(records, list):
+        raise ValueError("records must be a list")
+    outcomes = {str(k): v for k, v in outcomes.items()}  # JSON keys are strings; task_id may be a number
     labelled, unlabeled, missed = [], [], []
     for rec in records or []:
         if not isinstance(rec, dict):
@@ -1139,7 +1163,7 @@ def label_records(records, outcomes):
     allrecs = [r for r in records or [] if isinstance(r, dict)]
 
     def has(metric, task_id=None):
-        return any(r.get("metric") == metric and (task_id is None or r.get("task_id") == task_id)
+        return any(r.get("metric") == metric and (task_id is None or str(r.get("task_id")) == task_id)
                    for r in allrecs)
 
     batch_ids = sorted({r.get("batch_id") for r in allrecs if r.get("batch_id")})
@@ -1157,7 +1181,7 @@ def label_records(records, outcomes):
     def task_type_of(tid, o):
         if o.get("task_type"):
             return o["task_type"]
-        return next((r.get("task_type") for r in allrecs if r.get("task_id") == tid and r.get("task_type")), None)
+        return next((r.get("task_type") for r in allrecs if str(r.get("task_id")) == tid and r.get("task_type")), None)
 
     for tid, o in outcomes.items():
         if not isinstance(o, dict):
@@ -1185,7 +1209,11 @@ def cmd_label(a):
     d = read_json_stdin()
     if not isinstance(d, dict):
         die("stdin must be {\"records\": [...], \"outcomes\": {...}}")
-    return out(label_records(d.get("records") or [], d.get("outcomes") or {}))
+    try:
+        res = label_records(d.get("records"), d.get("outcomes"))
+    except ValueError as e:
+        die(str(e))
+    return out(res)
 
 
 # ---------- PLAYBOOK storage: user values in the 授权 yaml, calibrated values in a marked block ----------

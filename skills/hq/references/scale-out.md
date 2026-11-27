@@ -172,24 +172,24 @@ snapshot：`{run_id, batch_id, task_type, heavy_ops, batch_done, target_min, ove
      以及 `history` = `records` + `missed`。整个输出可以直接作为 `scale.py calibrate` 的输入。
   2. **剩下的交给独立审核**：`unlabeled` 交给一个独立审核子代理去标，只给它这些记录和对应的 outcomes 数据，
      不给主会话的看法或倾向；审核者标的记录写 `label_source:"reviewer"`，再并回 `history`。规则之外的漏报审核者可以补，规则不猜。
-- **outcomes**：键是触发记录的 `task_id`（分片 id，批次级指标用 `"batch"`），只填主会话手头已有的数据，不知道的字段不填（对应规则就判不了，进 `unlabeled`）：
+- **outcomes**：对象，键是触发记录的 `task_id`（按字符串比较，分片 id，批次级指标用 `"batch"`），只填主会话手头已有的数据，不知道的字段不填（对应规则就判不了，进 `unlabeled`）：
 
   | 字段 | 含义 | 用于 |
   |---|---|---|
   | `est_min` / `actual_min` | 预估时长 / 交付后实际时长（`"batch"` 上是整批计划完成时间 / 实际完成时间） | 时长类、idle、漏报 |
   | `task_type` | 任务类型（不填就取同一 task_id 触发记录上的） | 漏报 |
-  | `action_taken` | 是否执行了处置：`"resplit"`、`"replan"`（或 `true`），没执行 `false` | 时长类 |
+  | `action_taken` | 是否执行了处置：`"resplit"`、`"replan"` 或 `true`；没执行 `false`；其他值一律视为未知（unlabeled） | 时长类 |
   | `expected_saving_min` / `actual_saving_min` | 再拆 / 重新规划时预计节省（`straggler` 的 `saves_min`）和实际节省 | 时长类 |
   | `progress` | 巡检时的进度序列 `[{ts, done}]`；`reminder_ts` 可覆盖提醒时间（默认取触发记录的 `ts`） | idle |
-  | `located` / `culprits` | `scale.py locate` 是否定位到具体分片 / 哪几片 | failure_rate |
-  | `rerun_passed` | 失败的校验不改代码重跑即通过 | failure_rate |
+  | `located` / `culprits` | `scale.py locate` 是否定位到具体分片（只认 `true`）/ 哪几片（非空列表也算定位到） | failure_rate |
+  | `rerun_passed` | 失败的校验不改代码重跑即通过（只认 `true`） | failure_rate |
   | `rework_after_message` | 发复查消息后又返工的轮数 | rework |
   | `user_decision` / `final_cost_usd` / `budget_usd` | 用户决定 `stop`、`adjust`、`continue`；最终花费和预算 | cost_ratio |
   | `merge_conflicts` / `ownership_violations` | 合入时冲突次数 / 归属违规（`touches_owned_file` 等）次数 | split_boundary |
   | `verify_failed_groups` / `failure_rate` / `failure_rate_threshold` | `"batch"` 上：合入校验失败的组数、最终失败率、当时阈值（不填用默认 0.2） | failure_rate 漏报 |
   | `by_metric` | `{指标: {字段…}}`，同一主体上不同指标的处置不同时按指标覆盖（如批次上的 `split_unit_error` 与 `straggler_ratio`） | 全部 |
 
-- **规则**（常量在 `scale.py` 的 `LABEL_*`、`MISSED_DURATION_RATIO`）：
+- **规则**（常量在 `scale.py` 的 `LABEL_*`、`MISSED_DURATION_RATIO`；“恰好 50%”“恰好 1.2 倍”按 1e-9 容差比较，不受浮点舍入影响；`records` 不是列表或 `outcomes` 不是对象时退出码 2）：
 
   | 指标 | effective | false_positive | 其余 |
   |---|---|---|---|
