@@ -164,7 +164,7 @@
 - 总览的“缺记录任务数”：run 的 `tasks` 减去实际有记录的任务数（不为负）。
 - 计划预估 vs 实际（有 `plan_tier` 的任务才出这一节）：`tier` 与 `plan_tier` 一致、偏低（实际档位更高）、偏高的比例，以及一次通过率；n ≥ 5 且偏低或偏高超过 30% 时给出信号，提示调整 `/hq-plan` 的打分说明。
 - 分片、分层校验与合入（4b，有 v0.11.0 字段的 run 才出）：并行效率 = 各片 actual_min 之和 ÷（片数 × 最长片）；掉队比 = 最长片 ÷ 中位片；并发利用率 = `max_concurrency` ÷ `concurrency_limit`；单元耗时估算误差 = |（actual_min − overhead_min）÷ 单元数 ÷ unit_min_est − 1| 的中位数；全量测试次数 = merge 的 `full_test` + 子会话 `test_scope: full`，每次全量覆盖片数 = 两次全量之间合入的片数均值；合入组数、每组片数、校验次数；按实测单元耗时用 `scale.py shards` 同一规则算出的建议片数。
-- 主动监控（4c）：触发数、一级/二级、限频跳过数、漏报数、分析花费，以及各阈值的触发数、有效率、误报率、漏报数。
+- 主动监控（4c）：触发数、一级/二级、限频跳过数、漏报数、分析花费、标注来源（触发记录按 `label_source` 计 rule/reviewer/user/other，没有 effective/false_positive 标签的计“未标”；JSON `label_sources`、`rule_label_share` = 规则标注 ÷ 已标注），以及各阈值的触发数、有效率、误报率、漏报数。
 - 信号：并发利用率 < 50%（附“下次切成 N 片”）、掉队比 > 2、全量测试 > 0.5 次每片（附“每 N 片合入后跑一次”）、单元耗时误差 > 50%、某阈值误报率 > 30% 或漏报偏多。
 - 按插件版本（3f）：按**运行时生效的版本**分组——有 `plugin_version_at_start` 时用它，没有时（旧记录）用 `plugin_version`。`--since-version`/`--before-version` 和 `--check-changelog` 的 since/before 切分都用同一口径。每个版本的 run 数、task 数、一次通过率、返工率、漂移率、验证到位率、漏网问题/任务（integration + user）、actual/est 中位数、平均 cost_usd。`--since-version V` 只看 ≥V 的 run，`--before-version V` 只看 <V 的；给了任一项时，没有版本号的 run 被排除。
 - 按验证级别（3g）：每级的验证到位率、漏到合并/漏到用户的问题数每任务、漏网 major 数、返工率。n ≥ 5 且漏网 > 0.3 个/任务，或出现漏网 major 时给出信号。
@@ -192,7 +192,7 @@
 metrics.py --changelog-stats CHANGELOG.md [--format md|json]
 ```
 
-不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，标题是“未发布”的归“未发布”；解析不出 X.Y.Z 的版本标题如 `## v0.1.x（…）` 单独成行，版本列显示标题里的版本串，没有版本串就显示标题原文，且 `--check-changelog` 不按版本切分；没有条目的标题如“格式说明”不出行）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；带 `- **验收判定**` 行的条目数。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；带验收判定的条目占全部条目的比例。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged}], total: {…, verified_rate, withdrawn_rate, judged_rate}}`。`--check-changelog` 的输出不受影响。
+不读运行数据（不用给路径）。按条目（`### ` 标题）所在的版本（`## vX.Y.Z`，标题是“未发布”的归“未发布”；解析不出 X.Y.Z 的版本标题如 `## v0.1.x（…）` 单独成行，版本列显示标题里的版本串，没有版本串就显示标题原文，且 `--check-changelog` 不按版本切分；没有条目的标题如“格式说明”不出行）统计：条目数，以及 `- **状态**：` 行为 待验证 / 已验证 / 已撤回 / 其他（含没写状态行、写了别的词）的数量；验收判定分两种计数：**可机器判定**（`- **验收判定**` 行里有反引号表达式，`checkable`）和**写了不适用**（有这一行但没有表达式，`not_applicable`）；`judged` = 两者之和，保留做兼容。合计行另给：已验证率 = 已验证 ÷ (已验证 + 已撤回)，撤回率同分母，两者在没有已结案条目时显示 `-`；可机器判定的条目占全部条目的比例（`checkable_rate`）。md 表的列是“可机器判定”“判定写了不适用”。JSON：`{versions: [{version, entries, pending, verified, withdrawn, other, judged, checkable, not_applicable}], total: {…, verified_rate, withdrawn_rate, judged_rate, checkable_rate}}`。`--check-changelog` 的输出不受影响。
 
 ## CHANGELOG 验收判定（`metrics.py --check-changelog CHANGELOG.md`）
 

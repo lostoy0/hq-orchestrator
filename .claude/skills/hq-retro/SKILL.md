@@ -69,7 +69,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 15. **规则标记**：看报告 3h 节，规则 9 上调（`bias:+1(…)`）、规则 11 授权降档（`downgrade:…`）与“(无标记)”基线在同类任务上的一次通过率、返工率、成本；`rate_limited`、`assist_unavailable:*` 的次数和原因。
 16. **常驻推荐**（有常驻数据时）：看报告 6c 节的采纳率和完工声明数；采纳率低说明推荐的来源或排序不贴合用户。
 17. **选档维度与独立审核**（有 `score`、`independent_review` 数据时）：看报告 3i 节，某维度某取值的升档率明显偏高（strong）→ 建议改 `calibration.md` 5 维打分表里这一维的说明；看 6d 节，某触发条件几乎发现不了问题（strong）→ 建议放宽这个触发条件，同时看 major 集中在哪个触发条件。效率表的“审核等待”中位数偏高时，建议缩短巡检间隔。
-18. **复盘本身的成效**：运行 `metrics.py --changelog-stats <CHANGELOG.md 路径>`，在数据概览里写已验证率、撤回率和带验收判定的条目占比；撤回率高或带验收判定的占比低，本身就是一条改进建议。
+18. **复盘本身的成效**：运行 `metrics.py --changelog-stats <CHANGELOG.md 路径>`，在数据概览里写已验证率、撤回率、可机器判定（验收判定行里有表达式）的条目占比和写了“不适用”的条数；撤回率高或可机器判定的占比低，本身就是一条改进建议。看报告 4c 的“标注来源”：规则标注占比低，说明 `scale.py label` 的 outcomes 数据记得不够，先补记录。
 
 ### 5. 证据门槛
 

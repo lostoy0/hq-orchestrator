@@ -498,6 +498,15 @@ def scale_out(rid, r):
         g["triggers"] += 1
         if m.get("label") in ("effective", "false_positive"):
             g[m["label"]] += 1
+    # who labelled the triggers: rule (scale.py label), reviewer (independent), user, or nobody yet
+    sources = {"rule": 0, "reviewer": 0, "user": 0, "other": 0, "unlabeled": 0}
+    for m in trig:
+        if m.get("label") not in ("effective", "false_positive"):
+            sources["unlabeled"] += 1
+        else:
+            src = m.get("label_source")
+            sources[src if src in ("rule", "reviewer", "user") else "other"] += 1
+    labelled = len(trig) - sources["unlabeled"]
     for g in by_metric.values():
         lab = g["effective"] + g["false_positive"]
         g["effective_rate"] = rate(g["effective"], lab)
@@ -525,6 +534,8 @@ def scale_out(rid, r):
         "analysis_cost_usd": sum(cnt(m.get("analysis_cost_usd")) for m in mons) if mons else None,
         "monitor_missed": len(missed),
         "monitor_by_metric": by_metric,
+        "label_sources": sources,
+        "rule_label_share": rate(sources["rule"], labelled),
         "concurrency_limit": limit,
         "suggest_shards": suggest_shards(units_total, med(unit_actual), ov, target, int(limit))
                           if units_total and unit_actual and limit else None,
@@ -1033,17 +1044,22 @@ def changelog_stats(text):
     for e in entries:
         v = e["label"]
         if v not in g:
-            g[v] = {"version": v, "entries": 0, "pending": 0, "verified": 0, "withdrawn": 0, "other": 0, "judged": 0}
+            g[v] = {"version": v, "entries": 0, "pending": 0, "verified": 0, "withdrawn": 0, "other": 0, "judged": 0,
+                    "checkable": 0, "not_applicable": 0}
             order.append(v)
         x = g[v]
         x["entries"] += 1
         x[{"待验证": "pending", "已验证": "verified", "已撤回": "withdrawn"}.get(e["status"], "other")] += 1
         x["judged"] += 1 if e.get("has_judge") else 0
+        # a 验收判定 line with expressions can be machine-checked; one without (e.g. "不适用") cannot
+        x["checkable"] += 1 if e.get("exprs") else 0
+        x["not_applicable"] += 1 if e.get("has_judge") and not e.get("exprs") else 0
     rows = [g[v] for v in order]
-    tot = {k: sum(r[k] for r in rows) for k in ("entries", "pending", "verified", "withdrawn", "other", "judged")}
+    tot = {k: sum(r[k] for r in rows) for k in ("entries", "pending", "verified", "withdrawn", "other", "judged",
+                                                "checkable", "not_applicable")}
     closed = tot["verified"] + tot["withdrawn"]
     tot.update(verified_rate=rate(tot["verified"], closed), withdrawn_rate=rate(tot["withdrawn"], closed),
-               judged_rate=rate(tot["judged"], tot["entries"]))
+               judged_rate=rate(tot["judged"], tot["entries"]), checkable_rate=rate(tot["checkable"], tot["entries"]))
     return {"versions": rows, "total": tot}
 
 
@@ -1051,14 +1067,16 @@ def render_changelog_stats(st):
     def row(name, r):
         c = r["verified"] + r["withdrawn"]
         return [name, r["entries"], r["pending"], r["verified"], r["withdrawn"], r["other"],
-                f(rate(r["verified"], c), "p"), f(rate(r["withdrawn"], c), "p"), "%d (%s)" % (r["judged"], f(rate(r["judged"], r["entries"]), "p"))]
+                f(rate(r["verified"], c), "p"), f(rate(r["withdrawn"], c), "p"),
+                "%d (%s)" % (r["checkable"], f(rate(r["checkable"], r["entries"]), "p")), r["not_applicable"]]
     L = ["# CHANGELOG 状态统计", ""]
-    L += table(["版本", "条目数", "待验证", "已验证", "已撤回", "其他", "已验证率", "撤回率", "带验收判定"],
+    L += table(["版本", "条目数", "待验证", "已验证", "已撤回", "其他", "已验证率", "撤回率", "可机器判定", "判定写了不适用"],
                [row(r["version"], r) for r in st["versions"]] + [row("合计", st["total"])])
     t = st["total"]
-    L += ["", "已验证率 = 已验证 / (已验证 + 已撤回)，撤回率同分母；%s；带验收判定的条目占 %s。"
+    L += ["", "已验证率 = 已验证 / (已验证 + 已撤回)，撤回率同分母；%s；可机器判定（验收判定行里有表达式）的条目占 %s，"
+          "另有 %d 条写了“不适用”。"
           % ("暂无已结案条目" if not (t["verified"] + t["withdrawn"]) else "已结案 %d 条" % (t["verified"] + t["withdrawn"]),
-             f(t["judged_rate"], "p"))]
+             f(t["checkable_rate"], "p"), t["not_applicable"])]
     return "\n".join(L) + "\n"
 
 
@@ -1272,9 +1290,12 @@ def render_md(rep):
                      f(x["shards_per_full_test"]), x["merge_groups"], f(x["shards_per_group"]), x["verify_runs"]]
                     for x in rep["scale_out"]])
         L += ["", "## 4c. 主动监控", ""]
-        L += table(["run", "触发", "一级", "二级", "限频跳过", "漏报", "分析花费 (USD)", "各阈值 触发/有效率/误报率/漏报"],
+        L += table(["run", "触发", "一级", "二级", "限频跳过", "漏报", "分析花费 (USD)",
+                    "标注来源 规则/审核/用户/其他/未标", "规则标注占比", "各阈值 触发/有效率/误报率/漏报"],
                    [[x["run_id"], x["monitor_triggers"], x["monitor_level1"], x["monitor_level2"], x["monitor_rate_limited"],
                      x["monitor_missed"], f(x["analysis_cost_usd"], "c"),
+                     "/".join(str(x["label_sources"][k]) for k in ("rule", "reviewer", "user", "other", "unlabeled")),
+                     f(x["rule_label_share"], "p"),
                      "；".join("%s %d/%s/%s/%d" % (k, g["triggers"], f(g["effective_rate"], "p"), f(g["false_positive_rate"], "p"), g["missed"])
                               for k, g in sorted(x["monitor_by_metric"].items())) or "-"]
                     for x in rep["scale_out"]])
@@ -1316,6 +1337,7 @@ MONITOR_ENUMS = {
                "split_unit_error", "split_uneven", "split_underused", "split_boundary"},
     "severity": {"normal", "severe"},
     "label": {"effective", "false_positive"},
+    "label_source": {"rule", "reviewer", "user"},
 }
 TASK_TYPES = {"patrol", "dev", "docs", "test", "research", "review", "config", "code", "*"}
 RUN_BOOLS = ("integration_pass", "from_recommendation")
