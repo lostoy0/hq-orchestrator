@@ -672,5 +672,21 @@ class RemovedCommands(unittest.TestCase):
             self.assertEqual(p.returncode, 0, c)
 
 
+class DeliveryMultilineVerify(unittest.TestCase):
+    """Real workers write VERIFY as a list on the following lines."""
+
+    def test_verify_on_following_lines_counts(self):
+        body = "## 交付\nSTATUS: DONE\nBRANCH: hq/p1 @ abc\nCHANGES: x\nVERIFY:\n- python3 -m unittest -> Ran 79 tests OK\n- wc -l 1458 -> 924\nCHECKPOINTS: none\n"
+        self.assertTrue(scale.check_delivery(body)["delivered"])
+
+    def test_empty_verify_followed_by_other_field_is_not_delivered(self):
+        body = "## 交付\nSTATUS: DONE\nVERIFY:\nCHECKPOINTS: none\nDERIVED: none\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+    def test_placeholder_lines_after_verify_do_not_count(self):
+        body = "## 交付\nSTATUS: DONE\nVERIFY:\n- 待补记\n- <命令及结果>\nRISKS: none\n"
+        self.assertFalse(scale.check_delivery(body)["delivered"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -415,6 +415,7 @@ def cmd_straggler(a):
 
 HEAD_RE = re.compile(r"^(#{1,6})\s*(?:\*\*|__)?\s*(交付|delivery)\s*(?:\*\*|__)?\s*[:：]?\s*$", re.I)
 ANY_HEAD_RE = re.compile(r"^(#{1,6})\s+\S")
+OTHER_FIELD_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*[A-Z][A-Z_]{2,}\s*(?:\*\*|__)?\s*[:：]")
 FIELD_RE = re.compile(r"^(?:[-*+]\s+)?(?:\*\*|__)?\s*(STATUS|VERIFY)\s*(?:\*\*|__)?\s*[:：]\s*(?:\*\*|__)?\s*(.*)$", re.I)
 PLACEHOLDER = re.compile(
     r"^(none|n/?a|na|null|nil|无|暂无|没有|待补|待补记|待补充|待定|待验证|未验证|未运行|未跑|没跑|稍后|稍后补|"
@@ -456,6 +457,7 @@ def check_delivery(text):
         return {"delivered": False, "reason": "no_delivery_section"}
     i, level = heads[-1]
     status = verify = None
+    in_verify = False  # VERIFY's result may continue on the following lines (a list of commands and output)
     for l in lines[i + 1:]:
         if l is None:
             continue
@@ -463,13 +465,20 @@ def check_delivery(text):
         if h and len(h.group(1)) <= level:
             break
         m = FIELD_RE.match(l)
-        if not m:
+        if not m and OTHER_FIELD_RE.match(l):
+            in_verify = False  # CHANGES: / CHECKPOINTS: / RISKS: ... end the VERIFY block
             continue
+        if not m:
+            if in_verify and l.strip() and not is_placeholder(l.strip().lstrip("-*• ").strip()):
+                verify = (verify + " " if verify else "") + l.strip()
+            continue
+        in_verify = False
         key, val = m.group(1).upper(), m.group(2).strip().strip("*_ ").strip()
         if key == "STATUS" and status is None:
             status = val
         elif key == "VERIFY" and verify is None:
             verify = val
+            in_verify = True
     word = re.match(r"([A-Za-z_]+)", status or "")
     if not word or word.group(1).upper() != "DONE" or "|" in status:
         return {"delivered": False, "reason": "section_status_not_done", "status": status}
