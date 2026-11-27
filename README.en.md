@@ -228,11 +228,69 @@ When a large goal splits into many subtasks, the host can keep the hard, importa
   /hq --assist kimi --assist-max T1 <goal>  # hand out only T0–T1
   /hq --assist off <goal>                   # off for this run
   ```
-- **Set it once**: `/hq --assist codex --save` only saves (no run) to the user-level `~/.hq/config.yaml`, used by every project; `--save-project` writes the project's `.hq/PLAYBOOK.md` instead. From a terminal: `python3 "$(cat ~/.hq/skill-path)/scripts/assist-config.py" set --scope user --use codex --auto-models`, and `assist-config.py check` to see the effective settings and validate models and efforts. Precedence, field by field: `~/.hq/config.yaml` < `assist` in `.hq/PLAYBOOK.md` < this run's flags. In a PLAYBOOK, `use: []` means "inherit the user-level setting"; `use: off` turns it off for the project. Fields (`use`, `max_tier`, per-profile CLI, per-tier models, optional `env_file`): see `skills/hq/references/playbook-template.md`.
-- **Codex models are read automatically**: with codex installed, `assist-config.py models` reads `codex debug models` (falling back to `~/.codex/models_cache.json`) and lists the account's models, their supported reasoning efforts and retirement dates; `suggest` maps T0–T4 from the model descriptions (small and cheap / everyday / most capable); `set --auto-models` fills the tiers left empty and never overwrites. A profile with no models gets the suggestion at run time, and the report tells you how to save it. The suggestion is a guess from descriptions: override with `--profile codex --models T0=…,T1=…,T2=…`. `install.sh --host codex --with-agents --model-map auto` uses the same suggestion for the Codex subagent templates.
 - **Kimi**: the recommended path is the `claude` CLI pointed at Kimi's Anthropic-compatible API. The endpoint and key live in an `env_file` with mode 600; `cli-worker.sh --env-file` injects it into that worker process only and never logs the values. See `skills/hq/references/hosts/kimi.md` (**compiled from public docs, not run on a real machine**).
 - **Measuring it**: task records gain an `assist` field; section "3d" of the `metrics.py` report compares first-pass and take-over rates per tier, and `/hq-retro` uses it to suggest lowering `max_tier` or dropping a worker.
 - **Caveats**: assist workers run on the W channel on this machine (or the cloud container) and use local CPU and memory; in a cloud session the CLI must be installed, the API host allowed and the key configured, otherwise everything stays with the host. Retries on an external model eat into the savings, so tasks of uncertain difficulty are not handed out.
+
+### Configuring assist workers: set once, keeps working
+
+**What you can configure**
+
+| Item | Notes |
+|---|---|
+| Platform (profile) | `codex` (works once the codex CLI is installed; models are read automatically); `kimi` and other third-party APIs go through the `claude` CLI and need an `env_file`; `opencode`, `gemini` and `cursor` CLIs also work. Several profiles are tried in order; when one is disabled the next is used |
+| Tiers | Only **T0–T2** can go to an assist worker (`max_tier` is at most T2); T3, T4 and all reviews **always stay with the host**, using the host's own mapping (Claude Code: haiku/sonnet/opus, see section 3 of `skills/hq/references/hosts/claude-code.md`) |
+| Model and effort per tier | Each profile's `models` and `effort` are set per T0, T1, T2; codex may leave them empty and get a suggestion from the local model catalog; an unset effort means the tier default for codex (T0/T1 low, T2 medium) and no `--effort` for other CLIs |
+| Relation to the host | Settings are not per host: in Claude Code the list is used as is; inside Codex, `codex` is the host itself, is skipped, and the next profile (for example kimi) is used |
+| Precedence | user-level `~/.hq/config.yaml` (every project) < `assist` in the project's `.hq/PLAYBOOK.md` (that project only) < this run's `/hq --assist …` flags, **field by field**: a project that only changes the T2 model keeps everything else from the user level |
+
+**Case 1: one setting for every project (global)**
+
+In any project with hq installed, open a Claude Code session and type:
+```
+/hq --assist codex --save
+```
+It only saves (no run): writes `~/.hq/config.yaml`, fills the codex models per tier from the local `codex debug models`, then lists each tier's model and effort. To pick some tiers yourself:
+```
+/hq --assist codex --assist-models T0=gpt-6-luna,T1=gpt-6.2-sol,T2=gpt-6.2-astra --assist-effort T2=high --save
+```
+To add Kimi as a second worker (first create `~/.hq/env/kimi.env` with mode 600, see section 4 of `hosts/kimi.md`):
+```
+/hq --assist kimi --assist-cli claude --assist-env-file ~/.hq/env/kimi.env --assist-models T0=<model>,T1=<model>,T2=<model> --save
+/hq --assist codex,kimi --save
+```
+Plain language works too, e.g. "from now on use codex as the assist worker, T2 on gpt-6.2-astra with high effort, save globally".
+
+**Case 2: one project only**
+
+Open a session in that project and use `--save-project` instead of `--save`; it writes that project's `.hq/PLAYBOOK.md` and overrides only what you set:
+```
+/hq --assist codex --assist-max T1 --save-project                    # this project hands out T0–T1 only
+/hq --assist codex --assist-models T2=gpt-6.2-astra --save-project   # another T2 model here, the rest from the global setting
+/hq --assist off --save-project                                      # assist off for this project
+```
+
+**Show and validate**: `/hq --assist-show` lists the effective list, each tier's model and effort, and which layer each value comes from, and checks that the models are still in codex's catalog, that the efforts are supported and that `env_file` has mode 600.
+
+**From a terminal instead**: the commands map one to one (`set --scope user` = `--save`, `set --scope project --project <path>` = `--save-project`). The script is `scripts/assist-config.py` in the hq skill directory; find it first:
+```bash
+S=$(find ~/.claude/skills ~/.claude/plugins ~/.agents/skills "$PWD/.claude/skills" -path '*hq/scripts/assist-config.py' 2>/dev/null | head -1); echo "$S"
+```
+```bash
+python3 "$S" models                                              # models and efforts available to the local codex
+python3 "$S" suggest                                             # suggested T0–T4 mapping
+python3 "$S" set --scope user --use codex --auto-models          # global
+python3 "$S" set --scope user --profile codex --models T2=gpt-6.2-astra --effort T2=high
+python3 "$S" set --scope project --project ~/code/my-app --max-tier T1     # one project
+python3 "$S" show --project ~/code/my-app                        # effective settings for that project
+python3 "$S" check --project ~/code/my-app                       # validate
+```
+
+**Notes**
+- Reading the global file needs hq v0.10.5 or later in the project. An older per-project copy (`.claude/skills/hq`) ignores `~/.hq/config.yaml`; upgrade it first: `./install.sh --update --scope project --project-dir <path>`.
+- The codex suggestion is inferred from keywords in the model descriptions (the catalog has no price field); check `show` after saving and fix a tier with `--assist-models` if needed. `--auto-models` never overwrites a tier you set.
+- The config holds only the `env_file` path; keys stay in that file, and the script never reads or prints its contents.
+- `install.sh --host codex --with-agents --model-map auto` uses the same suggestion for the Codex subagent templates (for Codex as the host).
 
 ## Usage example
 ```

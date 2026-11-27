@@ -375,10 +375,32 @@ def cmd_show(args):
         print(json.dumps({"effective": eff, "sources": src, "files": {"user": user_path(), "project": playbook_path(args.project)}},
                          ensure_ascii=False, indent=2))
         return 0
-    print("用户级：%s\n项目级：%s\n" % (user_path(), playbook_path(args.project)))
-    print("\n".join(render(eff)) if eff else "assist: 未配置（关闭）")
-    if src:
-        print("\n来源：" + ", ".join("%s=%s" % (k, v) for k, v in sorted(src.items()) if "." not in k or k.count(".") <= 2))
+    name = {"user": "用户级", "project": "项目级"}
+    up, pp = user_path(), os.path.abspath(playbook_path(args.project))
+    print("用户级（所有项目）：%s%s" % (up, "" if os.path.exists(up) else "（还没有）"))
+    print("项目级（本项目）  ：%s%s\n" % (pp, "" if os.path.exists(pp) else "（还没有）"))
+    use = eff.get("use")
+    if not use or use == "off":
+        print("辅助执行者：关闭%s" % ("（来源：%s）" % name.get(src.get("use"), src.get("use")) if use == "off" else "（没有配置）"))
+        return 0
+    print("辅助执行者：%s，最多承接到 %s，累计失败 %s 次停用（名单来源：%s）" % (
+        " > ".join(use), eff.get("max_tier", "T2"), eff.get("max_failures", 2), name.get(src.get("use"), src.get("use"))))
+    for n in use:
+        p = eff.get("profiles", {}).get(n, {})
+        cli = p.get("cli") or (n if n in KNOWN_CLIS else "?")
+        print("\n%s（cli: %s%s）" % (n, cli, "，env_file: %s" % p["env_file"] if p.get("env_file") else ""))
+        print("  档位  %-20s %-9s 来源" % ("模型", "思考深度"))
+        for t in ASSIST_TIERS:
+            m = p.get("models", {}).get(t)
+            e = p.get("effort", {}).get(t)
+            if m:
+                s = name.get(src.get("profiles.%s.models.%s" % (n, t)), "")
+                print("  %s    %-20s %-9s %s" % (t, m, e or "未设", s))
+            else:
+                hint = "运行时按模型目录推荐" if cli in CATALOG_CLIS else "运行时按 hosts/%s.md 第 3 节" % cli
+                print("  %s    —（%s）" % (t, hint))
+    print("\n思考深度“未设”：codex 按档位默认（T0/T1 low，T2 medium），其他 CLI 不传 --effort。")
+    print("\nT3、T4 和所有审核始终由主宿主做（calibration.md 规则 10）。")
     return 0
 
 
@@ -394,7 +416,7 @@ def check(eff, catalog_file=None):
         p = eff.get("profiles", {}).get(name, {})
         cli = p.get("cli") or (name if name in KNOWN_CLIS else None)
         if not cli:
-            errors.append("%s：没有 profile 也不是已知 CLI，本次不可用" % name)
+            errors.append("%s：还没有配置。先加 profile，例如 --profile %s --cli claude --env-file ~/.hq/env/%s.env --models T0=<模型>,T1=<模型>,T2=<模型>（见 references/hosts/kimi.md）" % (name, name, name))
             continue
         if cli not in KNOWN_CLIS:
             errors.append("%s：cli 必须是 %s 之一：%s" % (name, "、".join(KNOWN_CLIS), cli))
@@ -541,7 +563,7 @@ def cmd_set(args):
             p = profs.get(name, {})
             cli = p.get("cli") or (name if name in KNOWN_CLIS else None)
             if cli not in CATALOG_CLIS:
-                print("提醒：%s 用的 %s 拿不到模型目录，--auto-models 跳过" % (name, cli), file=sys.stderr)
+                print("提醒：%s 没有可读的模型目录（目前只支持 codex），--auto-models 跳过；用 --profile %s --models T0=…,T1=…,T2=… 手填" % (name, name), file=sys.stderr)
                 continue
             cat, err = load_catalog(cli, args.catalog)
             if not cat:

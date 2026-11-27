@@ -130,6 +130,21 @@ class AssistConfigTest(unittest.TestCase):
         self.run_("set", "--scope", "user", "--profile", "codex", "--effort", "T0=huge", rc=2)
         self.run_("set", "--scope", "user", "--profile", "codex", "--models", "T0=a b", rc=2)
 
+    def test_show_lists_tiers_with_source(self):
+        self.run_("set", "--scope", "user", "--use", "codex", "--auto-models", "--catalog", CATALOG)
+        self.run_("set", "--scope", "project", "--project", self.proj, "--profile", "codex", "--models", "T2=m-big",
+                  "--effort", "T2=high", "--catalog", CATALOG)
+        out = self.run_("show", "--project", self.proj).stdout
+        self.assertRegex(out, r"T0\s+m-small\s+low\s+用户级")
+        self.assertRegex(out, r"T2\s+m-big\s+high\s+项目级")
+        self.assertIn("T3、T4", out)
+
+    def test_unconfigured_profile_says_what_to_add(self):
+        r = self.run_("set", "--scope", "user", "--use", "kimi", rc=1)
+        self.assertIn("--profile kimi --cli claude --env-file", r.stderr)
+        self.env["HQ_HOME"] = os.path.join(self.tmp, "empty")
+        self.assertIn("没有配置", self.run_("show", "--project", self.proj).stdout)
+
     def test_insert_into_playbook_without_assist(self):
         os.makedirs(os.path.join(self.proj, ".hq"))
         with open(os.path.join(self.proj, ".hq", "PLAYBOOK.md"), "w", encoding="utf-8") as f:

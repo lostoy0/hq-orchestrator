@@ -20,6 +20,13 @@
 
 ## 未发布
 
+### 辅助执行者：在会话里按档配置模型和思考深度，show 逐档列出，README 按“全局 / 指定项目”重写
+- **改动**：`SKILL.md`“辅助执行者”：`--save`/`--save-project` 可以带 `--assist-models`、`--assist-effort`（作用于 `--assist` 名单里第一个 profile），新 profile 可带 `--assist-cli`、`--assist-env-file`；新增 `/hq --assist-show`（只看不改）；保存后原样给出 `show` 的结果；`set` 校验失败时把错误告诉用户，不加 `--force` 重试；自然语言等同参数。`scripts/assist-config.py show` 文本输出改为逐 profile、逐档列出模型、思考深度和来源层（用户级 / 项目级），并说明 T3、T4 始终由主宿主做；名单里有未配置的 profile（如 kimi）时，错误信息给出要补的参数；`--auto-models` 遇到没有模型目录的 CLI 时提示手填。README 中英文“配置辅助执行者”改成独立小节：能配什么（平台、只到 T2、每档模型和深度、与宿主的关系、生效顺序）、场景 1 全局、场景 2 指定项目、查看校验、终端用法（附查找脚本路径的命令，原来的 `~/.hq/skill-path` 只在个人范围安装时才有）、旧版项目副本要先升级。`hosts/kimi.md` 第 4 节改为用命令配置。测试：`tests/test_assist_config.py` 新增 show 逐档输出和未配置 profile 的提示。
+- **原因/假设**：用户问“全局怎么配、指定项目怎么配”，原文档只给了 `--save` 和终端命令；按档指定模型只能用终端，而 README 里的终端命令依赖 `~/.hq/skill-path`，按项目安装或用插件安装时没有这个文件，命令直接失败。预期用户不离开会话就能配好每档模型，文档按两个场景一步到位。
+- **验收指标**：用户为配置辅助手改 `~/.hq/config.yaml` 或 PLAYBOOK 的次数 = 0；`/hq --assist … --save` 后因配置不对被停用（`unavailable:bad_model`）的次数 = 0。
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（人工改动，来自用户反馈）
+
 ## v0.10.5（2026-11-26）
 
 ### 辅助执行者：命令一次配好、用户级配置、自动读取 Codex 模型目录

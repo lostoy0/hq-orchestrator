@@ -228,21 +228,69 @@ cli-worker.sh list
   /hq --assist kimi --assist-max T1 <目标>  # 只把 T0–T1 交出去
   /hq --assist off <目标>                   # 本次关闭
   ```
-- **配一次，一直生效**：
-  ```
-  /hq --assist codex --save                # 只保存，不开始运行：写进用户级 ~/.hq/config.yaml，所有项目都生效
-  /hq --assist codex --assist-max T1 --save-project   # 只对本项目生效，写进 .hq/PLAYBOOK.md
-  ```
-  也可以不进会话，直接在终端跑（脚本在 hq 技能目录的 `scripts/` 下，安装后路径记在 `~/.hq/skill-path`）：
-  ```
-  python3 "$(cat ~/.hq/skill-path)/scripts/assist-config.py" set --scope user --use codex --auto-models
-  python3 "$(cat ~/.hq/skill-path)/scripts/assist-config.py" check     # 看生效的设置，校验模型和思考深度
-  ```
-  优先级（逐项覆盖）：用户级 `~/.hq/config.yaml` < 项目 `.hq/PLAYBOOK.md` 授权区的 `assist` < 本次命令参数。PLAYBOOK 里 `use: []` 表示沿用用户级，写 `use: off` 才是本项目关闭。字段（`use`、`max_tier`、每个 profile 的 CLI、各档模型、可选 `env_file`）见 `skills/hq/references/playbook-template.md`。
-- **Codex 模型自动读取**：本机装了 codex 时，`assist-config.py models` 读 `codex debug models`（失败时读 `~/.codex/models_cache.json`），列出账户可用的模型、各自支持的思考深度和下线时间；`suggest` 按模型说明（小而便宜 / 日常主力 / 最强）推荐 T0–T4；`set --auto-models` 把没填的档位按推荐填上，已经填了的不覆盖。profile 里不填模型时，`/hq` 每次运行也会按推荐自动选，并在汇报里提示保存。推荐只是按说明推断，看一眼不合适就用 `--profile codex --models T0=…,T1=…,T2=…` 改。`install.sh --host codex --with-agents --model-map auto` 用同样的推荐生成 Codex 子代理模板。
 - **Kimi**：推荐经 `claude` CLI 接 Kimi 的 Anthropic 兼容接口，接口地址和密钥放在权限 600 的 `env_file` 里，`cli-worker.sh --env-file` 只把它注入这个 worker 进程，值不写进日志。见 `skills/hq/references/hosts/kimi.md`（**只按公开资料整理，未实机运行**）。
 - **效果看数据**：task 记录多了 `assist` 字段，`metrics.py` 报告的“3d 辅助执行者 vs 主宿主”按档位对比一次通过率和回收率，`/hq-retro` 据此建议调低 `max_tier` 或停用某个辅助。
 - **注意**：辅助走 W 通道，在本机（或云端容器）里运行，占本地 CPU 和内存；云端会话里要装好 CLI、放行接口主机、配好密钥，否则自动全部留给主宿主。外部模型失败重来会吃掉省下的额度，所以拿不准难度的任务不会交出去。
+
+### 配置辅助执行者：配一次，一直生效
+
+**先弄清能配什么**
+
+| 项 | 说明 |
+|---|---|
+| 平台（profile） | `codex`（装了 codex CLI 就能用，模型自动读取）；`kimi` 等第三方接口经 `claude` CLI 接入，要 `env_file`；也可以用 `opencode`、`gemini`、`cursor` CLI。多个按顺序优先，前一个停用后用下一个 |
+| 档位 | 只有 **T0–T2** 能交给辅助（`max_tier` 最高 T2）；T3、T4 和所有审核**始终由主宿主做**，用主宿主自己的映射（Claude Code 为 haiku/sonnet/opus，见 `skills/hq/references/hosts/claude-code.md` 第 3 节） |
+| 每档模型、思考深度 | 每个 profile 的 `models`、`effort` 按 T0、T1、T2 分别填；codex 可以不填，按本机模型目录自动推荐；思考深度没填时 codex 按档位默认（T0/T1 low、T2 medium），其他 CLI 不传 |
+| 和宿主的关系 | 配置不分宿主：在 Claude Code 里运行就用这份名单；在 Codex 里运行时 `codex` 和主宿主相同，自动跳过，用名单里的下一个（如 kimi） |
+| 生效顺序 | 用户级 `~/.hq/config.yaml`（所有项目）< 项目 `.hq/PLAYBOOK.md` 的 `assist`（只这个项目）< 本次 `/hq --assist …` 参数，**逐项**覆盖：项目里只改 T2 的模型，其余照用用户级 |
+
+**场景 1：给所有项目统一配置（全局）**
+
+在任意一个装了 hq 的项目里，打开 Claude Code 会话，输入：
+```
+/hq --assist codex --save
+```
+只保存、不开始运行：写进 `~/.hq/config.yaml`，codex 各档模型按本机 `codex debug models` 推荐填好，然后列出每档的模型和思考深度。想自己指定某几档：
+```
+/hq --assist codex --assist-models T0=gpt-6-luna,T1=gpt-6.2-sol,T2=gpt-6.2-astra --assist-effort T2=high --save
+```
+加 Kimi 作为第二个辅助（先按 `hosts/kimi.md` 第 4 节建好权限 600 的 `~/.hq/env/kimi.env`）：
+```
+/hq --assist kimi --assist-cli claude --assist-env-file ~/.hq/env/kimi.env --assist-models T0=<模型>,T1=<模型>,T2=<模型> --save
+/hq --assist codex,kimi --save
+```
+也可以直接用中文说，例如“以后辅助都用 codex，T2 用 gpt-6.2-astra、思考 high，全局保存”。
+
+**场景 2：只给某个项目配置**
+
+在那个项目里打开会话，把 `--save` 换成 `--save-project`，写进该项目的 `.hq/PLAYBOOK.md`，只覆盖你写的那几项：
+```
+/hq --assist codex --assist-max T1 --save-project                    # 本项目只把 T0–T1 交出去
+/hq --assist codex --assist-models T2=gpt-6.2-astra --save-project   # 本项目 T2 换个模型，其余沿用全局
+/hq --assist off --save-project                                      # 本项目关闭辅助
+```
+
+**查看和校验**：`/hq --assist-show` 列出当前项目实际生效的名单、每档模型和思考深度、每项来自哪一层，并校验模型是否还在 codex 的模型目录里、思考深度是否支持、`env_file` 权限。
+
+**不进会话，用终端配置**：命令和会话里一一对应（`set --scope user` = `--save`，`set --scope project --project <项目路径>` = `--save-project`）。脚本在 hq 技能目录的 `scripts/assist-config.py`，先找到它：
+```bash
+S=$(find ~/.claude/skills ~/.claude/plugins ~/.agents/skills "$PWD/.claude/skills" -path '*hq/scripts/assist-config.py' 2>/dev/null | head -1); echo "$S"
+```
+```bash
+python3 "$S" models                                              # 本机 codex 可用的模型和思考深度
+python3 "$S" suggest                                             # 推荐的 T0–T4 映射
+python3 "$S" set --scope user --use codex --auto-models          # 全局
+python3 "$S" set --scope user --profile codex --models T2=gpt-6.2-astra --effort T2=high
+python3 "$S" set --scope project --project ~/code/my-app --max-tier T1     # 指定项目
+python3 "$S" show --project ~/code/my-app                        # 该项目生效的设置
+python3 "$S" check --project ~/code/my-app                       # 校验
+```
+
+**注意**
+- 读取全局配置要求项目里的 hq 是 v0.10.5 或更新。按项目装的（`.claude/skills/hq`）旧副本不认 `~/.hq/config.yaml`，先在项目里升级：`./install.sh --update --scope project --project-dir <项目路径>`。
+- codex 的推荐是按模型说明里的关键词推断的（模型目录里没有价格字段），保存后看一眼 `show` 的结果，不合适就用 `--assist-models` 改那一档。`--auto-models` 不会覆盖你填过的档位。
+- 配置里只写 `env_file` 的路径，密钥只放在那个文件里；脚本不会读出或打印它的内容。
+- `install.sh --host codex --with-agents --model-map auto` 用同样的推荐生成 Codex 子代理模板（Codex 作主宿主时用）。
 
 ## 使用示例
 ```
