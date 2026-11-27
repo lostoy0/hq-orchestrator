@@ -159,8 +159,7 @@ class SuggestShards(unittest.TestCase):
         scale = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(scale)
         params = inspect.signature(scale.shard_plan).parameters
-        if "reserve" not in params:
-            self.skipTest("scale.py shard_plan has no `reserve` parameter yet (updated by another task)")
+        self.assertIn("reserve", params)
         rnd = random.Random(20261127)
         for _ in range(500):
             units = rnd.randint(1, 400)
@@ -174,6 +173,24 @@ class SuggestShards(unittest.TestCase):
             got = scale.shard_plan(units, unit_min, overhead_min=overhead, target_min=target, limit=limit,
                                    reserve=reserve, max_overhead_ratio=mor)["shards"]
             self.assertEqual(got, want, (units, unit_min, overhead, target, limit, reserve, mor))
+
+
+class OverheadRatioZero(Base):
+    """p5 item 7: a run record's max_overhead_ratio of 0 is a real cap (as in scale.py), not "unset"."""
+    def test_zero_ratio_is_kept_and_matches_scale_py(self):
+        spec = importlib.util.spec_from_file_location("hq_scale_for_test2", os.path.join(SCRIPTS, "scale.py"))
+        scale = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(scale)
+        results = {}
+        for mor in (0, 0.3):
+            rep = self.report(shard_run(max_overhead_ratio=mor))[0]["scale_out"][0]
+            self.assertEqual(rep["max_overhead_ratio"], mor)
+            want = scale.shard_plan(600, 1.0, overhead_min=8, target_min=40, limit=20, reserve=0,
+                                    max_overhead_ratio=mor)["shards"]
+            self.assertEqual(rep["suggest_shards"], want, mor)
+            results[mor] = rep["suggest_shards"]
+        self.assertEqual(results[0], 1)
+        self.assertGreater(results[0.3], 1)
 
 
 class ScaleSignalBoundaries(Base):
@@ -311,6 +328,29 @@ class AnonPrivacy(Base):  # majors 7, 8; acceptance 2
         self.assertEqual((task["kind"], task["task_type"], task["effort"]), ("other", "other", "other"))
         run_rec = next(x for x in out["records"] if x["type"] == "run")
         self.assertEqual(run_rec["plugin_version"], "0.1.0")
+
+    def test_model_and_assist_only_known_shapes(self):
+        S = "SECRET"
+        cases = {"claude-opus-4-5": "claude-opus-4-5", "gpt-5.1-codex-max": "gpt-5.1-codex-max", "o3": "o3",
+                 "gemini-2.5-pro": "gemini-2.5-pro", "kimi-k2": "kimi-k2", "deepseek-v3": "deepseek-v3",
+                 "codex:gpt-5.2": "codex:gpt-5.2", "sonnet": "sonnet", "haiku": "haiku", "opus": "opus",
+                 S: "other", "sk-" + S + "123": "other", "my-" + S: "other", "claude-" + "a1B2" * 8: "other",
+                 "x " + S: "other", 7: "other", "": "other"}
+        for model, want in cases.items():
+            recs = [{"type": "task", "run_id": "r", "task_id": "t1", "model": model, "assist": model}]
+            write(self.path("r.jsonl"), recs)
+            p = run(self.d, "--export-anon", "--raw")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            task = next(x for x in json.loads(p.stdout)["records"] if x["type"] == "task")
+            self.assertEqual(task["model"], want, model)
+            self.assertNotIn(S, p.stdout, model)
+            self.assertIn(task["assist"], {"other"}, model)  # none of these is a profile name
+
+    def test_assist_profile_names_survive(self):
+        for name in ("codex", "kimi", "claude", "opencode", "gemini", "cursor"):
+            self.assertEqual(metrics.a_assist(name), name)
+        self.assertEqual(metrics.a_assist("SECRET-profile"), "other")
+        self.assertIsNone(metrics.a_assist(None))
 
     def test_note_flags_need_boundaries(self):
         t = {"notes": "not rate_limited_at_all; xbilling:kimi; 限流 rate_limited；中文billing:kimi"}

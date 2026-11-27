@@ -647,10 +647,18 @@ class LocateEdges(unittest.TestCase):
     def test_bisect_starts_with_tied_candidates(self):
         group = [{"id": "s1", "files": ["web/a/x.ts"]}, {"id": "s2", "files": ["web/b/y.ts"]},
                  {"id": "s3", "files": ["api/c.ts"]}, {"id": "s4", "files": ["api/d.ts"]}]
+        # p5 item 3: sharing only the top-level directory (web/) is no evidence, so s1/s2 are not
+        # narrowed down any more; with no candidates at all every shard is a suspect
         r = scale.locate(group, ["web/flow.spec.ts"])
         self.assertEqual(r["next"]["action"], "bisect")
+        self.assertEqual(r["next"]["suspects"], ["s1", "s2", "s3", "s4"])
+        self.assertEqual(r["next"]["revert_and_retest"], ["s1", "s2"])
+
+    def test_bisect_tied_deeper_candidates_still_narrow(self):
+        group = [{"id": "s1", "files": ["web/ui/a/x.ts"]}, {"id": "s2", "files": ["web/ui/b/y.ts"]},
+                 {"id": "s3", "files": ["api/c.ts"]}]
+        r = scale.locate(group, ["web/ui/flow.spec.ts"])
         self.assertEqual(r["next"]["suspects"], ["s1", "s2"])
-        self.assertEqual(r["next"]["revert_and_retest"], ["s1"])
 
     def test_cli_bad_shapes_exit_2(self):
         for bad in ("[1]", '{"group": [{"files": ["a"]}], "failures": []}', '{"group": [], "failures": "a"}'):
@@ -686,6 +694,124 @@ class DeliveryMultilineVerify(unittest.TestCase):
     def test_placeholder_lines_after_verify_do_not_count(self):
         body = "## 交付\nSTATUS: DONE\nVERIFY:\n- 待补记\n- <命令及结果>\nRISKS: none\n"
         self.assertFalse(scale.check_delivery(body)["delivered"])
+
+
+class DeliveryReview(unittest.TestCase):
+    """p5 items 1 and 2: only an empty same-line VERIFY collects list/command lines."""
+
+    def delivered(self, verify_block, extra=""):
+        return scale.check_delivery("## 交付\nSTATUS: DONE\n" + verify_block + extra)["delivered"]
+
+    def test_placeholder_then_prose_is_not_delivered(self):
+        self.assertFalse(self.delivered("VERIFY: 待补记\n稍后补上测试结果\n"))
+
+    def test_placeholder_then_prose_cli_exits_1(self):
+        rc, out, _ = cli("delivered", stdin="## 交付\nSTATUS: DONE\nVERIFY: 待补记\n稍后补上测试结果\n")
+        self.assertEqual(rc, 1)
+        self.assertFalse(out["delivered"])
+
+    def test_same_line_value_ignores_following_list(self):
+        self.assertFalse(self.delivered("VERIFY: 待补记\n- pytest 12 passed\n"))
+
+    def test_empty_verify_then_prose_is_not_delivered(self):
+        self.assertFalse(self.delivered("VERIFY:\n测试已经通过了\n"))
+
+    def test_blank_line_ends_collection(self):
+        self.assertFalse(self.delivered("VERIFY:\n\n- pytest 12 passed\n"))
+
+    def test_heading_ends_collection(self):
+        self.assertFalse(self.delivered("VERIFY:\n### 细节\n- pytest 12 passed\n"))
+
+    def test_continuation_forms_count(self):
+        for line in ("- ok", "* ok", "+ ok", "• ok", "$ python3 -m unittest", "`pytest` 12 passed", "1. pytest 12 passed"):
+            self.assertTrue(self.delivered("VERIFY:\n" + line + "\n"), line)
+
+    def test_prose_after_list_stops_collecting(self):
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- 待补记\n说明文字\n- pytest 12 passed\n")
+        self.assertFalse(r["delivered"])
+
+    def test_whole_bracket_result_is_a_value(self):
+        self.assertTrue(self.delivered("VERIFY: (pytest 12 passed)\n"))
+        self.assertTrue(self.delivered("VERIFY: （pytest 12 passed）\n"))
+
+    def test_bracketed_placeholder_still_placeholder(self):
+        for v in ("（待补记）", "(TBD)", "待补记（稍后）", "(无)"):
+            self.assertFalse(self.delivered("VERIFY: " + v + "\n"), v)
+
+    def test_result_lines_are_not_fields(self):
+        for line in ("- PASS: 12 tests", "- OK: all green", "- ERROR: 0", "PASS: 12 tests"):
+            body = "VERIFY:\n- python3 -m unittest\n" + line + "\n"
+            r = scale.check_delivery("## 交付\nSTATUS: DONE\n" + body)
+            self.assertTrue(r["delivered"], line)
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- cmd\n- PASS: 12 tests\nRISKS: none\n")
+        self.assertIn("PASS: 12 tests", r["verify"])
+
+    def test_real_fields_still_end_verify(self):
+        r = scale.check_delivery("## 交付\nSTATUS: DONE\nVERIFY:\n- cmd ok\nRISKS: - 一条风险\n- 另一行\n")
+        self.assertEqual(r["verify"], "- cmd ok")
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_locate_weak_top_dir_overlap_is_unlocated(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/ui/foo.test.ts"])
+        self.assertEqual(r["culprits"], [])
+        self.assertEqual(r["unresolved"], [{"failure": "src/ui/foo.test.ts", "candidates": []}])
+        self.assertEqual(r["next"]["suspects"], ["a", "b"])
+        self.assertTrue(r["next"]["revert_and_retest"])
+
+    def test_locate_two_segment_overlap_still_counts(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/api/other.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+
+    def test_locate_maven_mirror(self):
+        group = [{"id": "a", "files": ["src/main/java/com/x/Foo.java"]}, {"id": "b", "files": ["src/main/java/com/x/Bar.java"]}]
+        r = scale.locate(group, ["src/test/java/com/x/FooTest.java"])
+        self.assertEqual(r["culprits"], ["a"])
+
+    def test_locate_unlocated_suspects_include_clean_ones_when_culprit_found(self):
+        group = [{"id": "a", "files": ["src/api/handler.ts"]}, {"id": "b", "files": ["lib/x.ts"]}]
+        r = scale.locate(group, ["src/api/handler.ts", "docs/zzz.test.ts"])
+        self.assertEqual(r["culprits"], ["a"])
+        self.assertEqual(r["next"]["suspects"], ["a", "b"])
+
+    def _stragglers(self):
+        now = T0 + timedelta(minutes=60)
+        shards = [{"id": "s%d" % i, "elapsed_min": 58, "est_min": 108, "done": 20, "total": 100, "unit_min_est": 1.0}
+                  for i in range(4)]
+        return shards, now
+
+    def test_straggler_replan_owns_free_slots(self):
+        shards, now = self._stragglers()
+        rc, o, _ = cli("straggler", "--free-slots", "6", "--now", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       stdin=json.dumps(shards))
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(o["replan"])
+        self.assertEqual(o["free_slots_left"], 6 - o["replan"]["new_sessions"])
+        self.assertIn("replan", o["note"])
+
+    def test_straggler_without_replan_keeps_per_shard_accounting(self):
+        s = {"id": "a", "elapsed_min": 80, "est_min": 40, "done": 5, "total": 400}
+        rc, o, _ = cli("straggler", "--free-slots", "5", stdin=json.dumps([s]))
+        self.assertIsNone(o["replan"])
+        self.assertNotIn("note", o)
+
+    def test_non_numeric_done_is_no_progress_data(self):
+        for bad in ("12", True, [], {}):
+            r = scale.straggler_check({"id": "a", "elapsed_min": 30, "done": bad, "total": 100})
+            self.assertEqual((r["action"], r["reason"]), ("none", "no_progress_data"), bad)
+
+    def test_missing_done_is_still_no_rate_yet(self):
+        r = scale.straggler_check({"id": "a", "elapsed_min": 30, "total": 100})
+        self.assertEqual(r["reason"], "no_rate_yet")
+
+    def test_shards_overflow_exits_2(self):
+        rc, _, err = cli("shards", "--units", "10", "--unit-min", "1e308", "--limit", "4")
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Traceback", err)
+        with self.assertRaises(ValueError):
+            scale.shard_plan(10, 1e308, limit=4)
 
 
 if __name__ == "__main__":
