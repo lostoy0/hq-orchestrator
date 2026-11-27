@@ -111,6 +111,8 @@ def shard_plan(units, unit_min, overhead_min=8.0, target_min=40.0, *, limit, res
     if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve < 0:
         raise ValueError("reserve must be an integer >= 0")
     work = units * unit_min
+    if not math.isfinite(work):
+        raise ValueError("units * unit_min is not a finite number (overflow)")
     by_target = max(1, ceil9(work / target_min))
     usable = max(1, limit - reserve)
     n = max(1, min(usable, by_target, units))
@@ -287,6 +289,8 @@ def _elapsed(s, now):
 
 def _counts(s):
     done, total = num(s.get("done")), num(s.get("total"))
+    if s.get("done") is not None and done is None:  # string / bool / NaN done: same as a bad total
+        return None, None
     if total is None or total <= 0 or (done is not None and done < 0):
         return None, None
     return done, total
@@ -399,14 +403,18 @@ def cmd_straggler(a):
         die("stdin must be a list of shard objects or {\"shards\": [...]}")
     now = parse_now(a.now)
     free = max(0, a.free_slots)
+    rp = replan(shards, a.target_min, a.overhead_min, max(0, a.free_slots), now)
     res = []
     for s in shards:
         r = straggler_check(s, a.target_min, a.overhead_min, free, now)
         if r["action"] == "resplit":
             free -= r["new_sessions"]
         res.append(r)
-    return out({"shards": res, "free_slots_left": free,
-                "replan": replan(shards, a.target_min, a.overhead_min, max(0, a.free_slots), now)})
+    obj = {"shards": res, "free_slots_left": free, "replan": rp}
+    if rp is not None:  # the batch-level re-plan owns the free slots; per-shard resplits are advisory
+        obj["free_slots_left"] = max(0, max(0, a.free_slots) - rp["new_sessions"])
+        obj["note"] = "replan 优先，各片 resplit 建议仅供参考"
+    return out(obj)
 
 
 # =====================================================================================
@@ -415,7 +423,11 @@ def cmd_straggler(a):
 
 HEAD_RE = re.compile(r"^(#{1,6})\s*(?:\*\*|__)?\s*(交付|delivery)\s*(?:\*\*|__)?\s*[:：]?\s*$", re.I)
 ANY_HEAD_RE = re.compile(r"^(#{1,6})\s+\S")
-OTHER_FIELD_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*[A-Z][A-Z_]{2,}\s*(?:\*\*|__)?\s*[:：]")
+OTHER_FIELD_RE = re.compile(
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*(?:BRANCH|CHANGES|CHECKPOINTS|DERIVED|RISKS|QUESTIONS|SHARED_FIXES|PROGRESS|STATUS)"
+    r"\s*(?:\*\*|__)?\s*[:：]")
+# a VERIFY continuation line is a list item or a command line, never prose
+CONT_RE = re.compile(r"^(?:[-*+•$`]|\d+[.)．])")
 FIELD_RE = re.compile(r"^(?:[-*+]\s+)?(?:\*\*|__)?\s*(STATUS|VERIFY)\s*(?:\*\*|__)?\s*[:：]\s*(?:\*\*|__)?\s*(.*)$", re.I)
 PLACEHOLDER = re.compile(
     r"^(none|n/?a|na|null|nil|无|暂无|没有|待补|待补记|待补充|待定|待验证|未验证|未运行|未跑|没跑|稍后|稍后补|"
@@ -429,9 +441,17 @@ def is_placeholder(v):
     s = s.strip("*_` ").strip()
     if re.fullmatch(r"<[^<>]*>", s):
         return True  # template slot like <命令及结果>
-    s = re.sub(r"[（(][^）)]*[）)]", "", s).strip()  # 待补记（稍后）
-    s = s.rstrip("。.,，;；!！ ").strip()
-    return bool(PLACEHOLDER.match(s))
+    def bare(x):
+        return bool(PLACEHOLDER.match(x.strip().rstrip("。.,，;；!！ ").strip()))
+    # brackets are only dropped around fixed placeholder words: （待补记）, 待补记（稍后）;
+    # a bracketed result such as (pytest 12 passed) is a real value
+    m = re.fullmatch(r"[（(]([^（）()]*)[）)]", s)
+    if m:
+        return bare(m.group(1))
+    m = re.fullmatch(r"(.*?)\s*[（(][^（）()]*[）)]", s)
+    if m and m.group(1).strip():
+        return bare(m.group(1))
+    return bare(s)
 
 
 def _outside_fences(lines):
@@ -464,13 +484,19 @@ def check_delivery(text):
         h = ANY_HEAD_RE.match(l)
         if h and len(h.group(1)) <= level:
             break
+        if h:
+            in_verify = False
         m = FIELD_RE.match(l)
         if not m and OTHER_FIELD_RE.match(l):
             in_verify = False  # CHANGES: / CHECKPOINTS: / RISKS: ... end the VERIFY block
             continue
         if not m:
-            if in_verify and l.strip() and not is_placeholder(l.strip().lstrip("-*• ").strip()):
-                verify = (verify + " " if verify else "") + l.strip()
+            if in_verify:
+                if CONT_RE.match(l):
+                    if not is_placeholder(l.lstrip("-*+• ").strip()):
+                        verify = (verify + " " if verify else "") + l
+                else:
+                    in_verify = False  # blank line, prose or a sub-heading ends the VERIFY block
             continue
         in_verify = False
         key, val = m.group(1).upper(), m.group(2).strip().strip("*_ ").strip()
@@ -478,7 +504,7 @@ def check_delivery(text):
             status = val
         elif key == "VERIFY" and verify is None:
             verify = val
-            in_verify = True
+            in_verify = not val  # only an empty same-line value collects the lines below
     word = re.match(r"([A-Za-z_]+)", status or "")
     if not word or word.group(1).upper() != "DONE" or "|" in status:
         return {"delivered": False, "reason": "section_status_not_done", "status": status}
@@ -780,7 +806,8 @@ def _mirror(da, db):
     src/lib root are ignored: src/pkg/mod.py <-> tests/pkg/test_mod.py."""
     def key(d):
         d = [x for x in d if x not in TEST_DIRS]
-        return d[1:] if d and d[0] in SRC_ROOTS else d
+        d = d[1:] if d and d[0] in SRC_ROOTS else d
+        return d[1:] if d and d[0] == "main" else d  # Maven: src/main/java <-> src/test/java
     return da == db or key(da) == key(db)
 
 
@@ -800,10 +827,12 @@ def _score(changed, failure):
     dc, bc = _parts(changed)
     df, bf = _parts(failure)
     ov = _dir_overlap(dc, df)
+    if ov < 2:
+        ov = 0  # sharing only the top-level directory (src/, lib/ ...) proves nothing
     if _stem(bc) and _stem(bc) == _stem(bf):
         if _mirror(dc, df):
             return 800 + ov
-        return ov + 0.5  # same name in an unrelated directory: only a tie-breaker
+        return ov + 0.5 if ov else 0  # same name in an unrelated directory: only a tie-breaker
     return ov
 
 
@@ -833,7 +862,9 @@ def locate(group, failures):
         tied = []
         for u in unresolved:
             tied += [c for c in u["candidates"] if c not in culprits and c not in tied]
-        pool = tied or [i for i in ids if i not in culprits]
+        if any(not u["candidates"] for u in unresolved):
+            tied = list(ids)  # nothing points anywhere: every shard is a suspect
+        pool = tied or [i for i in ids if i not in culprits] or list(ids)
         res["next"] = {"action": "bisect", "suspects": pool, "revert_and_retest": pool[: (len(pool) + 1) // 2]}
     else:
         res["next"] = {"action": "fix_or_revert_culprits", "merge_others": res["clean"]}
