@@ -177,7 +177,8 @@ def attribute(tasks):
     """Attribute review tasks' found_issues to their origin tasks within one run.
 
     Returns (extra, unattributed): extra maps id(origin task) -> {"n": count, "major": bool};
-    unattributed counts found issues whose origin_task_id is missing or not a task of this run.
+    unattributed counts found issues whose origin_task_id is missing, not a task of this run, or the
+    review task itself (a review task's own findings are never counted on itself).
     """
     by_id = {t["task_id"]: t for t in tasks if isinstance(t.get("task_id"), str) and t["task_id"]}
     extra, unattributed = {}, 0
@@ -185,7 +186,7 @@ def attribute(tasks):
         for x in found_issues(t):
             oid = x.get("origin_task_id")
             o = by_id.get(oid) if isinstance(oid, str) else None
-            if o is None:
+            if o is None or o is t:
                 unattributed += 1
                 continue
             e = extra.setdefault(id(o), {"n": 0, "major": False})
@@ -298,7 +299,7 @@ def normalized_ratios(runs, skip=frozenset()):
     for r in runs.values():
         rs = [(t, ratio(t)) for t in r["tasks"] if id(t) not in skip and ratio(t) is not None]
         m = med([x for _, x in rs])
-        if not m:
+        if m is None or m <= 0:  # zero / negative median (bad actual_min): normalizing would flip or blow up
             continue
         for t, x in rs:
             out[id(t)] = x / m
@@ -1183,7 +1184,8 @@ def render_md(rep):
         L += ["", "验证到位率只算 verify_pass=true；partial（只做了部分验证，如只核对文档、未实机运行）单列，不算到位。"]
     if show_attr:
         L += ["", "integration 含审核任务 found_issues 归到来源任务（同一 run 的 origin_task_id）的问题，不计入审核任务自己；"
-              "被归因了 major 问题的来源任务计入 major 数；未归因数是 origin_task_id 缺失或不在本 run 的问题。"]
+              "被归因了 major 问题的来源任务计入 major 数；未归因数是 origin_task_id 缺失、不在本 run 或指向审核任务自己的问题。"
+              "若审核任务的 found_issues 和来源任务自己的 issues.integration 都记了同一问题，会重复计数；按约定只记在审核任务里。"]
     gh = ["分组", "n", "有值数 cost/tokens/ratio", "一次通过率", "升档率", "交接率", "平均 cost_usd", "平均 tokens",
           "actual/est 中位数", "备注"]
     def grow(g):
@@ -1363,7 +1365,8 @@ def anon_task(t, rid, idx, idmap=None):
         o["found_issues"] = [{"severity": x["severity"] if x.get("severity") in ("minor", "major") else
                               ("other" if x.get("severity") is not None else None),
                               "origin_task_id": (idmap or {}).get(x.get("origin_task_id"))
-                              if isinstance(x.get("origin_task_id"), str) else None}
+                              if isinstance(x.get("origin_task_id"), str) and x.get("origin_task_id") != t.get("task_id")
+                              else None}  # self-reference → unattributed, as in attribute()
                              for x in found_issues(t)]
     if isinstance(t.get("followups"), list):  # counts only: desc dropped, fixed_in reduced to fixed / open
         o["followups"] = [{"fixed_in": "fixed" if fixed(x) else None} for x in t["followups"] if isinstance(x, dict)]

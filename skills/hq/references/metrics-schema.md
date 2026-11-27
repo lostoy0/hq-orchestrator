@@ -152,7 +152,7 @@
 
 报告各节与字段的对应：
 - 质量门槛：漂移率（`drift` 或 `scope_violation`）、验证到位率（有 `verify_evidence` 且 `verify_pass` 为 `true`；`"partial"` 不算到位，单列“partial 数”，JSON `verify_partial`）、各环节问题/任务（`issues`；integration 另加审核任务 `found_issues` 归到来源任务的问题）、major 数（`severity_max` 为 major，或被归因了 major 问题）、返工率（`review_outcome` 为 rework/failed）、合并通过率（run 的 `integration_pass`）。
-  - **审核归因**（v0.3.3）：按同一 run 内的 `task_id` 把审核任务的每个 `found_issues` 计到 `origin_task_id` 那个任务头上，不计入审核任务自己。“审核归因数”（JSON `attributed_issues`）是归到本范围任务的个数，“未归因数”（`unattributed_found_issues`）是 `origin_task_id` 缺失或不在本 run 的个数。归因同样用于 3f 的漏网问题/任务和 3g 的漏到合并/漏网 major（按来源任务的档位、版本、验证级别统计）。
+  - **审核归因**（v0.3.3）：按同一 run 内的 `task_id` 把审核任务的每个 `found_issues` 计到 `origin_task_id` 那个任务头上，不计入审核任务自己。“审核归因数”（JSON `attributed_issues`）是归到本范围任务的个数，“未归因数”（`unattributed_found_issues`）是 `origin_task_id` 缺失、不在本 run 或等于审核任务自己 `task_id` 的个数（不会归到审核任务自己）。若审核任务的 `found_issues` 和来源任务自己的 `issues.integration` 都记了同一问题会重复计数，按约定只记在审核任务里。归因同样用于 3f 的漏网问题/任务和 3g 的漏到合并/漏网 major（按来源任务的档位、版本、验证级别统计）。
   - “partial 数”列和归因两列只在数据里有 `"partial"` / `found_issues` 时才出现，旧数据的报告不变。
 - 按档位、按模型/深度：一次通过率（`attempts`=1 且审核通过）、升档率（`tier_changes` 非空）、交接率、平均 cost_usd 和 tokens、actual/est 中位数。
   - **有值数**（v0.3.3）：3a/3b/3c/3d 分组表在 n 旁有“有值数 cost/tokens/ratio”列（JSON `cost_n`、`tokens_n`、`ratio_n`），是各均值、中位数实际用到的任务数；“5. 开销”表有“有值数 tokens/cost”（`tokens_n`、`cost_n`）。n 大而有值数小时均值不可靠，复盘引用均值时同时引用有值数。
@@ -175,7 +175,7 @@
 
 ### 信号的可信度与数据覆盖（v0.12.0 起）
 
-- **字段覆盖率（1b）**：est_min、actual_min、tokens、cost_usd、tier、verify_level、verify_pass、review_outcome、attempts、issues、score、independent_review、review_wait_min 各自“有有效值”的任务占全部任务的比例。有效值指类型和取值合法：数字字段是有限数字，`tier`/`verify_level`/`review_outcome` 在取值表内，`verify_pass` 是布尔，`issues` 至少有一个数字计数，`score` 至少有一维是 0/1/2，`independent_review` 是带布尔 `ran` 的对象，`review_wait_min` 是 ≥ 0 的数字。JSON 报告的 `coverage` 含 `fields`（每个字段的 `n`、`rate`、`sparse`）和 `joint`（`est_min+actual_min`、`attempts+review_outcome` 两个组合的覆盖率）。
+- **字段覆盖率（1b）**：est_min、actual_min、tokens、cost_usd、tier、verify_level、verify_pass、review_outcome、attempts、issues、score、independent_review、review_wait_min 各自“有有效值”的任务占全部任务的比例。有效值指类型和取值合法：数字字段是有限数字，`tier`/`verify_level`/`review_outcome` 在取值表内，`verify_pass` 是布尔或 `"partial"`，`issues` 至少有一个数字计数，`score` 至少有一维是 0/1/2，`independent_review` 是带布尔 `ran` 的对象，`review_wait_min` 是 ≥ 0 的数字。JSON 报告的 `coverage` 含 `fields`（每个字段的 `n`、`rate`、`sparse`）和 `joint`（`est_min+actual_min`、`attempts+review_outcome` 两个组合的覆盖率）。
 - **`data: "sparse"`**：信号依赖的字段覆盖率 < 50% 时，信号加 `data: "sparse"`、`data_field`、`data_coverage`，md 末尾标“（数据不足：<字段> 覆盖 x%）”。依赖关系：一次通过率类依赖 `attempts+review_outcome`；用时比类依赖 `est_min+actual_min`；加速比偏低依赖 `actual_min`；3i 信号依赖 `score`；规则 9/规则 11 的 flag 信号依赖该 flag 分组的 `attempts+review_outcome`；计划预估偏低/偏高依赖 `tier`（在有 `plan_tier` 的任务里算）；验证级别漏网信号依赖 `issues`；6d 信号依赖 `independent_review`；审核等待信号依赖 `review_wait_min`。按档位/模型的信号用该分组自己的覆盖率，其余用全部任务的。信号仍保留。
 - **`confidence`**：所有基于比例的信号（一次通过率 < 60%、risk=low 任务一次通过率 100% 的降档空间、计划预估偏低/偏高 > 30%、规则 9/规则 11 标记的通过率、推荐采纳率 < 30%、监控阈值误报率 > 30%、3i 升档率偏高、6d 有发现比例 < 10%）加 `confidence`、`ci`（Wilson 95% 区间 `[下限, 上限]`）、`threshold`。区间整体落在越界一侧（“低于”类的上限 < 阈值，“高于”类的下限 > 阈值）为 `"strong"`，跨过阈值为 `"weak"`，md 末尾标“（弱：95% 区间 a–b 跨过阈值）”。“一次通过率 100%”这类信号的阈值取 80%（下限 > 80% 才算 strong），样本少时（约 n<17）几乎总是 weak；3i 的阈值是“该维度其他取值的升档率 + 30 个百分点”。weak 的信号仍然保留在列表里，复盘时只有 `strong` 的当改进建议依据，weak 的只作线索。非比例信号（用时比、加速比、审核等待、掉队比等）没有 `confidence`。
 - 按档位、按模型两张表在一次通过率旁边加了“95% 区间”列（JSON 里是各分组的 `first_pass_ci`、`first_pass_k`）。
@@ -214,7 +214,7 @@ metrics.py --changelog-stats CHANGELOG.md [--format md|json]
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
   - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`effort`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`、`plugin_version_at_start`。`verify_pass` 为 `"partial"` 时原样保留。
   - `flags` 只保留上表列出的已知规则标记，其他自由写法丢弃。
-  - `found_issues` 每项只保留 `severity`（`minor`/`major`，其他写 `other`）和 `origin_task_id`（换成本 run 内的序号；不在本 run 的写 null），即只剩严重程度和个数。
+  - `found_issues` 每项只保留 `severity`（`minor`/`major`，其他写 `other`）和 `origin_task_id`（换成本 run 内的序号；不在本 run 或指向审核任务自己的写 null），即只剩严重程度和个数。
   - `followups` 只保留计数：每项变成 `{"fixed_in": "fixed"}` 或 `{"fixed_in": null}`，`desc` 和原 `fixed_in` 文本丢弃。
   - `score` 每一维只保留整数 0/1/2（其他写 null）；`independent_review` 只保留 `ran`（布尔）、`trigger`（枚举，不在内的写 `other`）、`findings`、`major`（数字）；`review_wait_min` 按数字字段保留。
   - 改写：`run_id` 换成哈希（`r-` + 10 位），`task_id` 换成本 run 内的序号，`started_at`/`ended_at` 只留日期，`verify_evidence` 只留“有没有”（`[redacted]` 或空）。

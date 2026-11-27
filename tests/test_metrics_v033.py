@@ -129,6 +129,26 @@ class Attribution(Base):
         self.assertEqual(un, 1)
         self.assertEqual(metrics.attribute([{"found_issues": "bad"}, {"found_issues": None}]), ({}, 0))
 
+    def test_self_reference_is_unattributed(self):
+        rv = {"task_id": "rv", "found_issues": [{"severity": "major", "origin_task_id": "rv"}]}
+        self.assertEqual(metrics.attribute([{"task_id": "a"}, rv]), ({}, 1))
+        self.write("s.jsonl", [task("s", "a", verify_level="code"),
+                               task("s", "rv", kind="review", verify_level="doc", found_issues=[
+                                   {"severity": "major", "origin_task_id": "rv"}, {"severity": "minor", "origin_task_id": "a"}])])
+        o = self.rep()["quality"]["overall"]
+        self.assertEqual((o["attributed_issues"], o["unattributed_found_issues"], o["major_issues"]), (1, 1, 0))
+        self.assertAlmostEqual(o["avg_issues_integration"], 1 / 2)
+        lv = {g["key"]: g for g in self.rep()["by_verify_level"]}
+        self.assertAlmostEqual(lv["doc"]["escaped_integration"], 0.0)
+        self.assertIn("指向审核任务自己", self.md())
+        self.assertIn("会重复计数；按约定只记在审核任务里", self.md())
+        # anonymized export: self-reference maps to null, and its summary agrees with the raw report
+        out = json.loads(run(self.tmp.name, "--export-anon", "--raw").stdout)
+        rec = next(x for x in out["records"] if x.get("kind") == "review")
+        self.assertEqual([x["origin_task_id"] for x in rec["found_issues"]], [None, "t1"])
+        q = out["summary"]["quality"]["overall"]
+        self.assertEqual((q["attributed_issues"], q["unattributed_found_issues"], q["major_issues"]), (1, 1, 0))
+
 
 class Partial(Base):
     def test_partial_counts_as_value_not_pass(self):
@@ -338,7 +358,19 @@ class NormalizedLowRisk(Base):
         self.assertAlmostEqual(n[id(b)], 1.5)
         self.assertEqual(len(n), 2)
         self.assertEqual(metrics.normalized_ratios({"r": {"tasks": [z]}}), {})  # median 0 → skipped
+        neg = [{"est_min": 10, "actual_min": -5}, {"est_min": 10, "actual_min": -5}, {"est_min": 10, "actual_min": 8}]
+        self.assertEqual(metrics.normalized_ratios({"r": {"tasks": neg}}), {})  # median -0.5 → skipped
         self.assertEqual(metrics.normalized_ratios({"r": {"tasks": [a, b]}}, skip=frozenset({id(a), id(b)})), {})
+
+    def test_negative_median_run_gives_no_signal(self):
+        rows = [task("n", "l%d" % i, tier="T1", risk="low", attempts=1, review_outcome="pass", est_min=10,
+                     actual_min=-5 if i < 4 else 8) for i in range(7)]
+        self.write("n.jsonl", rows)
+        r = self.rep()
+        g = next(x for x in r["by_tier"] if x["key"] == "T1")
+        self.assertIsNone(g["low_norm_ratio_median"])
+        self.assertEqual(g["low_norm_ratio_n"], 0)
+        self.assertFalse(any("降档" in s["message"] for s in r["signals"]))
 
 
 class Followups(Base):
