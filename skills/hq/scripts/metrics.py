@@ -167,18 +167,73 @@ def issue(t, k):
     return cnt(i.get(k)) if isinstance(i, dict) else 0
 
 
-def quality(tasks, runs):
+def found_issues(t):
+    """v0.3.3 optional field on review tasks: [{severity, origin_task_id}] (non-dict items ignored)."""
+    fi = t.get("found_issues")
+    return [x for x in fi if isinstance(x, dict)] if isinstance(fi, list) else []
+
+
+def attribute(tasks):
+    """Attribute review tasks' found_issues to their origin tasks within one run.
+
+    Returns (extra, unattributed): extra maps id(origin task) -> {"n": count, "major": bool};
+    unattributed counts found issues whose origin_task_id is missing or not a task of this run.
+    """
+    by_id = {t["task_id"]: t for t in tasks if isinstance(t.get("task_id"), str) and t["task_id"]}
+    extra, unattributed = {}, 0
+    for t in tasks:
+        for x in found_issues(t):
+            oid = x.get("origin_task_id")
+            o = by_id.get(oid) if isinstance(oid, str) else None
+            if o is None:
+                unattributed += 1
+                continue
+            e = extra.setdefault(id(o), {"n": 0, "major": False})
+            e["n"] += 1
+            e["major"] = e["major"] or x.get("severity") == "major"
+    return extra, unattributed
+
+
+def attribute_runs(runs):
+    """attribute() over every run: (merged extra, {run_id: unattributed})."""
+    extra, un = {}, {}
+    for rid, r in runs.items():
+        e, u = attribute(r["tasks"])
+        extra.update(e)
+        un[rid] = u
+    return extra, un
+
+
+def integ(t, extra):
+    """issues.integration plus the issues review tasks attributed to t."""
+    return issue(t, "integration") + (extra or {}).get(id(t), {}).get("n", 0)
+
+
+def is_major(t, extra=None):
+    return (isinstance(t.get("issues"), dict) and t["issues"].get("severity_max") == "major") or \
+        (extra or {}).get(id(t), {}).get("major", False)
+
+
+def quality(tasks, runs, extra=None, unattributed=0):
+    """extra/unattributed: from attribute(); found_issues are counted on their origin task's integration column."""
+    extra = extra or {}
     n = len(tasks)
     ip = [r["integration_pass"] for r in runs if isinstance((r or {}).get("integration_pass"), bool)]
+    attributed = sum(extra[id(t)]["n"] for t in tasks if id(t) in extra)
     return {
         "n": n,
         "insufficient": n < MIN_N,
         "drift_rate": rate(sum(1 for t in tasks if t.get("drift") is True or t.get("scope_violation") is True), n),
+        # only verify_pass == true counts; "partial" is a value but not a pass (counted separately)
         "verify_rate": rate(sum(1 for t in tasks if t.get("verify_evidence") and t.get("verify_pass") is True), n),
+        "verify_partial": sum(1 for t in tasks if t.get("verify_pass") == "partial"),
         "avg_issues_review": rate(sum(issue(t, "review") for t in tasks), n),
-        "avg_issues_integration": rate(sum(issue(t, "integration") for t in tasks), n),
+        "avg_issues_integration": rate(sum(integ(t, extra) for t in tasks), n),
+        "attributed_issues": attributed,
+        "unattributed_found_issues": unattributed,
+        "has_found_issues": any(found_issues(t) for t in tasks),
         "avg_issues_user": rate(sum(issue(t, "user") for t in tasks), n),
-        "major_issues": sum(1 for t in tasks if isinstance(t.get("issues"), dict) and t["issues"].get("severity_max") == "major"),
+        "major_issues": sum(1 for t in tasks if is_major(t, extra)),
         "rework_rate": rate(sum(1 for t in tasks if t.get("review_outcome") in ("rework", "failed")), n),
         "integration_pass_rate": rate(sum(ip), len(ip)),
     }
@@ -210,7 +265,7 @@ VALID = {
     "cost_usd": lambda t: num(t.get("cost_usd")) is not None,
     "tier": lambda t: t.get("tier") in TIER_ORDER,
     "verify_level": lambda t: t.get("verify_level") in VERIFY_LEVELS,
-    "verify_pass": lambda t: isinstance(t.get("verify_pass"), bool),
+    "verify_pass": lambda t: isinstance(t.get("verify_pass"), bool) or t.get("verify_pass") == "partial",
     "review_outcome": lambda t: t.get("review_outcome") in REVIEW_OUTCOMES,
     "attempts": lambda t: num(t.get("attempts")) is not None,
     "issues": lambda t: isinstance(t.get("issues"), dict) and any(num(t["issues"].get(k)) is not None for k in ("review", "integration", "user")),
@@ -236,8 +291,24 @@ def coverage(tasks):
                       "attempts+review_outcome": cov_frac(tasks, ("attempts", "review_outcome"))}}
 
 
-def group(tasks, keyf, skip=frozenset()):
-    """skip: id()s of tasks from runs with contradictory time data; left out of actual/est only."""
+def normalized_ratios(runs, skip=frozenset()):
+    """id(task) -> actual/est divided by the median actual/est of all tasks (all tiers) of the same run.
+    Tasks in `skip` (runs with contradictory time data) are left out."""
+    out = {}
+    for r in runs.values():
+        rs = [(t, ratio(t)) for t in r["tasks"] if id(t) not in skip and ratio(t) is not None]
+        m = med([x for _, x in rs])
+        if not m:
+            continue
+        for t, x in rs:
+            out[id(t)] = x / m
+    return out
+
+
+def group(tasks, keyf, skip=frozenset(), norm=None):
+    """skip: id()s of tasks from runs with contradictory time data; left out of actual/est only.
+    norm: normalized_ratios(); fills the risk=low / run-normalized actual/est fields."""
+    norm = norm or {}
     g = {}
     for t in tasks:
         g.setdefault(keyf(t), []).append(t)
@@ -249,9 +320,15 @@ def group(tasks, keyf, skip=frozenset()):
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
         rs = [ratio(t) for t in ts if id(t) not in skip and ratio(t) is not None]
         fpk = sum(1 for t in ts if first_pass(t))
+        low = [t for t in ts if t.get("risk") == "low"]
+        low_norm = [norm[id(t)] for t in low if norm.get(id(t)) is not None]
+        lfk = sum(1 for t in low if first_pass(t))
         out.append({
             "key": k, "n": n, "insufficient": n < MIN_N,
+            "cost_n": len(cost), "tokens_n": len(toks),
             "first_pass_rate": rate(fpk, n), "first_pass_k": fpk, "first_pass_ci": wilson(fpk, n),
+            "low_n": len(low), "low_first_pass_k": lfk, "low_first_pass_rate": rate(lfk, len(low)),
+            "low_norm_ratio_median": med(low_norm), "low_norm_ratio_n": len(low_norm),
             "cov_time": cov_frac(ts, ("est_min", "actual_min")),
             "cov_first_pass": cov_frac(ts, ("attempts", "review_outcome")),
             "escalation_rate": rate(sum(1 for t in ts if isinstance(t.get("tier_changes"), list) and t["tier_changes"]), n),
@@ -276,6 +353,7 @@ def cost_by_kind(tasks):
                 if num(t.get("cost_usd")) is not None and num(t.get("est_min")) and num(t["est_min"]) > 0]
         est = sum(e for _, e in both)
         out.append({"key": k, "n": len(ts), "insufficient": len(ts) < MIN_N, "avg_tokens": mean(toks),
+                    "tokens_n": len(toks), "cost_n": len(both),
                     "cost_per_est_min": (sum(c for c, _ in both) / est) if est else None})
     return out
 
@@ -322,6 +400,21 @@ def adjust(tasks):
         "derived_tasks": sum(cnt(t.get("derived_tasks")) for t in tasks),
         "user_manual_adjust": sum(1 for t in tasks if t.get("user_manual_adjust") is True),
     }
+
+
+def fixed(x):
+    v = x.get("fixed_in")
+    return isinstance(v, str) and bool(v.strip())
+
+
+def followups(tasks):
+    """v0.3.3 optional field followups: [{desc, fixed_in}]; fixed_in null/empty/missing = still open."""
+    items = [(t, x) for t in tasks for x in (t.get("followups") if isinstance(t.get("followups"), list) else [])
+             if isinstance(x, dict)]
+    open_ = [(t, x) for t, x in items if not fixed(x)]
+    return {"total": len(items), "open": len(open_), "fixed": len(items) - len(open_),
+            "open_items": [{"run_id": t.get("run_id"), "task_id": t.get("task_id"),
+                            "desc": x["desc"] if isinstance(x.get("desc"), str) else None} for t, x in open_]}
 
 
 def plan_accuracy(tasks):
@@ -539,11 +632,17 @@ def vtuple(v):
 
 
 def run_version(r):
-    return (r["run"] or {}).get("plugin_version") if isinstance((r["run"] or {}).get("plugin_version"), str) else None
+    """The plugin version the run was executed under: plugin_version_at_start (v0.3.3) when present,
+    else plugin_version (older records only have this one, and it meant the version in effect)."""
+    run = r["run"] or {}
+    for k in ("plugin_version_at_start", "plugin_version"):
+        if isinstance(run.get(k), str) and run[k].strip():
+            return run[k]
+    return None
 
 
 def filter_versions(runs, since=None, before=None):
-    """since: keep runs with plugin_version >= since; before: keep runs < before. Runs without a
+    """since: keep runs whose version in effect (run_version) >= since; before: < before. Runs without a
     parseable version are dropped when either bound is given (they can't be placed before/after)."""
     if not since and not before:
         return runs
@@ -557,7 +656,7 @@ def filter_versions(runs, since=None, before=None):
     return out
 
 
-def by_version(runs):
+def by_version(runs, extra=None):
     g = {}
     for rid, r in runs.items():
         g.setdefault(run_version(r) or "unknown", []).append(r)
@@ -565,13 +664,14 @@ def by_version(runs):
     for v in sorted(g, key=lambda x: (vtuple(x) is None, vtuple(x) or (0,), x)):
         rs = g[v]
         ts = [t for r in rs for t in r["tasks"]]
-        q = quality(ts, [r["run"] or {} for r in rs])
+        q = quality(ts, [r["run"] or {} for r in rs], extra)
         rr = [ratio(t) for t in ts if ratio(t) is not None]
         cost = [num(t.get("cost_usd")) for t in ts if num(t.get("cost_usd")) is not None]
         rows.append({"key": v, "runs": len(rs), "n": len(ts), "insufficient": len(ts) < MIN_N,
                      "first_pass_rate": rate(sum(1 for t in ts if first_pass(t)), len(ts)),
                      "rework_rate": q["rework_rate"], "drift_rate": q["drift_rate"], "verify_rate": q["verify_rate"],
-                     "escaped_per_task": rate(sum(issue(t, "integration") + issue(t, "user") for t in ts), len(ts)),
+                     "verify_partial": q["verify_partial"],
+                     "escaped_per_task": rate(sum(integ(t, extra) + issue(t, "user") for t in ts), len(ts)),
                      "ratio_median": med(rr), "avg_cost_usd": mean(cost)})
     return rows
 
@@ -621,8 +721,9 @@ def by_flag(tasks):
     return rows
 
 
-def by_verify_level(tasks):
-    """Problems that got past a verification level: found at integration or by the user."""
+def by_verify_level(tasks, extra=None):
+    """Problems that got past a verification level: found at integration or by the user
+    (integration includes issues review tasks attributed to the task via found_issues)."""
     g = {}
     for t in tasks:
         g.setdefault(t["verify_level"] if isinstance(t.get("verify_level"), str) else "unknown", []).append(t)
@@ -633,12 +734,12 @@ def by_verify_level(tasks):
         rows.append({"key": k, "n": n, "insufficient": n < MIN_N,
                      "verify_rate": rate(sum(1 for t in ts if t.get("verify_evidence") and t.get("verify_pass") is True), n),
                      "cov_issues": cov_frac(ts, ("issues",)),
-                     "escaped_integration": rate(sum(issue(t, "integration") for t in ts), n),
+                     "verify_partial": sum(1 for t in ts if t.get("verify_pass") == "partial"),
+                     "escaped_integration": rate(sum(integ(t, extra) for t in ts), n),
                      "escaped_user": rate(sum(issue(t, "user") for t in ts), n),
-                     "escaped_per_task": rate(sum(issue(t, "integration") + issue(t, "user") for t in ts), n),
-                     "escaped_major": sum(1 for t in ts if isinstance(t.get("issues"), dict)
-                                          and t["issues"].get("severity_max") == "major"
-                                          and issue(t, "integration") + issue(t, "user") > 0),
+                     "escaped_per_task": rate(sum(integ(t, extra) + issue(t, "user") for t in ts), n),
+                     "escaped_major": sum(1 for t in ts if is_major(t, extra)
+                                          and integ(t, extra) + issue(t, "user") > 0),
                      "rework_rate": rate(sum(1 for t in ts if t.get("review_outcome") in ("rework", "failed")), n)})
     return rows
 
@@ -969,11 +1070,13 @@ def build(runs, corrupt):
     effs = [efficiency(i, runs[i]) for i in ids]
     # actual_min of runs with contradictory time data is unreliable: keep those tasks out of actual/est
     skip = frozenset(id(t) for e in effs if e["inconsistent"] for t in runs[e["run_id"]]["tasks"])
-    tiers = group(tasks, lambda t: t["tier"] if isinstance(t.get("tier"), str) else "unknown", skip)
+    norm = normalized_ratios(runs, skip)
+    tiers = group(tasks, lambda t: t["tier"] if isinstance(t.get("tier"), str) else "unknown", skip, norm)
     models = group(tasks, lambda t: "%s/%s" % (t["model"] if isinstance(t.get("model"), str) else "unknown",
-                                               t["effort"] if isinstance(t.get("effort"), str) else "unknown"), skip)
+                                               t["effort"] if isinstance(t.get("effort"), str) else "unknown"), skip, norm)
     s_ = lambda t, k: t[k] if isinstance(t.get(k), str) else "unknown"
-    hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")), skip)
+    hosts = group(tasks, lambda t: "%s/%s" % (s_(t, "host"), s_(t, "channel")), skip, norm)
+    extra, unattr = attribute_runs(runs)
     # 辅助执行者（v0.5.0 可选字段 assist）：null/缺失记为 main（主宿主自己的模型）
     assist = group(tasks, lambda t: "assist:%s/%s" % (t["assist"], s_(t, "tier")) if isinstance(t.get("assist"), str) and t["assist"]
                    else "main/%s" % s_(t, "tier"), skip)
@@ -981,7 +1084,7 @@ def build(runs, corrupt):
     miss = [e["missing_records"] for e in effs if e["missing_records"] is not None]
     plan = plan_accuracy(tasks)
     sc = [x for x in (scale_out(i, runs[i]) for i in ids) if x]
-    flags, levels, rec = by_flag(tasks), by_verify_level(tasks), recommendations(runs)
+    flags, levels, rec = by_flag(tasks), by_verify_level(tasks, extra), recommendations(runs)
     cov = coverage(tasks)
     sig = signals(tiers, models, (med(rs), len(rs)), effs, plan, sc, cov)
     add = make_add(sig)
@@ -992,19 +1095,21 @@ def build(runs, corrupt):
         "overview": {"runs": len(ids), "tasks": len(tasks), "corrupt_lines": corrupt,
                      "missing_task_records": sum(miss) if miss else None,
                      "time_from": min(stamps)[1] if stamps else None, "time_to": max(stamps)[1] if stamps else None},
-        "quality": {"overall": quality(tasks, rr),
-                    "per_run": [dict(quality(runs[i]["tasks"], [runs[i]["run"] or {}]), run_id=i) for i in ids]},
+        "quality": {"overall": quality(tasks, rr, extra, sum(unattr.values())),
+                    "per_run": [dict(quality(runs[i]["tasks"], [runs[i]["run"] or {}], extra, unattr[i]), run_id=i)
+                                for i in ids]},
         "by_tier": tiers, "by_model": models, "by_host_channel": hosts, "by_assist": assist,
         "efficiency": effs,
         "cost": cost_by_kind(tasks),
         "adjust": adjust(tasks),
+        "followups": followups(tasks),
         "autonomy": {"autonomy_stops": sum(cnt(r.get("autonomy_stops")) for r in rr),
                      "decisions": sum(cnt(r.get("decisions")) for r in rr),
                      "user_corrections": sum(cnt(t.get("user_corrections")) for t in tasks)},
         "plan": plan,
         "scale_out": sc,
         "coverage": cov, "by_score": bs, "independent_review": ir,
-        "by_version": by_version(runs), "by_flag": flags, "by_verify_level": levels, "recommendations": rec,
+        "by_version": by_version(runs, extra), "by_flag": flags, "by_verify_level": levels, "recommendations": rec,
         "signals": sig,
     }
 
@@ -1056,22 +1161,37 @@ def render_md(rep):
         L += table(["字段", "有值任务数", "覆盖率", "备注"],
                    [[names.get(k, k), v["n"], f(v["rate"], "p"), "数据不足" if v["sparse"] else ""] for k, v in cv["fields"].items()])
     L += ["", "## 2. 质量门槛", ""]
-    qh = ["范围", "n", "漂移率", "验证到位率", "问题/任务 review", "integration", "user", "major 数", "返工率", "合并通过率", "备注"]
+    qo = rep["quality"]["overall"]
+    # v0.3.3 columns appear only when the data has them, so old reports look the same
+    show_partial, show_attr = bool(qo.get("verify_partial")), bool(qo.get("has_found_issues"))
+    qh = (["范围", "n", "漂移率", "验证到位率"] + (["partial 数"] if show_partial else [])
+          + ["问题/任务 review", "integration（含审核归因）" if show_attr else "integration"]
+          + (["审核归因数", "未归因数"] if show_attr else []) + ["user", "major 数", "返工率", "合并通过率", "备注"])
     def qrow(name, q):
-        return [name, q["n"], f(q["drift_rate"], "p"), f(q["verify_rate"], "p"), f(q["avg_issues_review"]),
-                f(q["avg_issues_integration"]), f(q["avg_issues_user"]), q["major_issues"], f(q["rework_rate"], "p"),
-                f(q["integration_pass_rate"], "p"), "样本不足" if q["insufficient"] else ""]
-    L += table(qh, [qrow("总体", rep["quality"]["overall"])] + [qrow(q["run_id"], q) for q in rep["quality"]["per_run"]])
-    gh = ["分组", "n", "一次通过率", "升档率", "交接率", "平均 cost_usd", "平均 tokens", "actual/est 中位数", "备注"]
+        return ([name, q["n"], f(q["drift_rate"], "p"), f(q["verify_rate"], "p")]
+                + ([q["verify_partial"]] if show_partial else [])
+                + [f(q["avg_issues_review"]), f(q["avg_issues_integration"])]
+                + ([q["attributed_issues"], q["unattributed_found_issues"]] if show_attr else [])
+                + [f(q["avg_issues_user"]), q["major_issues"], f(q["rework_rate"], "p"),
+                   f(q["integration_pass_rate"], "p"), "样本不足" if q["insufficient"] else ""])
+    L += table(qh, [qrow("总体", qo)] + [qrow(q["run_id"], q) for q in rep["quality"]["per_run"]])
+    if show_partial:
+        L += ["", "验证到位率只算 verify_pass=true；partial（只做了部分验证，如只核对文档、未实机运行）单列，不算到位。"]
+    if show_attr:
+        L += ["", "integration 含审核任务 found_issues 归到来源任务（同一 run 的 origin_task_id）的问题，不计入审核任务自己；"
+              "被归因了 major 问题的来源任务计入 major 数；未归因数是 origin_task_id 缺失或不在本 run 的问题。"]
+    gh = ["分组", "n", "有值数 cost/tokens/ratio", "一次通过率", "升档率", "交接率", "平均 cost_usd", "平均 tokens",
+          "actual/est 中位数", "备注"]
     def grow(g):
-        return [g["key"], g["n"], f(g["first_pass_rate"], "p"), f(g["escalation_rate"], "p"), f(g["handoff_rate"], "p"),
+        return [g["key"], g["n"], "%d/%d/%d" % (g["cost_n"], g["tokens_n"], g["ratio_n"]), f(g["first_pass_rate"], "p"), f(g["escalation_rate"], "p"), f(g["handoff_rate"], "p"),
                 f(g["avg_cost_usd"]), f(g["avg_tokens"], "d"), f(g["ratio_median"]),
                 "；".join(x for x in ("样本不足" if g["insufficient"] else "",
                                      "用时比排除矛盾 run 的 %d 条" % g["ratio_excluded"] if g["ratio_excluded"] else "") if x)]
-    gh2 = gh[:3] + ["一次通过率 95% 区间"] + gh[3:]
+    gh2 = gh[:4] + ["一次通过率 95% 区间"] + gh[4:]
     def grow2(g):
         r = grow(g)
-        return r[:3] + [ci_s(g.get("first_pass_ci"))] + r[3:]
+        return r[:4] + [ci_s(g.get("first_pass_ci"))] + r[4:]
+    L += ["", "有值数：平均 cost_usd / 平均 tokens / actual/est 中位数实际用到的任务数；n 大而有值数小时均值不可靠。"]
     L += ["", "## 3a. 按档位", ""] + table(gh2, [grow2(g) for g in rep["by_tier"]])
     L += ["", "## 3b. 按模型/思考深度", ""] + table(gh2, [grow2(g) for g in rep["by_model"]])
     L += ["", "## 3c. 按宿主/通道", ""] + table(gh, [grow(g) for g in rep["by_host_channel"]])
@@ -1084,7 +1204,8 @@ def render_md(rep):
             [[p["n"], f(p["same_rate"], "p"), f(p["under_rate"], "p"), f(p["over_rate"], "p"),
               f(p["first_pass_rate"], "p"), "样本不足" if p["insufficient"] else ""]])
     vh = ["版本", "run 数", "task 数", "一次通过率", "返工率", "漂移率", "验证到位率", "漏网问题/任务", "actual/est 中位数", "平均 cost_usd", "备注"]
-    L += ["", "## 3f. 按插件版本（改动前后对比用；--since-version / --before-version 可只看一段）", ""] + table(vh, [
+    L += ["", "## 3f. 按插件版本（运行时生效的版本：plugin_version_at_start，没有时用 plugin_version；"
+          "--since-version / --before-version 可只看一段）", ""] + table(vh, [
         [g["key"], g["runs"], g["n"], f(g["first_pass_rate"], "p"), f(g["rework_rate"], "p"), f(g["drift_rate"], "p"),
          f(g["verify_rate"], "p"), f(g["escaped_per_task"]), f(g["ratio_median"]), f(g["avg_cost_usd"]),
          "样本不足" if g["insufficient"] else ""] for g in rep["by_version"]])
@@ -1118,9 +1239,9 @@ def render_md(rep):
                 + ([f(e["wait_median"], "d"), f(e["wait_max"], "d")] if has_wait else [])
                 + ["数据矛盾：" + ", ".join(e["inconsistent"]) if e["inconsistent"] else ""] for e in rep["efficiency"]])
     L += ["", "## 5. 开销（按 kind）", ""]
-    L += table(["kind", "n", "平均 tokens", "每预计分钟成本 (USD)", "备注"],
-               [[c["key"], c["n"], f(c["avg_tokens"], "d"), f(c["cost_per_est_min"], "c"), "样本不足" if c["insufficient"] else ""]
-                for c in rep["cost"]])
+    L += table(["kind", "n", "有值数 tokens/cost", "平均 tokens", "每预计分钟成本 (USD)", "备注"],
+               [[c["key"], c["n"], "%d/%d" % (c["tokens_n"], c["cost_n"]), f(c["avg_tokens"], "d"),
+                 f(c["cost_per_est_min"], "c"), "样本不足" if c["insufficient"] else ""] for c in rep["cost"]])
     a = rep["autonomy"]
     L += ["", "## 6. 自主性", ""] + table(["autonomy_stops", "decisions", "user_corrections"],
                                           [[f(a["autonomy_stops"], "d"), f(a["decisions"], "d"), f(a["user_corrections"], "d")]])
@@ -1129,6 +1250,12 @@ def render_md(rep):
         ["升档任务数", "其中有检查点的比例", "checkpoints", "handoffs", "derived_tasks", "user_manual_adjust"],
         [[d["escalated"], f(d["escalated_after_checkpoint_rate"], "p"), d["checkpoints"], d["handoffs"],
           d["derived_tasks"], d["user_manual_adjust"]]])
+    fu = rep.get("followups") or {}
+    if fu.get("total"):
+        L += ["", "## 6e. 待修追踪（task 的 followups；fixed_in 为空算未修）", ""]
+        L += table(["待修项总数", "未修", "已修"], [[fu["total"], fu["open"], fu["fixed"]]])
+        if fu["open_items"]:
+            L += [""] + ["- [%s/%s] %s" % (x["run_id"] or "-", x["task_id"] or "-", x["desc"] or "-") for x in fu["open_items"]]
     if rep.get("scale_out"):
         L += ["", "## 4b. 分片、分层校验与合入（v0.11.0 起的字段；旧数据没有就不出）", ""]
         L += table(["run", "片数", "并行效率", "掉队比", "并发利用率", "单元耗时误差", "再拆", "关联/全量(片内)",
@@ -1209,7 +1336,8 @@ def a_date(v):
     return d.strftime("%Y-%m-%d") if d else None
 
 
-def anon_task(t, rid, idx):
+def anon_task(t, rid, idx, idmap=None):
+    """idmap: original task_id -> anonymized task_id of the same run (for found_issues.origin_task_id)."""
     o = {"type": "task", "run_id": rid, "task_id": "t%d" % idx}
     for k in ENUMS:
         if k in t:
@@ -1225,6 +1353,16 @@ def anon_task(t, rid, idx):
     for k in TASK_BOOLS:
         if k in t:
             o[k] = a_bool(t[k])
+    if t.get("verify_pass") == "partial":
+        o["verify_pass"] = "partial"
+    if isinstance(t.get("found_issues"), list):  # severity enum + origin mapped to this run's sequence ids
+        o["found_issues"] = [{"severity": x["severity"] if x.get("severity") in ("minor", "major") else
+                              ("other" if x.get("severity") is not None else None),
+                              "origin_task_id": (idmap or {}).get(x.get("origin_task_id"))
+                              if isinstance(x.get("origin_task_id"), str) else None}
+                             for x in found_issues(t)]
+    if isinstance(t.get("followups"), list):  # counts only: desc dropped, fixed_in reduced to fixed / open
+        o["followups"] = [{"fixed_in": "fixed" if fixed(x) else None} for x in t["followups"] if isinstance(x, dict)]
     if "verify_evidence" in t:  # keep only whether evidence was given
         o["verify_evidence"] = "[redacted]" if t["verify_evidence"] else ""
     if isinstance(t.get("issues"), dict):
@@ -1267,9 +1405,11 @@ def anon_run(r, rid):
     for k in RUN_BOOLS:
         if k in r:
             o[k] = a_bool(r[k])
-    v = r.get("plugin_version")
-    if v is not None:
-        o["plugin_version"] = v if isinstance(v, str) and VERSION_RE.match(v) else "other"
+    for k in ("plugin_version_at_start", "plugin_version"):
+        v = r.get(k)
+        if v is not None:  # empty string stays empty-ish (null) so run_version still falls back like on raw data
+            o[k] = None if isinstance(v, str) and not v.strip() else (
+                v if isinstance(v, str) and VERSION_RE.match(v) else "other")
     return o
 
 
@@ -1304,8 +1444,12 @@ def anonymize(runs):
     out = {}
     for rid, r in runs.items():
         h = anon_id(rid)
+        idmap = {}
+        for i, t in enumerate(r["tasks"]):
+            if isinstance(t.get("task_id"), str) and t["task_id"]:
+                idmap.setdefault(t["task_id"], "t%d" % (i + 1))
         out[h] = {"run": anon_run(r["run"], h) if r["run"] else None,
-                  "tasks": [anon_task(t, h, i + 1) for i, t in enumerate(r["tasks"])],
+                  "tasks": [anon_task(t, h, i + 1, idmap) for i, t in enumerate(r["tasks"])],
                   "merges": [anon_merge(m, h) for m in r.get("merges") or []],
                   "monitors": [anon_monitor(m, h) for m in r.get("monitors") or []]}
     return out
@@ -1313,7 +1457,8 @@ def anonymize(runs):
 
 def export_anon(runs, corrupt, raw):
     ar = anonymize(runs)
-    versions = sorted({(r["run"] or {}).get("plugin_version") for r in ar.values()} - {None})
+    versions = sorted({(r["run"] or {}).get(k) for r in ar.values()
+                       for k in ("plugin_version", "plugin_version_at_start")} - {None})
     o = {"format": "hq-anon/v1", "schema": "v1", "plugin_versions": versions,
          "note": "Whitelisted enum/number/boolean fields only; free text, project and goal removed; "
                  "run ids hashed; timestamps cut to dates.",
@@ -1333,8 +1478,9 @@ def main(argv=None):
     ap.add_argument("--project", metavar="NAME")
     ap.add_argument("--export-anon", action="store_true", help="print an anonymized JSON for sharing")
     ap.add_argument("--raw", action="store_true", help="with --export-anon: also include the anonymized records")
-    ap.add_argument("--since-version", metavar="V", help="only runs with plugin_version >= V")
-    ap.add_argument("--before-version", metavar="V", help="only runs with plugin_version < V")
+    ap.add_argument("--since-version", metavar="V",
+                    help="only runs whose version in effect (plugin_version_at_start, else plugin_version) >= V")
+    ap.add_argument("--before-version", metavar="V", help="only runs whose version in effect < V")
     ap.add_argument("--check-changelog", metavar="CHANGELOG", help="evaluate `验收判定` lines of 待验证 entries")
     a = ap.parse_args(argv)
     if a.raw and not a.export_anon:
