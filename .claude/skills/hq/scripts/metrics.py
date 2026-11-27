@@ -517,7 +517,7 @@ def scale_out(rid, r):
     reserve = num(run.get("reserved_slots"))
     reserve = max(0, int(reserve)) if reserve is not None else 0
     mor = num(run.get("max_overhead_ratio"))
-    mor = mor if mor is not None and mor > 0 else DEFAULT_MAX_OVERHEAD_RATIO
+    mor = mor if mor is not None and mor >= 0 else DEFAULT_MAX_OVERHEAD_RATIO  # 0 is a valid cap, as in scale.py
     return {
         "run_id": rid, "shards": len(sh),
         "parallel_efficiency": sum(acts) / (len(acts) * longest) if acts and longest else None,
@@ -1397,6 +1397,22 @@ def a_token(v):
     return None if v is None else (v if isinstance(v, str) and TOKEN_RE.match(v) else "other")
 
 
+# only vendor-shaped model names leave the machine ("claude-opus-4-5", "gpt-5.1-codex", "o3", "codex:gpt-5.2");
+# a free-form string that merely fits TOKEN_RE could be a pasted secret
+MODEL_RE = re.compile(r"^(?:[a-z][a-z0-9_-]{0,15}:)?(?:claude-|gpt-|o\d|gemini-|deepseek|kimi|haiku|sonnet|opus|codex)"
+                      r"[a-z0-9._-]{0,40}$", re.I)
+ASSIST_NAMES = {"codex", "kimi", "claude", "opencode", "gemini", "cursor"}
+
+
+def a_model(v):
+    return None if v is None else (v if isinstance(v, str) and len(v) <= 64 and MODEL_RE.match(v)
+                                   and not re.search(r"[A-Za-z0-9]{24,}", v) else "other")
+
+
+def a_assist(v):
+    return None if v is None else (v if isinstance(v, str) and v in ASSIST_NAMES else "other")
+
+
 def a_bool(v):
     return v if isinstance(v, bool) else None
 
@@ -1414,9 +1430,10 @@ def anon_task(t, rid, idx, idmap=None):
             o[k] = a_enum(k, t[k])
     if "plan_tier" in t:
         o["plan_tier"] = a_enum("tier", t["plan_tier"])
-    for k in ("model", "assist"):
-        if k in t:
-            o[k] = a_token(t[k])
+    if "model" in t:
+        o["model"] = a_model(t["model"])
+    if "assist" in t:
+        o["assist"] = a_assist(t["assist"])
     if "effort" in t:
         o["effort"] = a_set(t["effort"], EFFORTS)
     for k in TASK_NUMS:

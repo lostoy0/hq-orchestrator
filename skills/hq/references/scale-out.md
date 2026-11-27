@@ -99,7 +99,7 @@
 - 满足时给出 `{measured_unit_min, remaining_units, shards_for_remaining, running, new_sessions}`：
   用实测单元耗时，按第 1 节的公式（上限 = 运行中片数 + 剩余槽位）算剩余单元需要几片；`new_sessions` 不超过 `--free-slots`。
   否则为 `null`。
-- `replan` 不为 `null` 时按它执行，本次各片的 `resplit` 建议不再单独执行：把运行中各片的剩余单元按
+- `replan` 不为 `null` 时按它执行（输出带 `note`，`free_slots_left` 按 `replan` 计算），本次各片的 `resplit` 建议不再单独执行：把运行中各片的剩余单元按
   `shards_for_remaining` 重新均分，原片各保留一份，其余交给 `new_sessions` 个新会话。`auto_resplit: false` 时作为建议汇报。
 - **超时不升档**：分片任务实际时长超过预估 2 倍时，不按 `SKILL.md` 的动态调档升档重跑，按 `straggler` 的结果处理：`action=resplit` 时才让该片交 PARTIAL、剩余区间拆给新会话；`near_done`、`straggler_unsplittable`、`straggler_no_free_slot` 时不动它（后者只汇报）
   （提交已完成的单元和交付小节），剩余区间按本节再拆给新会话。
@@ -135,8 +135,9 @@
 3. 依次合入组内分片，然后**一次**校验：类型检查 + 各片改动并集的关联测试；这一轮也到了全量节点就只跑一次全量。
 4. 一起校验失败：`scale.py locate` 输入 `group` 和失败的测试文件或模块路径，按改动范围定位到具体分片：
    同一文件 > 同目录或镜像目录里的同名测试（`foo.test.ts`、`foo.spec.ts`、`test_foo.py`、`foo_test.go`、`FooTest.java`，
-   镜像指 `src/pkg/` ↔ `tests/pkg/`、`__tests__/` 等）> 最深的共同目录。不相关目录里的同名文件只作并列时的参考。
-   只回退或修复那一片，其余照常合入；定位不到时按 `next.revert_and_retest` 二分回退复测（先在并列候选 `suspects` 里二分）。
+   镜像指 `src/pkg/` ↔ `tests/pkg/`、`__tests__/`、Maven 的 `src/main/java/…` ↔ `src/test/java/…` 等）> 最深的共同目录。
+   只共享第一段目录（如都在 `src/` 下）不算证据，按“定位不到”处理；不相关目录里的同名文件也不算。
+   只回退或修复那一片，其余照常合入；定位不到时按 `next.revert_and_retest` 二分回退复测（先在并列候选 `suspects` 里二分；一个候选都没有时所有分片都是嫌疑）。
 5. 汇报写清：这一组合入了哪几片、跑了哪些校验、为什么这次跑或没跑全量（第 5 节的节点）。
 6. 每组写一条 `type:"merge"` 记录（见 `metrics-schema.md`）。
 

@@ -101,7 +101,7 @@
 | from_recommendation | 布尔（可选） | 常驻模式：本批是否来自上一批的推荐（用户回复“按推荐”或自动继续） |
 | recommended_next | 整数（可选） | 常驻模式：本批结束时推荐了几条下一批任务；完工声明时为 0 |
 | concurrency_limit / target_shard_min | 整数 / 数字（可选，v0.11.0 起） | 本次的并发上限、分片目标时长；用于并发利用率和片数建议 |
-| reserved_slots / max_overhead_ratio | 整数 / 数字（可选） | 片数建议用：为再拆、公共文件修复等预留的并发槽数（没有时 0），子会话固定开销占一片时长的上限（没有时 0.3）。与 `scale.py shards` 的同名参数一致 |
+| reserved_slots / max_overhead_ratio | 整数 / 数字（可选） | 片数建议用：为再拆、公共文件修复等预留的并发槽数（没有时 0），子会话固定开销占一片时长的上限（没有时 0.3；可以是 0）。与 `scale.py shards` 的同名参数一致 |
 | assist_disabled | `[{profile,reason}]`（可选，v0.5.1 起） | 本次被停用（熔断）的辅助执行者及原因（`unavailable:<原因>` / `consecutive_failures` / `max_failures` / `same_as_host`）；没有就省略 |
 | stage / stage_mode / review_rounds / review_findings / open_assumptions（可选，v0.6.0 起） | 见 `stages/common.md` 第 8 节 | 阶段技能（如 `/hq-plan`）的运行：阶段名、模式、评审轮数、各级意见数、交给用户的待确认条数。`metrics.py` 目前不汇总 |
 
@@ -122,7 +122,7 @@
 | shards | 字符串数组 | 这一组合入的 task_id（推迟的不算） |
 | verify_runs | 整数 | 这一组跑了几次校验（正常为 1；失败定位后复测会增加） |
 | full_test / full_test_min | 布尔 / 数字 | 这次是否跑了全量测试、耗时 |
-| reasons | 字符串数组 | 跑或没跑全量的原因（`scale.py full-gate` 的 `reasons`） |
+| reasons | 字符串数组 | 跑或没跑全量的原因（主会话按 `scale-out.md` 第 5 节的全量节点判断，自由文本，不导出） |
 | pass / culprits / conflicts | 布尔 / 数组 / 数组 | 校验结果、定位到的分片、冲突文件 |
 | wait_min | 数字 | 为攒批等待的分钟 |
 
@@ -207,7 +207,7 @@
 
 - **保存**：`scripts/runs-persist.sh save branch` 把 `.hq/runs/*.jsonl` 原样写到专用分支 `hq/runs` 的 `runs/` 下（只追加，每次运行一个文件，多个会话同时写不冲突）；`fetch` 取回到 `.hq/runs-archive/`。同一次运行在几个目录里都有时，`metrics.py` 按 `run_id`+`task_id`（merge 记录按上面“通用规则”的口径）去重。
 - **脱敏导出**：`metrics.py <目录…> --export-anon [--raw]` 先把每条记录按白名单裁剪，再汇总：
-  - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`、`assist`（只允许 `[A-Za-z0-9._:/@+-]`，否则写 `other`），`effort`（只允许 minimal/low/medium/high/xhigh/max/none，否则写 `other`），`task_type`、`test_scope`、`shard_group`（只留有没有），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`、`plugin_version_at_start`（规范化成 X.Y.Z，后缀丢弃，解析不出写 `other`）；merge 的计数、数字和布尔字段。`verify_pass` 为 `"partial"` 时原样保留。枚举字段的值不是字符串（列表、对象）时一律写 `other`（或 null），不会让导出失败。
+  - 保留：task 的 `kind`、`risk`、`tier`、`plan_tier`、`host`、`channel`、`verify_level`、`review_outcome`（不在取值表内的写 `other`），`model`（只保留已知厂商或模型族前缀的形状，如 `claude-`、`gpt-`、`gemini-`、`deepseek`、`kimi`、`haiku`/`sonnet`/`opus`、`codex`，可带 `<cli>:` 前缀；含 24 位以上连续字母数字的写 `other`；其他写 `other`）、`assist`（只保留 codex/kimi/claude/opencode/gemini/cursor，其他写 `other`），`effort`（只允许 minimal/low/medium/high/xhigh/max/none，否则写 `other`），`task_type`、`test_scope`、`shard_group`（只留有没有），各数字字段、布尔字段，`issues` 的三个计数和 `severity_max`，`tier_changes` 的 `from`/`to`；run 的 `host`、各数字和布尔字段、`plugin_version`、`plugin_version_at_start`（规范化成 X.Y.Z，后缀丢弃，解析不出写 `other`）；merge 的计数、数字和布尔字段。`verify_pass` 为 `"partial"` 时原样保留。枚举字段的值不是字符串（列表、对象）时一律写 `other`（或 null），不会让导出失败。
   - `flags`（含从 notes 识别出的）只保留已知规则标记：`bias:+1(tier)`、`bias:+1(effort)`、`downgrade:user_allowed(-N)`（N 最多两位）、`rate_limited`、`assist_auto_models`、`tier:not-applied`；带后缀的三种只保留白名单后缀，其他后缀压成 `<前缀>:other`：`billing:` deepseek/kimi/moonshot/codex/openai/anthropic/claude/gemini/other，`effort_env:` minimal/low/medium/high/xhigh/max，`assist_unavailable:` rate_limited/cli_missing/cli_unavailable/no_key/missing_key/auth/quota/timeout/network/same_as_host/other。其他写法丢弃。
   - `found_issues` 每项只保留 `severity`（`minor`/`major`，其他写 `other`）和 `origin_task_id`（换成本 run 内的序号；不在本 run 或指向审核任务自己的写 null），即只剩严重程度和个数。
   - `followups` 只保留计数：每项变成 `{"fixed_in": "fixed"}` 或 `{"fixed_in": null}`，`desc` 和原 `fixed_in` 文本丢弃。
