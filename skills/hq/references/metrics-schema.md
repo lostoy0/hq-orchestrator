@@ -125,7 +125,9 @@
 `scale.py monitor` 输出的 `records` 原样追加；`event` 为 `trigger`（触发）或 `missed`（事后补记的漏报）。
 字段：`ts`、`batch_id`、`task_id`、`task_type`、`metric`（duration_ratio/idle_min/cost_ratio/rework/failure_rate/straggler_ratio，以及拆分合理性 split_unit_error/split_uneven/split_underused/split_boundary）、
 `value`、`threshold`、`severity`（normal/severe）、`level`（1 当场处置 / 2 进入分析）、`action`、`key`（指标:根因类别）、
-`rate_limited`、`skip_reason`、`deferred`、`analysis_cost_usd`（分析结束后补）、`label`（事后标 `effective` / `false_positive`）。
+`rate_limited`、`skip_reason`、`deferred`、`analysis_cost_usd`（分析结束后补）、`label`（事后标 `effective` / `false_positive`）、
+`label_source`（`rule`：`scale.py label` 按规则判定 | `reviewer`：独立审核 | `user`）、`label_reason`（判定依据；规则判不了时说明缺什么）。
+`event:"missed"` 记录也可带 `label_source`、`label_reason`、`batch_id`、`run_id`。主会话不自己打标签，见 `scale-out.md` 第 9 节。
 
 ## 用量口径
 

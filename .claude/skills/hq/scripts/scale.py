@@ -17,6 +17,7 @@ the main session does not re-derive them by hand.
   scale.py merge-group                      < {"delivered":[..],"pending":[..],"owners":{..}}
   scale.py locate                           < {"group":[{"id","files"}],"failures":[paths]}
   scale.py monitor    --state F [--config F] [--now ISO]   < snapshot.json
+  scale.py label                                           < {"records":[..],"outcomes":{..}}
   scale.py calibrate  [--playbook F --write]               < {"current":..,"history":[..],"ratios":{..}}
   scale.py thresholds --playbook F [--rollback]
 """
@@ -978,6 +979,243 @@ def calibrate(current, history, ratios=None, user=None, task_types=None):
     return {"thresholds": compact, "changes": changes}
 
 
+# ---------- rule-based labels: effective / false_positive, and rule-detected misses ----------
+
+# Constants of the labelling rules (references/scale-out.md section 9).
+LABEL_SAVING_MIN_SHARE = 0.5   # a re-split / re-plan counts as effective when it saved >= 50% of the estimate
+LABEL_ON_TIME_RATIO = 1.2      # "finished normally" = actual <= 1.2 x estimate (or cost <= 1.2 x budget)
+LABEL_IDLE_WINDOW = 2          # progress must rise within this many check-ins after the reminder
+MISSED_DURATION_RATIO = 2.0    # actual > 2 x estimate without a duration_ratio trigger = a miss
+LABEL_EPS = 1e-9               # float tolerance for the boundary comparisons (1.2 * 3 = 3.5999999999999996)
+LABEL_ACTIONS = ("resplit", "replan")
+DURATION_LIKE = ("duration_ratio", "straggler_ratio", "split_unit_error", "split_uneven", "split_underused")
+
+
+def _outcome_for(outcomes, rec):
+    """Outcome of the record's subject, with an optional per-metric override in `by_metric`."""
+    base = outcomes.get(str(rec.get("task_id"))) or {}
+    if not isinstance(base, dict):
+        return {}
+    o = {k: v for k, v in base.items() if k != "by_metric"}
+    extra = (base.get("by_metric") or {}).get(rec.get("metric"))
+    if isinstance(extra, dict):
+        o.update(extra)
+    return o
+
+
+def _on_time(actual, planned):
+    # exactly 1.2 x counts as on time (<=): the rule says "<= 1.2 x", so the boundary is a false positive
+    # with a small tolerance so that e.g. est 3 / actual 3.6 is not lost to float rounding
+    return (actual is not None and planned is not None and planned > 0
+            and actual <= LABEL_ON_TIME_RATIO * planned + LABEL_EPS)
+
+
+def _action_taken(v):
+    """True / "resplit" / "replan" -> taken; False -> not taken; anything else -> unknown (None)."""
+    if v is True or v in LABEL_ACTIONS:
+        return True
+    if v is False:
+        return False
+    return None
+
+
+def _label_duration_like(o):
+    actual, est = num(o.get("actual_min")), num(o.get("est_min"))
+    raw = o.get("action_taken")
+    taken = _action_taken(raw)
+    if taken:
+        exp, got = num(o.get("expected_saving_min")), num(o.get("actual_saving_min"))
+        if exp is None or got is None or exp <= 0:
+            return None, "action taken but expected_saving_min / actual_saving_min missing"
+        # exactly 50% counts as effective (>=), as the rule says "saved >= 50% of the expected saving"
+        if got >= LABEL_SAVING_MIN_SHARE * exp - LABEL_EPS:
+            return "effective", "%s saved %.1f of expected %.1f min (>= %d%%)" % (
+                raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
+        return "false_positive", "%s saved %.1f of expected %.1f min (< %d%%)" % (
+            raw if isinstance(raw, str) else "action", got, exp, LABEL_SAVING_MIN_SHARE * 100)
+    if taken is False and _on_time(actual, est):
+        return "false_positive", "no action; actual %.1f <= %.1f x estimate %.1f min" % (
+            actual, LABEL_ON_TIME_RATIO, est)
+    if taken is None:
+        return None, "action_taken unknown (%r)" % (raw,)
+    return None, "no action and actual time over %.1f x estimate (or unknown)" % LABEL_ON_TIME_RATIO
+
+
+def _progress_series(o):
+    pts = []
+    for p in o.get("progress") or []:
+        if isinstance(p, dict) and parse_ts(p.get("ts")) is not None and num(p.get("done")) is not None:
+            pts.append((parse_ts(p["ts"]), p["done"]))
+    return sorted(pts, key=lambda x: x[0])
+
+
+def _label_idle(o, rec):
+    at = parse_ts(o.get("reminder_ts") or rec.get("ts"))
+    pts = _progress_series(o)
+    if at is None or not pts:
+        return None, "no progress series or reminder time"
+    before = [d for t, d in pts if t <= at]
+    after = [d for t, d in pts if t > at]
+    if not before:
+        return None, "no progress point at or before the reminder"
+    base = before[-1]
+    effective = any(d > base for d in after[:LABEL_IDLE_WINDOW])
+    rising = len(before) >= 2 and before[-1] > before[0] and bool(after) and after[-1] > base
+    fp = rising and _on_time(num(o.get("actual_min")), num(o.get("est_min")))
+    if effective and fp:
+        # progress was rising before the stall, rose again after the reminder, and the shard finished on
+        # time: either the reminder unblocked it or it was waiting on a long background step. No rule decides.
+        return None, "conflicting: progress rose after the reminder, but also rose before it and finished on time"
+    if effective:
+        return "effective", "done rose from %s within %d check-ins after the reminder" % (base, LABEL_IDLE_WINDOW)
+    if fp:
+        return "false_positive", "progress rising before and after the reminder and finished within %.1f x estimate" % LABEL_ON_TIME_RATIO
+    return None, "progress did not rise within %d check-ins and the waiting-on-background pattern does not hold" % LABEL_IDLE_WINDOW
+
+
+def _label_failure(o):
+    culprits = o.get("culprits")
+    located = o.get("located") is True or (isinstance(culprits, list) and len(culprits) > 0)
+    flaky = o.get("rerun_passed") is True
+    if located and flaky:
+        return None, "conflicting: located to a shard but the rerun also passed"
+    if located:
+        return "effective", "failure located to shard(s) %s" % (o.get("culprits") or "")
+    if flaky:
+        return "false_positive", "rerun passed without changes (flaky)"
+    return None, "not located and no passing rerun"
+
+
+def _label_rework(o):
+    n = num(o.get("rework_after_message"))
+    if n == 0:
+        return "effective", "no further rework after the review-brief message"
+    return None, "rework continued after the message" if n else "rework_after_message unknown"
+
+
+def _label_cost(o):
+    d = o.get("user_decision")
+    if d in ("stop", "adjust"):
+        return "effective", "user chose to %s" % d
+    if d == "continue":
+        cost, budget = num(o.get("final_cost_usd")), num(o.get("budget_usd"))
+        if _on_time(cost, budget):
+            return "false_positive", "user continued unchanged; final cost %.2f <= %.1f x budget %.2f" % (
+                cost, LABEL_ON_TIME_RATIO, budget)
+        return None, "user continued and final cost over %.1f x budget (or unknown)" % LABEL_ON_TIME_RATIO
+    return None, "no user decision"
+
+
+def _label_boundary(o):
+    c, v = num(o.get("merge_conflicts")), num(o.get("ownership_violations"))
+    if (c or 0) > 0 or (v or 0) > 0:
+        return "effective", "merge conflicts %s, ownership violations %s" % (c, v)
+    if c == 0 and v == 0:
+        return "false_positive", "all shards merged cleanly"
+    return None, "merge_conflicts / ownership_violations unknown"
+
+
+def label_one(rec, outcomes):
+    o = _outcome_for(outcomes, rec)
+    m = rec.get("metric")
+    if not o:
+        return None, "no outcome for %s" % rec.get("task_id")
+    if m in DURATION_LIKE:
+        return _label_duration_like(o)
+    if m == "idle_min":
+        return _label_idle(o, rec)
+    if m == "failure_rate":
+        return _label_failure(o)
+    if m == "rework":
+        return _label_rework(o)
+    if m == "cost_ratio":
+        return _label_cost(o)
+    if m == "split_boundary":
+        return _label_boundary(o)
+    return None, "no rule for metric %s" % m
+
+
+def label_records(records, outcomes):
+    """Label monitor triggers by fixed rules and add rule-detected misses.
+    Returns {"records", "unlabeled", "missed", "history"}; history = records + missed, the input
+    `scale.py calibrate` expects. Records that already carry a label are kept untouched."""
+    if outcomes is None:
+        outcomes = {}
+    if not isinstance(outcomes, dict):
+        raise ValueError("outcomes must be an object keyed by task_id or \"batch\"")
+    if records is None:
+        records = []
+    if not isinstance(records, list):
+        raise ValueError("records must be a list")
+    outcomes = {str(k): v for k, v in outcomes.items()}  # JSON keys are strings; task_id may be a number
+    labelled, unlabeled, missed = [], [], []
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("label") or rec.get("event", "trigger") != "trigger":
+            labelled.append(rec)  # human / reviewer label, or a missed record: never overwritten
+            continue
+        lab, why = label_one(rec, outcomes)
+        if lab:
+            labelled.append(dict(rec, label=lab, label_source="rule", label_reason=why))
+        else:
+            unlabeled.append(dict(rec, label=None, label_reason=why))
+    allrecs = [r for r in records or [] if isinstance(r, dict)]
+
+    def has(metric, task_id=None):
+        return any(r.get("metric") == metric and (task_id is None or str(r.get("task_id")) == task_id)
+                   for r in allrecs)
+
+    batch_ids = sorted({r.get("batch_id") for r in allrecs if r.get("batch_id")})
+    run_ids = sorted({r.get("run_id") for r in allrecs if r.get("run_id")})
+
+    def miss(metric, task_id, task_type, reason):
+        m = {"type": "monitor", "event": "missed", "metric": metric, "task_id": task_id,
+             "task_type": task_type or "*", "label_source": "rule", "label_reason": reason}
+        if len(batch_ids) == 1:
+            m["batch_id"] = batch_ids[0]
+        if len(run_ids) == 1:
+            m["run_id"] = run_ids[0]
+        return m
+
+    def task_type_of(tid, o):
+        if o.get("task_type"):
+            return o["task_type"]
+        return next((r.get("task_type") for r in allrecs if str(r.get("task_id")) == tid and r.get("task_type")), None)
+
+    for tid, o in outcomes.items():
+        if not isinstance(o, dict):
+            continue
+        if tid != "batch":
+            actual, est = num(o.get("actual_min")), num(o.get("est_min"))
+            # exactly 2 x is not a miss: the trigger itself fires only above 2 x (strict >)
+            if actual is not None and est and actual > MISSED_DURATION_RATIO * est and not has("duration_ratio", tid):
+                missed.append(miss("duration_ratio", tid, task_type_of(tid, o),
+                                   "actual %.1f > %.1f x estimate %.1f min, no duration_ratio trigger"
+                                   % (actual, MISSED_DURATION_RATIO, est)))
+            continue
+        fails = num(o.get("verify_failed_groups")) or 0
+        rate = num(o.get("failure_rate"))
+        th = num(o.get("failure_rate_threshold"))
+        th = DEFAULT_THRESHOLDS["failure_rate"] if th is None else th
+        if fails > 0 and rate is not None and rate > th and not has("failure_rate"):
+            missed.append(miss("failure_rate", "batch", task_type_of("batch", o),
+                               "%d merge group(s) failed verification, failure rate %.2f > %.2f, no failure_rate trigger"
+                               % (fails, rate, th)))
+    return {"records": labelled, "unlabeled": unlabeled, "missed": missed, "history": labelled + missed}
+
+
+def cmd_label(a):
+    d = read_json_stdin()
+    if not isinstance(d, dict):
+        die("stdin must be {\"records\": [...], \"outcomes\": {...}}")
+    try:
+        res = label_records(d.get("records"), d.get("outcomes"))
+    except ValueError as e:
+        die(str(e))
+    return out(res)
+
+
 # ---------- PLAYBOOK storage: user values in the 授权 yaml, calibrated values in a marked block ----------
 
 BEGIN, END = "<!-- hq:thresholds:begin -->", "<!-- hq:thresholds:end -->"
@@ -1202,6 +1440,9 @@ def main(argv=None):
     p.add_argument("--write", action="store_true")
     p.add_argument("--now")
     p.set_defaults(fn=cmd_calibrate)
+
+    p = sub.add_parser("label", help="label monitor triggers by rule and add rule-detected misses")
+    p.set_defaults(fn=cmd_label)
 
     p = sub.add_parser("thresholds", help="show effective thresholds or roll back one version")
     p.add_argument("--playbook", required=True)

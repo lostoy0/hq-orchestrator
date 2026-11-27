@@ -68,17 +68,20 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 14. **验证分级**：看报告 3g 节，哪一级漏到合并或用户环节的问题多、有没有漏网 major；据此建议加严那一级子会话的验证（改 `SKILL.md` 第 8 步分级表或说明模板），不要建议所有任务都跑全量。
 15. **规则标记**：看报告 3h 节，规则 9 上调（`bias:+1(…)`）、规则 11 授权降档（`downgrade:…`）与“(无标记)”基线在同类任务上的一次通过率、返工率、成本；`rate_limited`、`assist_unavailable:*` 的次数和原因。
 16. **常驻推荐**（有常驻数据时）：看报告 6c 节的采纳率和完工声明数；采纳率低说明推荐的来源或排序不贴合用户。
+17. **选档维度与独立审核**（有 `score`、`independent_review` 数据时）：看报告 3i 节，某维度某取值的升档率明显偏高（strong）→ 建议改 `calibration.md` 5 维打分表里这一维的说明；看 6d 节，某触发条件几乎发现不了问题（strong）→ 建议放宽这个触发条件，同时看 major 集中在哪个触发条件。效率表的“审核等待”中位数偏高时，建议缩短巡检间隔。
+18. **复盘本身的成效**：运行 `metrics.py --changelog-stats <CHANGELOG.md 路径>`，在数据概览里写已验证率、撤回率和带验收判定的条目占比；撤回率高或带验收判定的占比低，本身就是一条改进建议。
 
 ### 5. 证据门槛
 
 - 一个问题要在**至少 3 个任务**或 **2 次运行**里出现，才能形成建议。
 - **例外**：单次严重事故（major 问题、数据风险）可以直接形成建议。
 - 达不到门槛的，只记为**观察**，写明已出现几次、还差几次。不形成建议。
+- **看置信度和数据完整度**：metrics 报告里信号带 `confidence`。只有 `strong`（95% 区间整体越过阈值）的信号能作为建议依据；`weak`（报告标“弱：95% 区间 a–b 跨过阈值”）只记为观察。信号带 `data: sparse`（报告标“数据不足：<字段> 覆盖 x%”）时，先看报告 1b 字段覆盖率，建议补记该字段，不据此改规则。
 
 ### 6. 防退化规则
 
 - 每条建议必须写：**依据**（哪些 run 和 task、什么数字）、**预期效果**、**验收指标**（之后看哪一项）。缺一项就删掉这条。
-- **优先修改或删除已有规则**，不随意新增。`skills/hq/SKILL.md` 不能超过 260 行；建议会让它超出时，必须同时给出要删的内容。
+- **优先修改或删除已有规则**，不随意新增。`skills/hq/SKILL.md` 不设硬性行数上限，但每次建议让它变长时：先找能删的重复或已过时的说法；仍要变长的，在建议和 CHANGELOG 里写明为什么必须写在 SKILL.md（主会话每次都要读到的硬性规则、停止条件、权限边界、质量门槛留在这里，细节可以放 `references/`）；不为压行数把硬性规则搬出 SKILL.md。
 - **降档类建议只能做小范围实验**：只用于低风险任务，并且最多每 5 个任务挑 1 个。大范围改 `calibration.md` 的降档阈值不允许。
 - **不为提高并发建议降档**：降档建议只能来自“该档连续通过、返工为 0”这类难度证据；不能以“能多开几个子会话”“并行加速比低”为理由（`calibration.md` 规则 11）。
 - 每次复盘最多 **5 条建议**，按预期收益排序。超出的放进观察。
@@ -92,8 +95,8 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ### 8. 校准监控阈值（有 monitor 记录时）
 
-1. 回看本次范围内每条 `type:"monitor"` 触发记录，没标 `label` 的按结果补标：确实发现了问题或处置带来了收益标 `effective`，最终正常完成、处置无收益标 `false_positive`；复盘发现有问题、当时却没触发的，追加一条 `{"type":"monitor","event":"missed","metric":…,"task_type":…}`。只标有证据的，拿不准就不标。
-2. 运行 `python3 <scripts 目录>/scale.py calibrate --playbook .hq/PLAYBOOK.md --write`，stdin 给 `{"history": [这些记录], "ratios": {<task_type>: [各分片 actual_min/est_min]}}`。规则（误报 >30% 放宽、漏报 >20% 收紧、每次 ≤20%、有上下限、样本 <5 用全局或默认、用户手动值不覆盖）由脚本执行，不要手算。
+1. **标注不自评**：先运行 `python3 <scripts 目录>/scale.py label`，stdin 给 `{"records": [本次范围内的 monitor 记录], "outcomes": {…}}`（outcomes 字段见 `references/scale-out.md` 第 9 节，只用手头已有的结果数据）。脚本按规则给能判定的记录标 `effective` / `false_positive`（`label_source: rule`），并按规则补记漏报。输出里的 `unlabeled` 交给第 2 步的独立复盘子代理去标（只给它记录和 outcomes，不给你的看法），结果写 `label_source: reviewer`。你自己不打标签；拿不准的保持不标。
+2. 运行 `python3 <scripts 目录>/scale.py calibrate --playbook .hq/PLAYBOOK.md --write`，stdin 给 `{"history": [label 输出的 history 加审核者标好的记录], "ratios": {<task_type>: [各分片 actual_min/est_min]}}`。规则（误报 >30% 放宽、漏报 >20% 收紧、每次 ≤20%、有上下限、样本 <5 用全局或默认、用户手动值不覆盖）由脚本执行，不要手算。
 3. 报告第 5 节列出每项阈值调整前后的数值和依据，并告诉用户可以用 `scale.py thresholds --playbook .hq/PLAYBOOK.md --rollback` 回退。阈值属于项目数据，不需要用户把关；校准规则本身的改动才是插件建议。
 
 ## 输出
@@ -144,7 +147,7 @@ license: "Apache-2.0 with Commons Clause v1.0 (https://github.com/lostoy0/hq-orc
 
 ## 约束
 - 只改上面列出的文件，其他文件不动。
-- skills/hq/SKILL.md 不超过 260 行；新增内容要同时删旧内容。
+- skills/hq/SKILL.md 新增内容先删重复；仍变长的，在 CHANGELOG 里写明原因；硬性规则不搬出 SKILL.md。
 - 修改后运行并贴出输出，必须全部通过：
   bash tests/test_resources.sh
   python3 -m unittest discover tests

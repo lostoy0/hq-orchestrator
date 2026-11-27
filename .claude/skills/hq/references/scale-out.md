@@ -127,6 +127,7 @@
   正在大量合入或跑全量测试时（snapshot `heavy_ops: true`）顺延到下一次巡检。
 - **记账**：`scale.py monitor` 输出的 `records` 原样追加进 `.hq/runs/<run_id>.jsonl`（`type:"monitor"`），
   分析结束后补上 `analysis_cost_usd`。状态文件 `.hq/monitor-state.json` 由脚本读写。
+  `label` 字段在批次结束后由 `scale.py label` 和独立审核者填（第 9 节），主会话不自己填。
 
 ### 7.5 拆分合理性
 
@@ -163,9 +164,45 @@ snapshot：`{run_id, batch_id, task_type, heavy_ops, batch_done, target_min, ove
 
 阈值不是一次定死的，每次 `/hq-retro` 或每批结束时校准一次：
 
-- **标记**：事后回看每次触发，在 monitor 记录上标 `label: effective`（确实发现了问题，或处置带来了收益）或
-  `false_positive`（最终正常完成、处置无收益）；事后复盘发现有问题、当时却没触发的，追加一条 `{"type":"monitor","event":"missed","metric":…,"task_type":…}`。
-- **规则**（`scale.py calibrate`）：
+- **标记**：`label: effective`（确实发现了问题，或处置带来了收益）、`false_positive`（最终正常完成、处置无收益），
+  以及漏报 `{"type":"monitor","event":"missed","metric":…,"task_type":…}`。**主会话不自己打标签**（等于自评，会让校准偏向自己的结论），按下面两步做：
+  1. **先跑规则**：`scale.py label < {"records":[这一批的 monitor 触发记录…], "outcomes":{…}}`（一批一次）。
+     输出 `records`（规则判定的加 `label`、`label_source:"rule"`、`label_reason`；已有 label 的人工或审核记录原样保留）、
+     `unlabeled`（规则判不了的，带 `label_reason` 说明缺什么）、`missed`（按规则补记的漏报，`label_source:"rule"`），
+     以及 `history` = `records` + `missed`。整个输出可以直接作为 `scale.py calibrate` 的输入。
+  2. **剩下的交给独立审核**：`unlabeled` 交给一个独立审核子代理去标，只给它这些记录和对应的 outcomes 数据，
+     不给主会话的看法或倾向；审核者标的记录写 `label_source:"reviewer"`，再并回 `history`。规则之外的漏报审核者可以补，规则不猜。
+- **outcomes**：对象，键是触发记录的 `task_id`（按字符串比较，分片 id，批次级指标用 `"batch"`），只填主会话手头已有的数据，不知道的字段不填（对应规则就判不了，进 `unlabeled`）：
+
+  | 字段 | 含义 | 用于 |
+  |---|---|---|
+  | `est_min` / `actual_min` | 预估时长 / 交付后实际时长（`"batch"` 上是整批计划完成时间 / 实际完成时间） | 时长类、idle、漏报 |
+  | `task_type` | 任务类型（不填就取同一 task_id 触发记录上的） | 漏报 |
+  | `action_taken` | 是否执行了处置：`"resplit"`、`"replan"` 或 `true`；没执行 `false`；其他值一律视为未知（unlabeled） | 时长类 |
+  | `expected_saving_min` / `actual_saving_min` | 再拆 / 重新规划时预计节省（`straggler` 的 `saves_min`）和实际节省 | 时长类 |
+  | `progress` | 巡检时的进度序列 `[{ts, done}]`；`reminder_ts` 可覆盖提醒时间（默认取触发记录的 `ts`） | idle |
+  | `located` / `culprits` | `scale.py locate` 是否定位到具体分片（只认 `true`）/ 哪几片（非空列表也算定位到） | failure_rate |
+  | `rerun_passed` | 失败的校验不改代码重跑即通过（只认 `true`） | failure_rate |
+  | `rework_after_message` | 发复查消息后又返工的轮数 | rework |
+  | `user_decision` / `final_cost_usd` / `budget_usd` | 用户决定 `stop`、`adjust`、`continue`；最终花费和预算 | cost_ratio |
+  | `merge_conflicts` / `ownership_violations` | 合入时冲突次数 / 归属违规（`touches_owned_file` 等）次数 | split_boundary |
+  | `verify_failed_groups` / `failure_rate` / `failure_rate_threshold` | `"batch"` 上：合入校验失败的组数、最终失败率、当时阈值（不填用默认 0.2） | failure_rate 漏报 |
+  | `by_metric` | `{指标: {字段…}}`，同一主体上不同指标的处置不同时按指标覆盖（如批次上的 `split_unit_error` 与 `straggler_ratio`） | 全部 |
+
+- **规则**（常量在 `scale.py` 的 `LABEL_*`、`MISSED_DURATION_RATIO`；“恰好 50%”“恰好 1.2 倍”按 1e-9 容差比较，不受浮点舍入影响；`records` 不是列表或 `outcomes` 不是对象时退出码 2）：
+
+  | 指标 | effective | false_positive | 其余 |
+  |---|---|---|---|
+  | duration_ratio、straggler_ratio、split_unit_error、split_uneven、split_underused | 执行了再拆或重新规划，且实际节省 ≥ 预计节省的 50%（恰好 50% 算有效） | 执行了但实际节省 < 50%；或没执行处置、最终实际时长 ≤ 1.2 × 预估（恰好 1.2 倍算正常完成） | unlabeled |
+  | idle_min | 提醒后 2 次巡检内 `done` 增加 | 提醒前进度在涨、提醒后也涨，且实际时长 ≤ 1.2 × 预估（在等后台长任务） | 两条同时成立或都不成立：unlabeled |
+  | failure_rate | 定位到具体分片 | 重跑即通过（不稳定测试） | 两条同时成立或都不成立：unlabeled |
+  | rework | 消息后不再返工 | — | unlabeled |
+  | cost_ratio | 用户选择停止或调整 | 用户原样继续，且最终花费 ≤ 1.2 × 预算 | 没有用户决定：unlabeled |
+  | split_boundary | 合入时确实出现冲突或归属违规 | 全部干净合入（两项都为 0） | unlabeled |
+
+  漏报：某片实际时长 > 2 × 预估（恰好 2 倍不算），而记录里没有该片的 duration_ratio 触发 → 一条 duration_ratio 漏报；
+  `"batch"` 上有合入校验失败、失败率 > 当时阈值，而没有 failure_rate 触发 → 一条 failure_rate 漏报。已有同一主体同一指标的漏报记录时不重复补。
+- **调整规则**（`scale.py calibrate`，输入 `label` 的输出或 `{"history":[…]}`）：
   - 误报率 = 误报 ÷（有效 + 误报）> 30% → 放宽；漏报率 = 漏报 ÷（有效 + 漏报）> 20% → 收紧；两者都高 → 不动。
   - 每次调整不超过 20%（整数阈值至少调 1）；每个阈值有上下限（duration_ratio 1.3–4、idle_min 15–120、cost_ratio 1–3、rework 1–5、failure_rate 0.1–0.5、straggler_ratio 1.5–4、split_unit_error 0.3–1、split_uneven 1.5–4、split_underused 0.25–0.8、split_boundary 1–5）。
   - 按任务类型（`task_type`：patrol 巡检、dev 开发、docs 文档、test 测试…）分别维护；同一类型样本少于 5 个时沿用全局值或默认值。

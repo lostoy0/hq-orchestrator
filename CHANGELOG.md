@@ -21,6 +21,19 @@
 
 ## 未发布
 
+### 第 1 批常驻：监控触发规则标注、复盘置信度与数据完整度、新指标；取消 SKILL.md 硬性行数上限
+- **改动**：
+  - `scale.py label`（新子命令）：按规则给监控触发记录标 `effective`/`false_positive`（`label_source: rule`），按规则补记两类漏报（时长 > 2 倍预估却没有 duration_ratio 触发；合入校验失败却没有 failure_rate 触发），判不了的进 `unlabeled` 交独立审核；比较带 1e-9 容差，`action_taken`/`located`/`rerun_passed` 只认明确值，输入类型不对时退出码 2。`scale-out.md` 第 9 节写明 outcomes 字段和规则表；`hq-retro/SKILL.md` 第 8 步改为“先 label、剩下的交独立复盘子代理，主会话不自评”；`metrics-schema.md` 补 `label_source`、`label_reason`。测试 `tests/test_scale_label.py`（46 项）。
+  - `metrics.py`：比例信号加 Wilson 95% 区间和 `confidence`（strong/weak，md 标“弱”），按档位/模型表加区间列；新增 1b 字段覆盖率，依赖字段覆盖 < 50% 的信号标 `data: sparse`；新增 `--changelog-stats`（按版本统计状态数、已验证率、撤回率、带验收判定占比；无法解析的版本标题如 `v0.1.x` 单列，不再并入“未发布”，`--check-changelog` 同样受益）；新字段 `score`、`independent_review`、`review_wait_min` 与报告 3i（按打分维度）、6d（独立审核）、效率表“审核等待”列及三个信号，脱敏白名单同步。测试 `tests/test_metrics_quality.py`。
+  - `hq-retro/SKILL.md`：证据门槛加“只有 strong 信号能作建议依据、sparse 先补字段”；复盘清单加第 17（选档维度与独立审核）、18（复盘成效，`--changelog-stats`）项；“SKILL.md 不能超过 260 行”改为软规则：先删重复，仍变长的在 CHANGELOG 写明原因，硬性规则不搬出 SKILL.md。
+  - `SKILL.md` 第 9 步：记录 `score`、`independent_review`、`review_wait_min`；标注按 `scale-out.md` 第 9 节。净增 1 行（296 行），原因：新字段必须在记录时就写，放在参考文件里主会话会漏记。
+  - `hosts/claude-code.md`：A 通道合入按交付报告的 BRANCH 分支，不按宿主返回的 `worktree-agent-*` 分支（本批 t4 误合了停在基线的空分支，已纠正）。
+- **原因/假设**：阈值校准依赖触发标签，原先由主会话自评；小样本信号被当成建议依据；字段缺失时信号悄悄只基于少数记录；选档 5 维、独立审核触发条件、巡检间隔三条规则没有数据可验证；260 行上限来自 v0.1 的初始假设、没有依据，压缩 SKILL.md 有让主会话漏读规则的风险（用户叫停了压缩任务）。
+- **验收指标**：复盘报告里 `label_source: rule` 的触发占比 ≥ 60%；复盘建议里依据 weak 或 sparse 信号的条数 = 0；规则 9、11 和 5 维打分在样本 ≥ 5 后各得到一次 strong/weak 结论；`--changelog-stats` 的撤回率出现在每次复盘报告里。
+- **验收判定**：不适用（流程与工具改动，没有对应的运行数据指标）
+- **状态**：待验证（自测通过）
+- **复盘报告**：无（常驻第 1 批，run 20261127-1500-retro-next）
+
 ### 复盘：按版本切分、机器判定验收、规则标记、验证分级漏网、常驻推荐采纳率
 - **改动**：`metrics.py` 新增 `--since-version` / `--before-version`（按 `plugin_version` 只看一段），报告新增 3f 按插件版本、3g 按验证级别（漏到合并/用户的问题、漏网 major）、3h 按规则标记（含“(无标记)”基线）、6c 常驻模式推荐（推荐过的批数、下一批采纳数、采纳率、完工声明数）和对应信号；新增 `--check-changelog`：解析 CHANGELOG“待验证”条目里的 `- **验收判定**：` 表达式（字段路径、比较、数值、`n>=`、`since=`/`before=`，支持 `[字段=值]` 选择和 `median(...[*]...)` 聚合），按版本切分数据判定“达到 / 未达到 / 样本不足 / 无法解析”，并带质量护栏（改动后返工率高出 5 个百分点以上即判未达到）。task 新增 `flags` 数组，规则标记（`bias:+1(…)`、`downgrade:user_allowed(-N)`、`rate_limited`、`assist_unavailable:*`、`billing:*`、`effort_env:*`、`tier:not-applied`）从 notes 移到这里；旧数据仍从 notes 识别，`bias:+1(cost_low)` 归为 `bias:+1(tier)`；脱敏导出只保留已知标记。`SKILL.md` 第 3、9 步、`calibration.md` 规则 9/10/11、各宿主文档改为写 `flags`。`hq-retro/SKILL.md`：第 1 步运行 `--check-changelog`，第 3 步有验收判定的直接采用、没有的用版本切分人工对比并注明；复盘清单加第 13–16 项；提示词模板要求新条目写验收判定。CHANGELOG 格式说明加“验收判定”。测试：新增 `tests/test_metrics_retro.py`（12 项）。
 - **原因/假设**：评审复盘覆盖面发现：上次改动的前后对比没有按版本切分（默认最近 10 次运行混着新旧版本）；验收指标是自由文本，靠复盘子代理自己理解；规则 9、11 等“待验证”的用户偏好只记在 notes 里，无法统计；验证分级是否漏问题、常驻推荐是否有用都没有指标（后者的字段已在记录却没汇总）。预期复盘对“待验证”条目的判定可复现，规则 9、11 终于能用数据验证或撤回。
